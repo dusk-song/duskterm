@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <defs>
+    <!-- 深邃的暗色终端/夜空背景 -->
+    <linearGradient id="bgGrad" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#1A1525" />
+      <stop offset="100%" stop-color="#0D0A14" />
+    </linearGradient>
+
+    <!-- 拼接段 1: 左侧立柱 (入夜紫 -> 晚霞粉) -->
+    <linearGradient id="grad1" x1="0%" y1="100%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#592E7C" />
+      <stop offset="100%" stop-color="#E02379" />
+    </linearGradient>
+
+    <!-- 拼接段 2: 顶部拱弧 (晚霞粉 -> 落日橙) -->
+    <linearGradient id="grad2" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#E02379" />
+      <stop offset="100%" stop-color="#FF7A3D" />
+    </linearGradient>
+
+    <!-- 拼接段 3: 底部拱弧 (余晖黄 -> 落日红) -->
+    <linearGradient id="grad3" x1="100%" y1="0%" x2="0%" y2="0%">
+      <stop offset="0%" stop-color="#F8D849" />
+      <stop offset="100%" stop-color="#FF4B2B" />
+    </linearGradient>
+
+    
+  </defs>
+
+  <!-- 圆角底板 (macOS/iOS 风格) -->
+  <rect width="512" height="512" rx="115" fill="url(#bgGrad)" />
+
+  <!-- 晚霞色拼接字母 D -->
+  <!-- 使用 opacity="0.85" 配合圆角端点(round)，在拼接处产生类似彩色玻璃叠加的绚丽效果 -->
+  <g stroke-width="64" stroke-linecap="round" fill="none" opacity="0.85">
+    
+    <!-- 第 1 段：左侧竖线 -->
+    <path d="M 138 130 L 138 382" stroke="url(#grad1)" />
+    
+    <!-- 第 3 段：右下角到底部的回环 -->
+    <!-- (先画底部，再画顶部，控制拼接堆叠顺序) -->
+    <path d="M 374 256 A 126 126 0 0 1 248 382 H 138" stroke="url(#grad3)" />
+
+    <!-- 第 2 段：顶部到右侧的拱弧 -->
+    <path d="M 138 130 H 248 A 126 126 0 0 1 374 256" stroke="url(#grad2)" />
+    
+  </g>
+
+  <!-- 字母 D 内部的终端提示符 ">_" -->
+  <g transform="translate(229, 236)" stroke="#FFFFFF" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" opacity="0.9" filter="url(#glow)">
+    <!-- ">" 尖角 -->
+    <path d="M 0 0 L 20 20 L 0 40" fill="none" />
+    <!-- "_" 下划线 -->
+    <line x1="30" y1="40" x2="54" y2="40" />
+  </g>
+</svg>

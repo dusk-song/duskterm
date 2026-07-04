@@ -1,0 +1,342 @@
+/* ================================================================
+   DuskTerm Unified Color System
+   Warm Graphite tokens for Shadcn-Vue, Reka UI wrappers, and app UI.
+   ================================================================ */
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* Shadcn-Vue base (HSL) */
+    --radius: 0.5rem;
+    --background: 36 31% 94%;
+    --foreground: 36 8% 18%;
+    --card: 0 0% 100%;
+    --card-foreground: 36 8% 18%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 36 8% 18%;
+
+    --primary: 34 59% 47%;
+    --primary-foreground: 30 34% 9%;
+
+    --secondary: 36 24% 89%;
+    --secondary-foreground: 36 8% 18%;
+    --muted: 36 20% 88%;
+    --muted-foreground: 32 9% 48%;
+    --accent: 36 22% 90%;
+    --accent-foreground: 36 8% 18%;
+
+    --destructive: 5 49% 63%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 35 22% 83%;
+    --input: 35 22% 83%;
+    --ring: 34 59% 47%;
+
+    --chart-1: 34 59% 47%;
+    --chart-2: 38 31% 48%;
+    --chart-3: 31 18% 43%;
+    --chart-4: 5 49% 63%;
+    --chart-5: 36 8% 18%;
+
+    /* Legacy color tokens (backward compat) */
+    --color-primary: hsl(var(--primary));
+    --color-primary-muted: hsl(var(--primary) / 0.78);
+    --color-danger: hsl(var(--destructive));
+    --color-warning: #b8792d;
+    --color-success: #8f7a4a;
+    --color-info: hsl(var(--primary));
+    --color-primary-foreground: hsl(var(--primary-foreground));
+    --color-danger-foreground: hsl(var(--destructive-foreground));
+    --color-warning-foreground: #2f2d2a;
+    --color-success-foreground: #ffffff;
+    --color-info-foreground: hsl(var(--primary-foreground));
+
+    /* App UI tokens */
+    --app-bg-dialog: hsl(var(--card));
+    --app-bg-active: hsl(var(--primary));
+    --app-bg-active-end: hsl(34 59% 42%);
+    --app-terminal-bg: #111113;
+    --app-text: hsl(var(--foreground));
+    --app-text-secondary: hsl(var(--muted-foreground));
+    --app-text-muted: hsl(var(--muted-foreground));
+    --app-text-title: hsl(var(--foreground));
+
+    --app-font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --app-font-title-size: 16px;
+    --app-font-body-size: 13px;
+    --app-font-caption-size: 12px;
+    --app-font-weight-title: 650;
+    --app-font-weight-label: 560;
+    --app-line-height-tight: 1.25;
+    --app-line-height-ui: 1.45;
+    --app-line-height-caption: 1.5;
+
+    --app-motion-control: 120ms;
+    --app-motion-menu: 120ms;
+    --app-motion-panel: 160ms;
+    --app-motion-ease: cubic-bezier(.2, .8, .2, 1);
+
+    --app-border-light: rgba(255, 255, 255, 0.72);
+    --app-border-shadow: hsl(var(--border));
+    --app-border-dark: hsl(var(--border) / 0.9);
+
+    --app-btn-bg: hsl(var(--card));
+    --app-btn-border: hsl(var(--border));
+    --app-btn-hover: color-mix(in srgb, hsl(var(--foreground)) 6%, transparent);
+    --app-surface-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.78);
+    --app-control-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 1px 1px rgba(52, 47, 41, 0.12);
+    --app-control-inset-shadow: inset 0 1px 1px rgba(52, 47, 41, 0.045);
+
+    --app-input-bg: hsl(var(--card));
+    --app-input-border: hsl(var(--border));
+    --app-input-text: hsl(var(--foreground));
+
+    --app-focus-ring: rgba(192, 132, 47, 0.34);
+    --app-focus-border: rgba(192, 132, 47, 0.46);
+    --app-focus-bg: rgba(192, 132, 47, 0.08);
+    --app-focus-shadow: inset 0 0 0 1px var(--app-focus-ring);
+
+    --app-workspace-bg: #ece6dc;
+    --app-workspace-gap: rgba(91, 80, 68, 0.1);
+    --app-panel-bg: hsl(var(--card));
+    --app-panel-border: hsl(var(--border) / 0.88);
+    --app-panel-shadow: var(--niri-shadow-panel);
+
+    --app-tab-bg-active: hsl(var(--card));
+    --app-tab-bg-inactive: hsl(var(--secondary));
+
+    --app-sidebar-bg: hsl(var(--secondary));
+    --app-sidebar-border: hsl(var(--border));
+
+    --app-selection-bg: hsl(var(--primary) / 0.16);
+    --app-selection-text: hsl(var(--foreground));
+
+    --app-status-success: #8f7a4a;
+    --app-status-success-bg: rgba(143, 122, 74, 0.12);
+    --app-status-success-border: rgba(143, 122, 74, 0.26);
+    --app-status-info: #c0842f;
+    --app-status-info-bg: rgba(192, 132, 47, 0.1);
+    --app-status-info-border: rgba(192, 132, 47, 0.24);
+    --app-risk-warning: #b8792d;
+    --app-risk-warning-bg: rgba(184, 121, 45, 0.13);
+    --app-risk-warning-border: rgba(184, 121, 45, 0.28);
+    --app-risk-warning-glow: 0 0 0 4px rgba(184, 121, 45, 0.08);
+    --app-risk-danger: hsl(var(--destructive));
+    --app-risk-danger-bg: hsl(var(--destructive) / 0.12);
+    --app-risk-danger-border: hsl(var(--destructive) / 0.3);
+    --app-risk-danger-glow: 0 0 0 4px hsl(var(--destructive) / 0.08);
+    --app-toast-bg: hsl(var(--card));
+    --app-toast-border: hsl(var(--border) / 0.84);
+    --app-toast-text: hsl(var(--foreground));
+    --app-toast-shadow: 0 18px 38px rgba(52, 47, 41, 0.16), var(--app-surface-highlight);
+    --app-terminal-close-color: #5f564e;
+    --app-terminal-close-hover-color: #a3483f;
+    --app-terminal-close-bg: rgba(255, 250, 242, 0.64);
+    --app-terminal-close-hover-bg: rgba(209, 122, 114, 0.16);
+
+    /* Titlebar */
+    --tb-bg: hsl(36 24% 89%);
+    --tb-dropdown-bg: hsl(var(--card));
+    --tb-dropdown-border: hsl(var(--border));
+    --tb-entry-hover: hsl(var(--foreground) / 0.07);
+    --tb-divider: hsl(var(--border));
+    --tb-close-hover: hsl(var(--destructive) / 0.18);
+    --tb-text: hsl(var(--foreground));
+    --tb-text-muted: hsl(var(--muted-foreground));
+    --tb-icon-filter: none;
+    --tb-hover-bg: hsl(var(--foreground) / 0.06);
+
+    /* Mac legacy aliases */
+    --mac-bg-primary: hsl(var(--card));
+    --mac-bg-secondary: hsl(var(--background));
+    --mac-bg-tertiary: hsl(var(--secondary));
+    --mac-bg-header: hsl(var(--secondary));
+    --mac-border: hsl(var(--border));
+    --mac-border-light: rgba(255, 255, 255, 0.72);
+    --mac-text-primary: hsl(var(--foreground));
+    --mac-text-secondary: hsl(var(--muted-foreground));
+    --mac-text-muted: hsl(var(--muted-foreground));
+    --mac-accent: hsl(var(--primary));
+
+    /* Niri shell tokens */
+    --niri-border-width: 1px;
+    --niri-border-color-idle: transparent;
+    --niri-border-color-focus: hsl(var(--primary) / 0.62);
+    --niri-border-color-hover: hsl(var(--primary) / 0.32);
+
+    --niri-shadow-idle: 0 1px 2px rgba(52, 47, 41, 0.06);
+    --niri-shadow-focus: 0 0 0 2px hsl(var(--primary) / 0.18), 0 4px 14px rgba(52, 47, 41, 0.08);
+    --niri-shadow-panel: 0 1px 0 rgba(255, 255, 255, 0.72), 0 8px 22px rgba(52, 47, 41, 0.08);
+    --niri-shadow-dialog: 0 18px 46px rgba(52, 47, 41, 0.18), 0 0 0 1px rgba(52, 47, 41, 0.06);
+    --niri-backdrop-bg: rgba(47, 45, 42, 0.32);
+
+    /* Layering */
+    --z-floating: 20;
+    --z-chrome: 100;
+    --z-dropdown: 1000;
+    --z-popover: 1200;
+    --z-dialog-overlay: 2000;
+    --z-dialog-content: 2010;
+    --z-select: 2100;
+    --z-alert: 2200;
+    --z-critical-overlay: 3000;
+  }
+
+  html.dark {
+    --background: 240 4% 9%;
+    --foreground: 38 18% 87%;
+    --card: 240 3% 15%;
+    --card-foreground: 38 18% 87%;
+    --popover: 240 3% 13%;
+    --popover-foreground: 38 18% 87%;
+
+    --primary: 34 59% 47%;
+    --primary-foreground: 30 34% 9%;
+
+    --secondary: 240 3% 17%;
+    --secondary-foreground: 38 18% 87%;
+    --muted: 240 3% 16%;
+    --muted-foreground: 34 11% 63%;
+    --accent: 240 3% 18%;
+    --accent-foreground: 38 18% 87%;
+
+    --destructive: 5 49% 63%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 38 18% 87% / 0.09;
+    --input: 38 18% 87% / 0.12;
+    --ring: 34 59% 47%;
+
+    --chart-1: 34 59% 47%;
+    --chart-2: 38 31% 48%;
+    --chart-3: 34 11% 63%;
+    --chart-4: 5 49% 63%;
+    --chart-5: 38 18% 87%;
+
+    --color-warning: #d1b16b;
+    --color-success: #b8a06a;
+    --color-warning-foreground: #111113;
+
+    --app-bg-dialog: #242426;
+    --app-terminal-bg: #111113;
+    --app-text-secondary: hsl(var(--muted-foreground));
+    --app-border-light: rgba(228, 224, 216, 0.05);
+    --app-border-shadow: rgba(228, 224, 216, 0.09);
+    --app-border-dark: rgba(228, 224, 216, 0.16);
+
+    --app-btn-bg: rgba(228, 224, 216, 0.065);
+    --app-btn-border: rgba(228, 224, 216, 0.11);
+    --app-btn-hover: rgba(228, 224, 216, 0.095);
+    --app-surface-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+    --app-control-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 1px 1px rgba(0, 0, 0, 0.28);
+    --app-control-inset-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.24);
+
+    --app-input-bg: #171719;
+    --app-input-border: rgba(228, 224, 216, 0.12);
+
+    --app-focus-ring: rgba(192, 132, 47, 0.42);
+    --app-focus-border: rgba(192, 132, 47, 0.5);
+    --app-focus-bg: rgba(192, 132, 47, 0.12);
+    --app-focus-shadow: inset 0 0 0 1px var(--app-focus-ring);
+
+    --app-workspace-bg: #171719;
+    --app-workspace-gap: rgba(228, 224, 216, 0.055);
+    --app-panel-bg: #242426;
+    --app-panel-border: rgba(228, 224, 216, 0.1);
+    --app-panel-shadow: var(--niri-shadow-panel);
+
+    --app-tab-bg-active: #2b2926;
+    --app-tab-bg-inactive: rgba(228, 224, 216, 0.055);
+    --app-sidebar-bg: #242426;
+    --app-sidebar-border: rgba(228, 224, 216, 0.09);
+
+    --app-selection-bg: rgba(192, 132, 47, 0.18);
+    --app-selection-text: hsl(var(--foreground));
+
+    --app-status-success: #b8a06a;
+    --app-status-success-bg: rgba(184, 160, 106, 0.16);
+    --app-status-success-border: rgba(184, 160, 106, 0.3);
+    --app-status-info: #c0842f;
+    --app-status-info-bg: rgba(192, 132, 47, 0.14);
+    --app-status-info-border: rgba(192, 132, 47, 0.28);
+    --app-risk-warning: #d1b16b;
+    --app-risk-warning-bg: rgba(209, 177, 107, 0.16);
+    --app-risk-warning-border: rgba(209, 177, 107, 0.34);
+    --app-risk-warning-glow: 0 0 0 4px rgba(209, 177, 107, 0.08);
+    --app-risk-danger: #d17a72;
+    --app-risk-danger-bg: rgba(209, 122, 114, 0.16);
+    --app-risk-danger-border: rgba(209, 122, 114, 0.34);
+    --app-risk-danger-glow: 0 0 0 4px rgba(209, 122, 114, 0.08);
+    --app-toast-bg: #242426;
+    --app-toast-border: rgba(228, 224, 216, 0.12);
+    --app-toast-text: #e4e0d8;
+    --app-toast-shadow: 0 18px 46px rgba(0, 0, 0, 0.34), var(--app-surface-highlight);
+    --app-terminal-close-color: #f1ece4;
+    --app-terminal-close-hover-color: #fffaf2;
+    --app-terminal-close-bg: rgba(228, 224, 216, 0.075);
+    --app-terminal-close-hover-bg: rgba(209, 122, 114, 0.24);
+
+    --tb-bg: #202023;
+    --tb-dropdown-bg: #242426;
+    --tb-dropdown-border: rgba(228, 224, 216, 0.09);
+    --tb-divider: rgba(228, 224, 216, 0.09);
+    --tb-entry-hover: rgba(228, 224, 216, 0.08);
+    --tb-hover-bg: rgba(228, 224, 216, 0.07);
+    --tb-close-hover: rgba(209, 122, 114, 0.22);
+    --tb-icon-filter: invert(1);
+    --settings-icon-filter: invert(1);
+
+    --mac-bg-primary: #242426;
+    --mac-bg-secondary: #171719;
+    --mac-bg-tertiary: #202023;
+    --mac-border: rgba(228, 224, 216, 0.09);
+    --mac-border-light: rgba(228, 224, 216, 0.05);
+    --mac-text-primary: #e4e0d8;
+    --mac-text-secondary: #b7afa2;
+    --mac-text-muted: #8b857c;
+    --mac-accent: #c0842f;
+
+    --niri-shadow-idle: 0 1px 2px rgba(0, 0, 0, 0.28);
+    --niri-shadow-focus: 0 0 0 2px rgba(192, 132, 47, 0.22), 0 10px 24px rgba(0, 0, 0, 0.28);
+    --niri-shadow-panel: 0 1px 0 rgba(255, 255, 255, 0.025), 0 18px 46px rgba(0, 0, 0, 0.28);
+    --niri-shadow-dialog: 0 24px 62px rgba(0, 0, 0, 0.46), 0 0 0 1px rgba(228, 224, 216, 0.08);
+    --niri-backdrop-bg: rgba(10, 10, 12, 0.68);
+  }
+}
+
+.theme {
+  --font-heading: var(--font-sans);
+}
+
+.lucide {
+  width: 1em !important;
+  height: 1em !important;
+  vertical-align: -0.125em;
+  flex-shrink: 0;
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-family: var(--app-font-family);
+    font-size: var(--app-font-body-size);
+    line-height: var(--app-line-height-ui);
+    text-rendering: optimizeLegibility;
+    -webkit-font-smoothing: antialiased;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 1ms !important;
+    animation-iteration-count: 1 !important;
+    scroll-behavior: auto !important;
+    transition-duration: 1ms !important;
+  }
+}

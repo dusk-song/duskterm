@@ -1,0 +1,229 @@
+:root {
+  --icon-btn-size: 32px;
+  --icon-btn-padding: 5px;
+
+  --icon-btn-color: var(--app-text-muted);
+  --icon-btn-hover-color: var(--app-text);
+
+  --icon-btn-hover-bg: color-mix(
+    in srgb,
+    var(--app-text) 6%,
+    transparent
+  );
+
+  --icon-btn-active-bg: color-mix(
+    in srgb,
+    var(--app-text) 10%,
+    transparent
+  );
+
+  --icon-btn-rect-radius: 8px;
+}
+
+/* ------------------------------
+   图标按钮
+------------------------------ */
+
+.icon-button {
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  appearance: none;
+
+  position: relative;
+
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+
+  width: var(--icon-btn-size);
+  height: var(--icon-btn-size);
+  padding: var(--icon-btn-padding);
+
+  border: 0;
+  border-radius: var(--icon-btn-rect-radius);
+  outline: none;
+
+  background: transparent;
+  color: var(--icon-btn-color);
+
+  line-height: 0;
+  cursor: pointer;
+
+  transition:
+    color 0.12s ease,
+    box-shadow 0.12s ease;
+}
+
+/* Hover 背景层，严格等于按钮尺寸 */
+.icon-button::before {
+  content: '';
+
+  position: absolute;
+  inset: 0;
+
+  z-index: 0;
+
+  border-radius: inherit;
+  background: transparent;
+
+  pointer-events: none;
+
+  transition:
+    background 0.12s ease,
+    opacity 0.12s ease;
+}
+
+/* ------------------------------
+   图标容器
+------------------------------ */
+
+.icon-button .icon-wrapper {
+  position: relative;
+  z-index: 1;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  width: calc(
+    var(--icon-btn-size) - (var(--icon-btn-padding) * 2)
+  );
+
+  height: calc(
+    var(--icon-btn-size) - (var(--icon-btn-padding) * 2)
+  );
+}
+
+/* Vue / Lucide SVG 图标 */
+.icon-button .icon-svg,
+.icon-button .icon-svg svg {
+  display: block;
+
+  width: 100%;
+  height: 100%;
+
+  fill: none;
+  stroke: currentColor;
+
+  margin: 0;
+}
+
+/* 图片类图标 */
+.icon-button .icon-img {
+  display: block;
+
+  width: 100%;
+  height: 100%;
+
+  object-fit: contain;
+  object-position: center;
+}
+
+/* ------------------------------
+   Hover / Active
+------------------------------ */
+
+.icon-button:hover:not(:disabled):not(.disabled) {
+  color: var(--icon-btn-hover-color);
+}
+
+.icon-button:hover:not(:disabled):not(.disabled)::before {
+  background: var(--icon-btn-hover-bg);
+}
+
+.icon-button:active:not(:disabled):not(.disabled)::before {
+  background: var(--icon-btn-active-bg);
+}
+
+/* 选中状态 */
+.icon-button.active:not(:disabled):not(.disabled) {
+  color: var(--icon-btn-hover-color);
+}
+
+.icon-button.active:not(:disabled):not(.disabled)::before {
+  background: var(--icon-btn-active-bg);
+}
+
+/* ------------------------------
+   Focus
+------------------------------ */
+
+.icon-button:focus-visible {
+  color: var(--icon-btn-hover-color);
+  outline: none;
+  box-shadow: var(--app-focus-shadow);
+}
+
+.icon-button:focus-visible::before {
+  background: var(--app-focus-bg);
+}
+
+/* ------------------------------
+   Disabled
+------------------------------ */
+
+.icon-button.disabled,
+.icon-button:disabled {
+  opacity: 0.45;
+  cursor: default;
+  pointer-events: none;
+}
+
+/* ------------------------------
+   深色模式
+------------------------------ */
+
+html.dark .icon-button {
+  --icon-btn-hover-bg: color-mix(
+    in srgb,
+    var(--app-text) 10%,
+    transparent
+  );
+
+  --icon-btn-active-bg: color-mix(
+    in srgb,
+    var(--app-text) 14%,
+    transparent
+  );
+}
+
+html.dark .icon-button .icon-img,
+html.dark .icon-button img {
+  filter: brightness(0) invert(1) saturate(150%);
+}
+
+/* ------------------------------
+   Tooltip
+------------------------------ */
+
+.icon-button-tooltip {
+  z-index: var(--z-popover, 1000);
+
+  max-width: min(260px, calc(100vw - 16px));
+  padding: 5px 8px;
+
+  border: 0;
+  border-radius: 6px;
+
+  background: var(--app-bg-dialog);
+  color: var(--app-text);
+
+  box-shadow: var(--niri-shadow-dialog);
+
+  font-size: 12px;
+  line-height: 1.35;
+  white-space: nowrap;
+
+  pointer-events: none;
+  user-select: none;
+}
+
+/* ------------------------------
+   触摸设备
+------------------------------ */
+
+@media (pointer: coarse) {
+  :root {
+    --icon-btn-padding: 8px;
+  }
+}

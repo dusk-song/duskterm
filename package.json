@@ -1,0 +1,86 @@
+{
+  "name": "duskterm",
+  "private": true,
+  "version": "1.0.0",
+  "description": "A cross-platform terminal tool for SSH, Telnet & Serial, built with Tauri 2 and Vue 3.",
+  "author": "xiaosong",
+  "license": "MIT",
+  "pnpm": {
+    "supportedArchitectures": {
+      "os": [
+        "win32"
+      ],
+      "cpu": [
+        "x64"
+      ]
+    },
+    "overrides": {
+      "@vue/shared": "3.5.35",
+      "@vue/compiler-sfc": "3.5.35",
+      "@vue/compiler-dom": "3.5.35",
+      "@vue/compiler-core": "3.5.35",
+      "@vue/runtime-dom": "3.5.35",
+      "@vue/runtime-core": "3.5.35",
+      "@vue/reactivity": "3.5.35"
+    }
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/dusk-song/duskterm.git"
+  },
+  "homepage": "https://github.com/dusk-song/duskterm",
+  "keywords": [
+    "ssh",
+    "terminal",
+    "tauri",
+    "sftp",
+    "telnet",
+    "serial"
+  ],
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "node --max-old-space-size=8192 ./node_modules/vite/bin/vite.js build",
+    "test": "node --test tests",
+    "preview": "vite preview",
+    "desktop:build": "tauri build",
+    "desktop:build:debug": "tauri build --debug",
+    "tauri": "tauri"
+  },
+  "dependencies": {
+    "@he-tree/vue": "^2.10.5",
+    "@lucide/vue": "^1.18.0",
+    "@tanstack/vue-table": "^8.21.3",
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2.6.0",
+    "@tauri-apps/plugin-opener": "^2",
+    "@vee-validate/zod": "^4.15.1",
+    "@vueuse/core": "^14.3.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/addon-search": "^0.16.0",
+    "@xterm/addon-unicode11": "^0.9.0",
+    "@xterm/addon-web-links": "^0.12.0",
+    "@xterm/xterm": "^6.0.0",
+    "ace-builds": "^1.36.5",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "pinia": "^3.0.4",
+    "reka-ui": "^2.9.10",
+    "tailwind-merge": "^3.6.0",
+    "uuid": "^13.0.0",
+    "vee-validate": "^4.15.1",
+    "vscode-material-icons": "^0.1.1",
+    "vue": "^3.5.13",
+    "zod": "3.25.76"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "autoprefixer": "^10.5.0",
+    "postcss": "^8.5.15",
+    "shadcn-vue": "^2.7.4",
+    "tailwindcss": "^3.4.19",
+    "tw-animate-css": "^1.4.0",
+    "vite": "^6.0.3"
+  }
+}

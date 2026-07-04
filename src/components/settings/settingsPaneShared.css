@@ -1,0 +1,79 @@
+/* ═══════════════════════════════════════════
+   Settings Pane — Tailwind @apply 共享样式
+   参考 SessionModal 规范，无边框/无阴影/纯排版
+   ═══════════════════════════════════════════ */
+
+.settings-content {
+  @apply flex flex-col gap-2;
+}
+
+.settings-content.scrollable-y,
+.settings-content.is-scroll {
+  @apply overflow-y-auto overflow-x-hidden;
+}
+
+/* Section */
+.settings-section {
+  @apply mb-2 flex flex-col gap-1.5;
+}
+
+.settings-section-title-wrap {
+  @apply flex items-center gap-1.5 mb-1;
+}
+
+.settings-section-title {
+  @apply text-[13px] font-semibold text-[var(--app-text)];
+}
+
+.section-tip-icon {
+  @apply text-xs text-[var(--app-text-muted)] cursor-help opacity-70;
+}
+
+.section-tip-icon:hover {
+  @apply opacity-100;
+}
+
+/* Row — label + control 左对齐，紧凑间距 */
+.setting-row {
+  @apply flex items-center gap-2 py-0.5 min-h-7;
+}
+
+.setting-label {
+  @apply w-[88px] shrink-0 text-xs font-normal text-[var(--app-text-muted)];
+}
+
+.setting-value {
+  @apply min-w-10 shrink-0 tabular-nums text-[var(--app-text-muted)] text-xs;
+}
+
+.setting-row .line-slider {
+  @apply flex-1 min-w-[100px] max-w-[200px];
+}
+
+.setting-select {
+  @apply w-[160px] shrink-0;
+}
+
+/* Color input */
+.color-input {
+  @apply w-12 h-6 p-0 border-0 border-b border-[var(--app-border-shadow)] rounded-none bg-transparent;
+}
+
+/* Form item — 与 SessionModal 一致 */
+.form-item {
+  @apply flex items-start min-h-8 mb-2;
+}
+
+.form-item>label:first-child {
+  @apply w-[100px] shrink-0 min-h-8 pt-1.5 text-right pr-3 whitespace-nowrap text-[13px] font-normal text-[var(--app-text-muted)];
+}
+
+.form-item-control {
+  @apply flex-1 min-h-8;
+}
+
+@media (max-width: 768px) {
+  .setting-label {
+    @apply w-[72px];
+  }
+}

@@ -1,0 +1,82 @@
+/* Global scrollbar styles
+   - Narrow, semi-transparent trackless look
+   - Supports light/dark theme via [data-theme] on root
+   - Progressive enhancement: WebKit browsers get full styling; Firefox gets color and thin width
+*/
+
+:root {
+  --scrollbar-thumb-default: rgba(0, 0, 0, 0.4);
+  --scrollbar-thumb-hover: rgba(0, 0, 0, 0.6);
+  --scrollbar-thumb-radius: 4px;
+  --scrollbar-size: 8px;
+}
+
+html.dark {
+  --scrollbar-thumb-default: rgba(255, 255, 255, 0.4);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.6);
+}
+
+/* WebKit: Chrome, Edge, Safari */
+/* Use !important to ensure this overrides theme files that also declare scrollbars */
+*::-webkit-scrollbar {
+  width: var(--scrollbar-size) !important;
+  height: var(--scrollbar-size) !important;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+  /* keep track transparent */
+}
+
+*::-webkit-scrollbar-thumb {
+  background-color: var(--scrollbar-thumb-default) !important;
+  border-radius: var(--scrollbar-thumb-radius) !important;
+  border: 2px solid transparent !important;
+  /* give some breathing space */
+  background-clip: padding-box !important;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover) !important;
+}
+
+/* Remove the up/down and left/right arrow buttons on WebKit scrollbars */
+
+/* Corner (where two scrollbars meet) should be transparent */
+*::-webkit-scrollbar-corner {
+  background: transparent !important;
+}
+
+/* Firefox */
+* {
+  scrollbar-width: thin;
+  /* non-standard but supported in Firefox */
+  scrollbar-color: var(--scrollbar-thumb-default) transparent;
+}
+
+*:-moz-window-inactive {
+  scrollbar-color: var(--scrollbar-thumb-default) transparent;
+}
+
+/* Utility: hide scrollbar when explicitly requested (opt-in) */
+.hide-scrollbar {
+  scrollbar-width: none;
+  /* Firefox */
+}
+
+.hide-scrollbar::-webkit-scrollbar {
+  display: none;
+  /* WebKit */
+}
+
+/* Avoid forcing layout changes when hovering */
+*::-webkit-scrollbar-thumb:active {
+  transform: none;
+}
+
+*::-webkit-scrollbar-button {
+  display: none !important;
+}
+
+
+/* Scoped exceptions (if any component needs to override) can be added in component css */

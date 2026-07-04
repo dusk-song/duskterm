@@ -1,0 +1,80 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "DuskTerm",
+  "version": "1.0.0",
+  "identifier": "com.duskterm.app",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "devUrl": "http://localhost:1420",
+    "beforeBuildCommand": "pnpm build",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "DuskTerm",
+        "width": 800,
+        "height": 600,
+        "decorations": false,
+        "devtools": true,
+        "backgroundColor": "#141414",
+        "useHttpsScheme": true,
+        "center": true
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' asset: https: data:; font-src 'self' data:",
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "**/*.html",
+          "**/*.js",
+          "**/*.css",
+          "**/*.svg",
+          "**/*.png",
+          "**/*.gif",
+          "**/*.jpg",
+          "**/*.jpeg",
+          "**/*.webp",
+          "**/*.woff2"
+        ]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "nsis",
+    "copyright": "Copyright © 2026 xiaosong",
+    "publisher": "DuskTerm",
+    "shortDescription": "A cross-platform terminal tool for SSH, Telnet & Serial",
+    "longDescription": "DuskTerm is a modern, cross-platform desktop terminal tool built with Tauri 2 and Vue 3. It focuses on SSH server management while also supporting Telnet and serial port device connections. Features include multi-tab/split terminals, SFTP file manager, port tunneling, session encryption, and system monitoring.",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "windows": {
+      "allowDowngrades": true,
+      "certificateThumbprint": null,
+      "digestAlgorithm": null,
+      "nsis": {
+        "installerIcon": "icons/icon.ico",
+        "installMode": "currentUser",
+        "languages": [
+          "English",
+          "SimpChinese"
+        ]
+      },
+      "signCommand": null,
+      "timestampUrl": null,
+      "tsp": false,
+      "webviewInstallMode": {
+        "silent": true,
+        "type": "downloadBootstrapper"
+      },
+      "wix": null
+    }
+  }
+}

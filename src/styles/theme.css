@@ -1,0 +1,193 @@
+/* ================================================================
+   DuskTerm — Non-color tokens & global utilities
+   All color tokens are in src/assets/styles/tailwind.css
+   ================================================================ */
+
+:root {
+  /* ===== Typography ===== */
+  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
+  --font-mono: 'Cascadia Mono', 'SF Mono', 'Consolas', 'Microsoft YaHei', monospace;
+  --font-size-base: 0.8125rem;
+  /* 13px */
+  --font-size-sm: 0.75rem;
+  /* 12px */
+  --font-size-xs: 0.6875rem;
+  /* 11px */
+
+  /* ===== Legacy font ===== */
+  --app-font-family: var(--font-sans);
+  --app-font-size: 13px;
+  --app-control-height: 30px;
+  --app-control-radius: 8px;
+  --app-btn-padding-x: 12px;
+
+  /* ===== Radius ===== */
+  --niri-radius-sm: 6px;
+  --niri-radius-md: 8px;
+  --niri-radius-lg: 14px;
+  --niri-radius-xl: 18px;
+
+  /* ===== Spacing ===== */
+  --niri-gap-sm: 4px;
+  --niri-gap-md: 8px;
+  --niri-gap-lg: 10px;
+
+  /* ===== Backdrop blur ===== */
+  --niri-backdrop-blur: 0px;
+
+  /* ===== Transitions ===== */
+  --niri-transition-fast: 120ms ease;
+  --niri-transition-normal: 180ms cubic-bezier(0.4, 0, 0.2, 1);
+  --niri-transition-slow: 300ms ease;
+  --niri-transition-dialog: 220ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+/* ===== iGPU / Battery-saver performance reductions ===== */
+[data-performance="reduced"] {
+  --niri-backdrop-blur: 0px !important;
+  --niri-shadow-idle: none !important;
+  --niri-shadow-focus: 0 0 0 1px hsl(var(--primary) / 0.25) !important;
+  --niri-shadow-panel: none !important;
+  --niri-shadow-dialog: 0 0 0 1px hsl(var(--foreground) / 0.05) !important;
+  --niri-transition-fast: 80ms step-end !important;
+  --niri-transition-normal: 100ms step-end !important;
+  --niri-transition-slow: 150ms step-end !important;
+  --niri-transition-dialog: 120ms step-end !important;
+}
+
+[data-performance="reduced"] *,
+[data-performance="reduced"] *::before,
+[data-performance="reduced"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+}
+
+[data-performance="reduced"] .loading-spinner {
+  animation-duration: 0.8s !important;
+  animation-iteration-count: infinite !important;
+}
+
+[data-performance="reduced"] .workspace-grid.resizing>* {
+  will-change: auto !important;
+}
+
+/* ===== Terminal canvas performance ===== */
+.xterm-viewport,
+.xterm-screen,
+.xterm canvas {
+  will-change: auto !important;
+  contain: layout style paint;
+}
+
+[data-performance="reduced"] .xterm-viewport {
+  will-change: auto !important;
+}
+
+/* ===== Global defaults ===== */
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+#app {
+  font-family: var(--app-font-family);
+  font-size: var(--app-font-size);
+}
+
+/* ================================================================
+   Dialog / Overlay Transition System
+   ================================================================ */
+.dialog-enter-active,
+.dialog-leave-active {
+  transition: opacity 200ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.dialog-enter-active .\[_\>_div\]:nth-child(2),
+.dialog-leave-active .\[_\>_div\]:nth-child(2) {
+  transition: transform 200ms cubic-bezier(0.4, 0, 0.2, 1), opacity 200ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.dialog-enter-from,
+.dialog-leave-to {
+  opacity: 0;
+}
+
+.dialog-enter-from .\[_\>_div\]:nth-child(2),
+.dialog-leave-to .\[_\>_div\]:nth-child(2) {
+  transform: scale(0.95);
+  opacity: 0;
+}
+
+.sftp-slide-enter-active,
+.sftp-slide-leave-active {
+  transition: height 250ms cubic-bezier(0.4, 0, 0.2, 1), opacity 200ms ease;
+  overflow: hidden;
+}
+
+.sftp-slide-enter-from,
+.sftp-slide-leave-to {
+  opacity: 0;
+}
+
+/* ================================================================
+   Global Dialog Content Utilities
+   ================================================================ */
+.dialog-content {
+  padding: 0 16px;
+  max-height: 60vh;
+  overflow-y: auto;
+}
+
+.form-group {
+  margin-bottom: 16px;
+}
+
+.form-group-title {
+  font-size: 13px;
+  font-weight: 500;
+  margin-bottom: 8px;
+  color: hsl(var(--muted-foreground));
+}
+
+.form-row {
+  display: flex;
+  align-items: center;
+  margin-bottom: 12px;
+}
+
+.form-label {
+  width: 100px;
+  text-align: right;
+  padding-right: 12px;
+  font-size: 12px;
+  color: hsl(var(--muted-foreground));
+  flex-shrink: 0;
+}
+
+.form-control {
+  flex: 1;
+  min-width: 0;
+}
+
+.form-hint {
+  font-size: 11px;
+  color: hsl(var(--muted-foreground));
+  margin-top: 4px;
+}
+
+.form-error {
+  font-size: 11px;
+  color: hsl(var(--destructive));
+  margin-top: 4px;
+}
+
+.dialog-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
