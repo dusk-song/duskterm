@@ -1,48 +1,71 @@
 # DuskTerm
 
-DuskTerm 是一个基于 Tauri 2、Rust 和 Vue 3 的跨平台桌面终端工具，面向 SSH 运维、远程文件管理、端口隧道、Telnet 和串口设备管理等场景。
+<p align="center">
+  <img src="./docs/images/logo.png" width="120" alt="DuskTerm Logo" />
+</p>
 
-- 当前版本：`1.0.0`
-- 仓库地址：<https://github.com/dusk-song/duskterm>
-- 许可证：MIT
+<p align="center">
+  <strong>一款面向 SSH 运维与远程连接管理的跨平台桌面终端工具。</strong>
+</p>
 
-## 功能特性
+<p align="center">
+  基于 Tauri 2、Rust 和 Vue 3 构建，支持 SSH、SFTP、Telnet、串口和端口隧道管理。
+</p>
 
-- 多协议会话：支持 SSH、Telnet、Serial 会话的创建、编辑、保存、连接和重连。
-- 多终端工作区：支持多标签、水平/垂直分屏、焦点面板切换和状态栏快捷入口。
-- SFTP 文件管理：支持目录浏览、上传、下载、重命名、删除、权限修改和远程文件编辑。
-- 命令知识库：统一维护常用命令、快捷触发词、标签、说明、安全级别和执行策略。
-- 终端快捷匹配：按知识库触发词提供候选命令，支持键盘选择并默认插入命令。
-- 安全拦截：敏感/高危命令规则来自命令知识库，覆盖手动输入、快捷插入、知识库执行和历史命令重放。
-- 端口隧道：支持本地、远程和动态隧道配置、启动、停止和批量管理。
-- 本地安全：会话敏感字段使用 AES-256-GCM 加密存储，私钥文件在 Unix 系统下自动校正为 `0600` 权限。
-- 状态监控：提供 CPU、内存、磁盘和网络等运行状态展示。
-- 主题与图标：内置紧凑的桌面工具界面、xterm.js 终端主题和按文件类型加载的 Material 图标。
+<p align="center">
+  <img src="https://img.shields.io/github/stars/dusk-song/duskterm?style=flat-square" alt="GitHub Stars" />
+  <img src="https://img.shields.io/github/license/dusk-song/duskterm?style=flat-square" alt="License" />
+  <img src="https://img.shields.io/badge/Tauri-2.x-24C8DB?style=flat-square&logo=tauri&logoColor=white" alt="Tauri" />
+  <img src="https://img.shields.io/badge/Rust-stable-000000?style=flat-square&logo=rust&logoColor=white" alt="Rust" />
+  <img src="https://img.shields.io/badge/Vue-3.x-4FC08D?style=flat-square&logo=vuedotjs&logoColor=white" alt="Vue" />
+</p>
 
-## 技术栈
+---
 
-| 层级 | 技术 |
-| --- | --- |
-| 桌面框架 | Tauri 2 |
-| 后端 | Rust, Tokio |
-| 前端 | Vue 3, Composition API |
-| 状态管理 | Pinia |
-| 终端模拟 | xterm.js |
-| 编辑器 | Ace |
-| UI 基础 | shadcn-vue / reka-ui |
-| SSH/SFTP | russh, russh-keys, russh-sftp |
-| 串口通信 | serialport |
-| 存储加密 | AES-256-GCM |
-| 构建工具 | Vite 6, pnpm |
+## ✨ 功能特性
 
-## 开发环境
+| 功能           | 说明                                              |
+| ------------ | ----------------------------------------------- |
+| 🖥️ 多协议会话    | 支持 SSH、Telnet、Serial 会话的创建、编辑、保存、连接和重连。         |
+| 📂 SFTP文件管理 | 支持远程目录浏览、上传、下载、重命名、删除、权限修改和远程文件编辑。              |
+| 🧩 多终端工作区    | 支持多终端面板、水平分屏、垂直分屏、焦点切换和状态栏快捷入口。                 |
+| 🔀 端口隧道管理    | 支持本地转发、远程转发和动态转发隧道的配置与管理。                       |
+| 🔐 本地安全存储    | 敏感字段使用 AES-256-GCM 加密存储，Unix 私钥自动校正为 `0600` 权限。 |
+| 📊 状态监控      | 提供 CPU、内存、磁盘和网络等运行状态展示。                         |
 
-需要安装：
+## 🖼️ 界面预览
 
-- Node.js 18 或更高版本
-- pnpm 8 或更高版本
-- Rust stable
-- Tauri 2 所需系统依赖：<https://tauri.app/start/prerequisites/>
+### 终端工作区
+
+<p align="center">
+  <img src="./docs/images/terminal-workspace.png" alt="DuskTerm Terminal Workspace" width="900" />
+</p>
+
+
+## 🛠️ 技术栈
+
+| 层级            | 技术                          |
+| ------------- | --------------------------- |
+| 桌面框架       | Tauri 2                     |
+| 后端         | Rust、Tokio                  |
+| 前端         | Vue 3、Composition API       |
+| 状态管理      | Pinia                       |
+| 终端模拟       | xterm.js                    |
+| 编辑器        | Ace Editor                  |
+| UI 基础      | shadcn-vue / reka-ui        |
+| SSH / SFTP | russh、russh-keys、russh-sftp |
+| 串口通信       | serialport                  |
+| 存储加密      | AES-256-GCM                 |
+| 构建工具        | Vite 6、pnpm                 |
+
+## 🚀 开发环境
+
+开始开发前，请先安装：
+
+* Node.js 18 或更高版本
+* pnpm 8 或更高版本
+* Rust stable
+* Tauri 2 所需系统依赖：https://tauri.app/start/prerequisites/
 
 安装依赖：
 
@@ -56,90 +79,64 @@ pnpm install
 pnpm tauri dev
 ```
 
-只启动前端开发服务：
+仅启动前端开发服务：
 
 ```bash
 pnpm dev
 ```
 
-## 测试与构建
+## ✅ 测试与检查
 
-运行前端/结构回归测试：
+运行前端测试：
 
 ```bash
 pnpm test
 ```
 
-构建前端产物：
+构建前端资源：
 
 ```bash
 pnpm build
 ```
 
-检查 Rust/Tauri 后端：
+检查 Rust / Tauri 后端：
 
 ```bash
 cd src-tauri
 cargo check
 ```
 
-生成桌面安装包：
-
-```bash
-pnpm desktop:build
-```
-
-Windows 当前打包目标为 NSIS exe 安装包，产物位于 `src-tauri/target/release/bundle/nsis/`。
-
-## 项目结构
+## 📁 项目结构
 
 ```text
 src/
   components/          Vue 业务组件
-    app-shell/         状态栏、应用外壳组件
-    knowledge/         命令知识库面板与维护弹窗
+    app-shell/         应用外壳、状态栏及布局组件
     terminal/          终端视图与交互逻辑
-    sftp/              SFTP 文件面板
-  composables/         组合式逻辑
-  stores/              Pinia 状态
-  utils/               命令索引、安全匹配、主题等工具
+    sftp/              SFTP 文件管理面板
+    session/           会话配置与连接管理组件
+    tunnel/            隧道管理相关组件
+  composables/         Vue 组合式逻辑
+  stores/              Pinia 状态管理
+  utils/               终端、主题、格式化等工具方法
+
 src-tauri/
   src/
-    session/           会话监督与运行时
-    storage/           加密存储、导入导出、知识库持久化
+    session/           会话监督与运行时管理
+    storage/           本地加密存储与数据持久化
     sftp/              SFTP 后端能力
-    tunnel/            端口隧道
-    terminal/          终端写入队列和传输探测
-  tauri.conf.json      Tauri 应用与打包配置
+    tunnel/            端口隧道能力
+    terminal/          终端写入队列与传输探测
+  tauri.conf.json      Tauri 应用配置
+
 docs/
-  packaging-and-updates.md
-tests/
-  *.test.js            Node test 回归测试
+  images/              README 截图、Logo 与宣传图片
+
 ```
 
-## 命令知识库与安全策略
+## 🤝 贡献
 
-快捷命令和敏感命令已经统一为命令知识库条目：
-
-- 快捷触发词用于终端候选匹配。
-- 安全级别用于生成敏感/高危命令拦截规则。
-- 执行策略控制从知识库发起动作时的行为。
-- 高危命令可以复制和插入，但不能从知识库一键直接执行。
-- 插入后的命令在用户手动回车时仍会经过终端敏感命令拦截。
-
-## 打包与更新
-
-常规发布使用：
-
-```bash
-pnpm desktop:build
-```
-
-关于 NSIS 安装包、原地升级和后续 Tauri updater 接入方式，见 [docs/packaging-and-updates.md](docs/packaging-and-updates.md)。
-
-## 贡献
-
-提交前建议至少运行：
+提交代码前建议执行：
 
 ```bash
 pnpm test
@@ -147,8 +144,8 @@ pnpm build
 cd src-tauri && cargo check
 ```
 
-欢迎通过 Issue 和 Pull Request 改进项目。
+欢迎通过 Issue 提交问题、建议或功能需求，也欢迎提交 Pull Request 参与改进。
 
-## 许可证
+## 📄 许可证
 
 本项目基于 [MIT License](LICENSE) 开源。

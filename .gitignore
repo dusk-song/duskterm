@@ -28,7 +28,6 @@ dist-ssr
 .vscode/
 .claude/
 .superpowers/
-.docs/
 tests/
 .agents/
 design-system/
