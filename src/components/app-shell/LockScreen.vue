@@ -69,8 +69,7 @@ onMounted(() => {
 
 <style scoped>
 .lock-screen {
-  --lock-overlay-bg: var(--niri-backdrop-bg, rgba(0, 0, 0, 0.6));
-  --lock-overlay-blur: var(--niri-backdrop-blur, 6px);
+  --lock-overlay-bg: var(--niri-backdrop-bg, rgba(0, 0, 0, 0.72));
 
   position: fixed;
   inset: 0;
@@ -78,14 +77,12 @@ onMounted(() => {
   align-items: center;
   justify-content: center;
   background: var(--lock-overlay-bg);
-  backdrop-filter: blur(var(--lock-overlay-blur));
-  -webkit-backdrop-filter: blur(var(--lock-overlay-blur));
   z-index: var(--z-critical-overlay);
   padding: 16px;
 }
 
 [data-performance="reduced"] .lock-screen {
-  --lock-overlay-blur: 0px;
+  --lock-overlay-bg: rgba(0, 0, 0, 0.78);
 }
 
 .lock-card {

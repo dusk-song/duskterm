@@ -13,13 +13,11 @@ import DialogTitle from '@/components/ui/dialog/DialogTitle.vue';
 import Input from '@/components/ui/input/Input.vue';
 import { toast } from '@/composables/useToast';
 import { save } from '@tauri-apps/plugin-dialog';
-import { CanvasAddon } from '@xterm/addon-canvas';
 import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
-import '@xterm/xterm/css/xterm.css';
 import {
   CaseSensitive,
   ChevronDown,
@@ -298,7 +296,6 @@ function openSettings() {
 const terminalCache = globalThis.__sshTerminalCache || (globalThis.__sshTerminalCache = new Map());
 
 let term = null;
-let canvasAddon = null;
 let fitAddon = null;
 let unicode11Addon = null;
 let unlistenData = null;
@@ -359,6 +356,11 @@ let writeFlushRafId = null;
 let pendingOutputChunks = [];
 let viewportElement = null;
 let viewportScrollHandler = null;
+let termTitleDisposable = null;
+let termDataDisposable = null;
+let termResizeDisposable = null;
+let termCursorMoveDisposable = null;
+let termSelectionDisposable = null;
 let termScrollDisposable = null;
 let physicalLineCheckpoints = [{ index: -1, count: 0 }];
 let physicalLineScannedUntil = -1;
@@ -524,6 +526,7 @@ const applyTerminalTextRendering = (config = {}) => {
   if (!term) return;
   const fontFamily = buildTerminalFontFamily(config.font_family);
   term.options.fontFamily = fontFamily;
+  terminalWrapperRef.value?.style.setProperty('--terminal-font-family', fontFamily);
   refreshTerminalSurface(true, true);
 };
 
@@ -545,9 +548,16 @@ const applyTerminalTheme = () => {
   const themeKey = terminalThemeSettings.value.theme || 'default';
   const baseTheme = getTerminalTheme(themeKey, isDark.value);
   const themeBackground = resolveCssColor('var(--app-bg-dialog)', baseTheme.background || '#1e1e1e');
+  const selectionBackground = resolveCssColor(
+    baseTheme.selectionBackground || 'var(--app-selection-bg)',
+    'rgba(192,132,47,0.28)'
+  );
   const theme = {
     ...baseTheme,
-    background: themeBackground
+    background: themeBackground,
+    cursorAccent: baseTheme.cursorAccent || themeBackground,
+    selectionBackground,
+    selectionInactiveBackground: baseTheme.selectionInactiveBackground || selectionBackground
   };
   term.options.theme = theme;
 
@@ -1803,9 +1813,14 @@ onMounted(async () => {
 
   if (cached) {
     term = cached.term;
-    canvasAddon = cached.canvasAddon || null;
     fitAddon = cached.fitAddon;
     searchAddon = cached.searchAddon;
+    termTitleDisposable = cached.termTitleDisposable || null;
+    termDataDisposable = cached.termDataDisposable || null;
+    termResizeDisposable = cached.termResizeDisposable || null;
+    termCursorMoveDisposable = cached.termCursorMoveDisposable || null;
+    termSelectionDisposable = cached.termSelectionDisposable || null;
+    termScrollDisposable = cached.termScrollDisposable || null;
     unlistenData = cached.unlistenData;
     unlistenDebug = cached.unlistenDebug;
     unlistenConnected = cached.unlistenConnected;
@@ -1873,12 +1888,10 @@ onMounted(async () => {
       drawBoldTextInBrightColors: false
     });
 
-    canvasAddon = new CanvasAddon();
     fitAddon = new FitAddon();
     unicode11Addon = new Unicode11Addon();
     searchAddon = new SearchAddon();
 
-    term.loadAddon(canvasAddon);
     term.loadAddon(fitAddon);
     term.loadAddon(unicode11Addon);
     term.unicode.activeVersion = '11';
@@ -1888,7 +1901,7 @@ onMounted(async () => {
     term.attachCustomKeyEventHandler(handleTerminalCustomKeyEvent);
 
     // Intercept Title Changes for Directory Tracking
-    term.onTitleChange((title) => {
+    termTitleDisposable = term.onTitleChange((title) => {
       // Heuristic: Many shells set title to "user@host: /path" or just "/path"
       // We look for a pattern starting with / or ~
       // Also handle "root@host:~" where path is ~
@@ -1932,7 +1945,7 @@ onMounted(async () => {
     }, 50);
 
     // Handle user input
-    term.onData((data) => {
+    termDataDisposable = term.onData((data) => {
       try {
         const session = sshStore.sessions.find(s => s.id === props.sessionId);
         const isConnected = session?.status === 'connected';
@@ -2083,18 +2096,18 @@ onMounted(async () => {
     });
 
     // Handle resize
-    term.onResize(({ cols, rows }) => {
+    termResizeDisposable = term.onResize(({ cols, rows }) => {
       if (cols < 2 || rows < 2) return; // Ignore invalid sizes
       resetPhysicalLineCache();
       sendResizeIfNeeded(cols, rows);
       scheduleLineMetrics();
     });
 
-    term.onCursorMove(() => {
+    termCursorMoveDisposable = term.onCursorMove(() => {
       scheduleQuickHintPositionUpdate();
     });
 
-    term.onSelectionChange(() => {
+    termSelectionDisposable = term.onSelectionChange(() => {
       scheduleLineMetrics();
     });
 
@@ -2214,9 +2227,14 @@ onMounted(async () => {
 
     terminalCache.set(cacheKey, {
       term,
-      canvasAddon,
       fitAddon,
       searchAddon,
+      termTitleDisposable,
+      termDataDisposable,
+      termResizeDisposable,
+      termCursorMoveDisposable,
+      termSelectionDisposable,
+      termScrollDisposable,
       unlistenData,
       unlistenDebug,
         unlistenConnected,
@@ -2299,6 +2317,26 @@ onUnmounted(() => {
     cancelAnimationFrame(writeFlushRafId);
     writeFlushRafId = null;
   }
+  if (termTitleDisposable) {
+    termTitleDisposable.dispose();
+    termTitleDisposable = null;
+  }
+  if (termDataDisposable) {
+    termDataDisposable.dispose();
+    termDataDisposable = null;
+  }
+  if (termResizeDisposable) {
+    termResizeDisposable.dispose();
+    termResizeDisposable = null;
+  }
+  if (termCursorMoveDisposable) {
+    termCursorMoveDisposable.dispose();
+    termCursorMoveDisposable = null;
+  }
+  if (termSelectionDisposable) {
+    termSelectionDisposable.dispose();
+    termSelectionDisposable = null;
+  }
   if (termScrollDisposable) {
     termScrollDisposable.dispose();
     termScrollDisposable = null;
@@ -2340,8 +2378,8 @@ onUnmounted(() => {
     term.dispose();
     term = null;
   }
-  canvasAddon = null;
   fitAddon = null;
+  unicode11Addon = null;
   searchAddon = null;
 
   window.dispatchEvent(
@@ -2520,6 +2558,7 @@ onUnmounted(() => {
   background-color: var(--terminal-theme-bg, var(--app-bg-dialog));
   position: relative;
   border-radius: var(--niri-radius-md, 8px);
+  --terminal-cursor-color: var(--terminal-theme-fg, #d4d4d4);
 }
 
 .terminal-main {
@@ -2541,7 +2580,7 @@ onUnmounted(() => {
   padding-right: 6px;
   box-sizing: border-box;
   font-size: 11px;
-  font-family: 'Consolas', 'Cascadia Mono', monospace;
+  font-family: var(--terminal-font-family, 'Consolas', 'Cascadia Mono', monospace);
   contain: layout style paint;
 }
 
@@ -2573,6 +2612,33 @@ onUnmounted(() => {
   height: 100% !important;
   width: 100% !important;
   min-height: 0 !important;
+  font-family: var(--terminal-font-family, 'Consolas', 'Cascadia Mono', 'Courier New', monospace) !important;
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "calt" 0;
+  font-kerning: none;
+  letter-spacing: 0 !important;
+  line-height: normal;
+}
+
+.terminal-container :deep(.xterm),
+.terminal-container :deep(.xterm *) {
+  box-sizing: content-box;
+}
+
+.terminal-container :deep(.xterm-rows) {
+  font-family: inherit !important;
+  font-variant-ligatures: none;
+  font-feature-settings: "liga" 0, "calt" 0;
+  font-kerning: none;
+  letter-spacing: 0 !important;
+  line-height: normal !important;
+  white-space: pre !important;
+}
+
+.terminal-container :deep(.xterm-rows span) {
+  font-family: inherit !important;
+  line-height: normal !important;
+  letter-spacing: inherit;
 }
 
 .terminal-container :deep(.xterm-viewport) {
@@ -2583,6 +2649,26 @@ onUnmounted(() => {
 
 .terminal-container :deep(.xterm-screen canvas) {
   display: block;
+}
+
+.terminal-container :deep(.xterm .xterm-cursor.xterm-cursor-bar) {
+  box-shadow: inset 2px 0 0 var(--terminal-cursor-color);
+}
+
+.terminal-container :deep(.xterm.focus .xterm-cursor.xterm-cursor-blink) {
+  animation: duskterm-xterm-cursor-blink 1s steps(1, end) infinite;
+}
+
+@keyframes duskterm-xterm-cursor-blink {
+  0%,
+  50% {
+    opacity: 1;
+  }
+
+  50.01%,
+  100% {
+    opacity: 0;
+  }
 }
 
 .search-bar {

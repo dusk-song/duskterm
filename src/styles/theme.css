@@ -55,9 +55,9 @@
   --niri-transition-dialog: 120ms step-end !important;
 }
 
-[data-performance="reduced"] *,
-[data-performance="reduced"] *::before,
-[data-performance="reduced"] *::after {
+[data-performance="reduced"] *:not(.xterm):not(.xterm *),
+[data-performance="reduced"] *:not(.xterm):not(.xterm *)::before,
+[data-performance="reduced"] *:not(.xterm):not(.xterm *)::after {
   animation-duration: 0.01ms !important;
   animation-iteration-count: 1 !important;
   transition-duration: 0.01ms !important;
@@ -72,12 +72,9 @@
   will-change: auto !important;
 }
 
-/* ===== Terminal canvas performance ===== */
-.xterm-viewport,
-.xterm-screen,
+/* ===== Terminal renderer performance ===== */
 .xterm canvas {
   will-change: auto !important;
-  contain: layout style paint;
 }
 
 [data-performance="reduced"] .xterm-viewport {

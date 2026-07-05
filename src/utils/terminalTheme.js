@@ -205,12 +205,28 @@ function resolveTerminalThemeKey(themeKey) {
   return matched || fallback;
 }
 
+function normalizeXtermTheme(theme = {}) {
+  const selectionBackground = theme.selectionBackground || theme.selection || 'rgba(255,255,255,0.24)';
+  const selectionInactiveBackground = theme.selectionInactiveBackground || selectionBackground;
+  const cursor = theme.cursor || theme.foreground || '#d4d4d4';
+  const cursorAccent = theme.cursorAccent || theme.background || '#1e1e1e';
+  const { selection, ...rest } = theme;
+
+  return {
+    ...rest,
+    cursor,
+    cursorAccent,
+    selectionBackground,
+    selectionInactiveBackground
+  };
+}
+
 function getTerminalTheme(themeKey, isDark = true) {
   const resolvedKey = resolveTerminalThemeKey(themeKey);
   const effectiveKey = !isDark && resolvedKey === 'duskWarm'
     ? 'duskWarmLight'
     : resolvedKey;
-  return terminalThemes[effectiveKey]?.theme || terminalThemes.default.theme;
+  return normalizeXtermTheme(terminalThemes[effectiveKey]?.theme || terminalThemes.default.theme);
 }
 
 function getTerminalThemeOptions() {
