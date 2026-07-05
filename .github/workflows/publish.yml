@@ -1,0 +1,119 @@
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  publish-tauri:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.platform }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Windows x64：生成 NSIS .exe 安装包
+          - name: Windows x64
+            platform: windows-latest
+            args: "--bundles nsis"
+
+          # macOS Apple Silicon：M1 / M2 / M3 / M4
+          - name: macOS Apple Silicon
+            platform: macos-latest
+            args: "--target aarch64-apple-darwin --bundles dmg"
+
+          # macOS Intel
+          - name: macOS Intel
+            platform: macos-latest
+            args: "--target x86_64-apple-darwin --bundles dmg"
+
+          # Linux x64：Debian/Ubuntu 包 + 通用 AppImage
+          - name: Linux x64
+            platform: ubuntu-22.04
+            args: "--bundles deb,appimage"
+
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      # 若 package.json 已有：
+      # "packageManager": "pnpm@10.x.x"
+      # 可以删除 version 这一行。
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 10
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install Linux dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf \
+            xdg-utils
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          # 仅 macOS 构建需要两个 Rust target
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+
+      - name: Cache Rust dependencies
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "./src-tauri -> target"
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and upload Release assets
+        uses: tauri-apps/tauri-action@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+          # 未配置 Apple Developer 证书时，对 macOS 包做 ad-hoc 签名。
+          # 正式商业发布时，应改为 Developer ID 签名 + 公证。
+          APPLE_SIGNING_IDENTITY: "-"
+        with:
+          # 直接使用本次 push 的实际 Tag，例如 v1.0.0 / v.1.0.0
+          tagName: ${{ github.ref_name }}
+          releaseName: "DuskTerm ${{ github.ref_name }}"
+
+          # 固定显示在 Release 描述顶部
+          releaseBody: |
+            ## 下载说明
+
+            - **Windows**：下载 `.exe` 安装包。
+            - **macOS Apple Silicon**：适用于 M1、M2、M3、M4 等 Apple 芯片 Mac。
+            - **macOS Intel**：适用于 Intel 芯片 Mac。
+            - **Linux Debian / Ubuntu**：下载 `.deb`。
+            - **其他 Linux 发行版**：下载 `.AppImage`，赋予执行权限后运行。
+
+            ## 注意事项
+
+            - macOS 首次打开未正式签名应用时，可能需要在“系统设置 → 隐私与安全性”中手动允许。
+            - Windows 未配置代码签名证书前，首次运行可能出现 SmartScreen 提示。
+
+          # GitHub 自动根据提交、PR 等生成发行说明，
+          # 并追加在上面 releaseBody 内容之后。
+          generateReleaseNotes: true
+
+          # 先创建草稿 Release，检查安装包后再手动 Publish。
+          releaseDraft: true
+          prerelease: false
+
+          # 当前矩阵对应平台的 Tauri 构建参数
+          args: ${{ matrix.args }}
