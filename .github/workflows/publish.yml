@@ -35,6 +35,7 @@ jobs:
           - name: Linux x64
             platform: ubuntu-22.04
             args: "--bundles deb,appimage"
+            
 
     steps:
       - name: Checkout source
@@ -59,11 +60,19 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y \
+            build-essential \
+            pkg-config \
+            libudev-dev \
             libwebkit2gtk-4.1-dev \
-            libappindicator3-dev \
+            libxdo-dev \
+            libssl-dev \
+            libayatana-appindicator3-dev \
             librsvg2-dev \
             patchelf \
-            xdg-utils
+            xdg-utils \
+            curl \
+            wget \
+            file
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
