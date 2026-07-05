@@ -110,6 +110,20 @@ const isMaximized = ref(false);
 let win = null;
 let unlistenResize = null;
 let removeFocusSync = null;
+let syncMaximizedTimer = null;
+
+function scheduleMaximizedSync(delay = 80) {
+  if (!win) return;
+  if (syncMaximizedTimer) clearTimeout(syncMaximizedTimer);
+  syncMaximizedTimer = setTimeout(async () => {
+    syncMaximizedTimer = null;
+    try {
+      isMaximized.value = await win.isMaximized();
+    } catch {
+      /* noop */
+    }
+  }, delay);
+}
 
 async function initWin() {
   if (!isTauriRuntime()) return;
@@ -117,14 +131,11 @@ async function initWin() {
     win = getCurrentWindow();
     // Initialize synchronously from actual window state
     isMaximized.value = await win.isMaximized();
-    // Listen for resize to keep state in sync
-    unlistenResize = await win.onResized(async () => {
-      isMaximized.value = await win.isMaximized();
-    });
+    // Resize can fire many times while Windows animates maximize/restore.
+    // Keep the IPC state check off the hot path.
+    unlistenResize = await win.onResized(() => scheduleMaximizedSync());
     // Fallback: also sync on native window resize event (handles edge cases)
-    const syncState = async () => {
-      try { isMaximized.value = await win.isMaximized(); } catch { /* noop */ }
-    };
+    const syncState = () => scheduleMaximizedSync(0);
     window.addEventListener('focus', syncState);
     removeFocusSync = () => window.removeEventListener('focus', syncState);
   } catch (error) {
@@ -137,13 +148,14 @@ async function winMin() { win?.minimize(); }
 async function winMax() {
   if (!win) return;
   await win.toggleMaximize();
-  isMaximized.value = await win.isMaximized();
+  scheduleMaximizedSync(0);
 }
 async function winClose() { win?.close(); }
 
 async function onDblClick(e) {
   if (e.target.closest('.tb-btn,.tb-menu-item')) return;
-  win?.toggleMaximize();
+  await win?.toggleMaximize();
+  scheduleMaximizedSync(0);
 }
 
 // ── Keyboard shortcuts ──
@@ -173,6 +185,10 @@ onMounted(() => {
 onUnmounted(() => {
   unlistenResize?.();
   removeFocusSync?.();
+  if (syncMaximizedTimer) {
+    clearTimeout(syncMaximizedTimer);
+    syncMaximizedTimer = null;
+  }
   unlistenResize = null;
   removeFocusSync = null;
   document.removeEventListener('keydown', onKeydown, true);

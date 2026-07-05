@@ -49,7 +49,7 @@ const handleOutsideInteract = (event) => {
   <DialogPortal>
     <DialogOverlay />
     <DialogContent data-slot="dialog-content" v-bind="{ ...$attrs, ...forwarded }" :class="cn(
-      'bg-popover text-popover-foreground border border-[var(--app-border-dark)] shadow-[var(--niri-shadow-dialog)] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 fixed top-1/2 left-1/2 z-[var(--z-dialog-content)] grid w-full max-w-[calc(100%-2rem)] min-h-0 max-h-[calc(100vh-3rem)] -translate-x-1/2 -translate-y-1/2 gap-6 overflow-hidden rounded-[14px] p-6 text-[var(--app-font-body-size)] duration-[var(--app-motion-panel)] ease-[var(--app-motion-ease)] outline-none focus-visible:outline-none sm:max-w-md',
+      'bg-popover text-popover-foreground border border-[var(--app-border-dark)] shadow-[var(--niri-shadow-dialog)] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 transform-gpu fixed top-1/2 left-1/2 z-[var(--z-dialog-content)] grid w-full max-w-[calc(100%-2rem)] min-h-0 max-h-[calc(100vh-3rem)] -translate-x-1/2 -translate-y-1/2 gap-6 overflow-hidden rounded-[14px] p-6 text-[var(--app-font-body-size)] duration-[var(--app-motion-panel)] ease-[var(--app-motion-ease)] outline-none focus-visible:outline-none sm:max-w-md',
       props.class,
     )
       "

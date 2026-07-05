@@ -85,6 +85,12 @@ pnpm tauri dev
 pnpm dev
 ```
 
+打包分发：
+```bash
+pnpm install --frozen-lockfile
+pnpm desktop:build
+```
+
 ## ✅ 测试与检查
 
 运行前端测试：

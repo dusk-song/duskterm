@@ -13,6 +13,7 @@ import DialogTitle from '@/components/ui/dialog/DialogTitle.vue';
 import Input from '@/components/ui/input/Input.vue';
 import { toast } from '@/composables/useToast';
 import { save } from '@tauri-apps/plugin-dialog';
+import { CanvasAddon } from '@xterm/addon-canvas';
 import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
@@ -297,6 +298,7 @@ function openSettings() {
 const terminalCache = globalThis.__sshTerminalCache || (globalThis.__sshTerminalCache = new Map());
 
 let term = null;
+let canvasAddon = null;
 let fitAddon = null;
 let unicode11Addon = null;
 let unlistenData = null;
@@ -319,6 +321,9 @@ let lastDragFitAt = 0;
 let lastFittedContainerWidth = 0;
 let lastFittedContainerHeight = 0;
 let lastFitAt = 0;
+let deferLayoutFit = false;
+let lastProposedCols = 0;
+let lastProposedRows = 0;
 let lastSentCols = 0;
 let lastSentRows = 0;
 const DRAG_FIT_MIN_INTERVAL = 30;
@@ -330,24 +335,26 @@ const PHYSICAL_LINE_CHECKPOINT_STEP_HUGE = 1024;
 const PHYSICAL_LINE_THRESHOLD_MEDIUM = 20000;
 const PHYSICAL_LINE_THRESHOLD_LARGE = 100000;
 const PHYSICAL_LINE_THRESHOLD_HUGE = 200000;
+const TERMINAL_IMMEDIATE_WRITE_MAX_CHARS = 4096;
 const terminalThemeSettings = ref(loadTerminalThemeSettings());
 const CJK_MONO_FALLBACK_FONTS = '"Sarasa Mono SC", "Noto Sans Mono CJK SC", "Microsoft YaHei Mono", "SimSun", monospace';
+const TERMINAL_DEFAULT_FONT = '"Consolas"';
+const TERMINAL_FONT_FALLBACKS = '"Cascadia Mono", "Courier New", ' + CJK_MONO_FALLBACK_FONTS;
 let metricsDirty = false;
 let metricsRafId = null;
 let lastLineMetrics = null;
+let lastLineNumberRowsSignature = '';
 
 const focusTerminalSurface = () => {
   if (!term) return;
   requestAnimationFrame(() => {
     term?.focus();
-    if (term?.rows && term.rows > 0) {
-      term.refresh(0, term.rows - 1);
-    }
     requestAnimationFrame(() => {
       term?.focus();
     });
   });
 };
+
 let writeFlushRafId = null;
 let pendingOutputChunks = [];
 let viewportElement = null;
@@ -363,13 +370,17 @@ let _cachedLastNonEmpty = -1;
 // ── Trackpad gesture detection ──
 let gestureDeltaX = 0;
 let gestureDeltaY = 0;
+let gestureDirectionY = 0;
+let gestureWheelCountY = 0;
 let gestureTimerX = null;
 let gestureTimerY = null;
 let gestureCooldown = 0;
 const GESTURE_WINDOW_MS = 350;
-const GESTURE_COOLDOWN_MS = 600;
+const GESTURE_COOLDOWN_MS = 1200;
 const SWIPE_THRESHOLD_X = 100;
-const SWIPE_THRESHOLD_Y = 70;
+const SWIPE_THRESHOLD_Y = 260;
+const SWIPE_MIN_WHEEL_EVENTS_Y = 4;
+const SWIPE_VERTICAL_DOMINANCE = 1.8;
 
 const resetGestureX = () => {
   clearTimeout(gestureTimerX);
@@ -381,10 +392,20 @@ const resetGestureY = () => {
   clearTimeout(gestureTimerY);
   gestureTimerY = null;
   gestureDeltaY = 0;
+  gestureDirectionY = 0;
+  gestureWheelCountY = 0;
 };
 
 const isGestureCooldown = () => {
   return Date.now() - gestureCooldown < GESTURE_COOLDOWN_MS;
+};
+
+const canUseVerticalPanelGesture = (deltaY) => {
+  if (!viewportElement || Math.abs(deltaY) < 1) return true;
+  const scrollTop = Number(viewportElement.scrollTop || 0);
+  const maxScrollTop = Math.max(0, Number(viewportElement.scrollHeight || 0) - Number(viewportElement.clientHeight || 0));
+  if (deltaY < 0) return scrollTop <= 2;
+  return scrollTop >= maxScrollTop - 2;
 };
 
 const handleTerminalWheel = (e) => {
@@ -413,20 +434,31 @@ const handleTerminalWheel = (e) => {
     }
   }
 
-  // Vertical tracking — independent of horizontal
-  if (absY > 2 && absY > absX * 0.6 && !isGestureCooldown()) {
+  // Vertical panel gesture: require a clear, repeated overscroll gesture.
+  if (
+    absY > 2 &&
+    absY > absX * SWIPE_VERTICAL_DOMINANCE &&
+    canUseVerticalPanelGesture(e.deltaY) &&
+    !isGestureCooldown()
+  ) {
+    const direction = e.deltaY > 0 ? 1 : -1;
+    if (gestureDirectionY !== 0 && gestureDirectionY !== direction) {
+      resetGestureY();
+    }
+    gestureDirectionY = direction;
+    gestureWheelCountY += 1;
     gestureDeltaY += e.deltaY;
     if (gestureTimerY) clearTimeout(gestureTimerY);
     gestureTimerY = setTimeout(resetGestureY, GESTURE_WINDOW_MS);
 
-    if (gestureDeltaY < -SWIPE_THRESHOLD_Y) {
+    if (gestureWheelCountY >= SWIPE_MIN_WHEEL_EVENTS_Y && gestureDeltaY < -SWIPE_THRESHOLD_Y) {
       window.dispatchEvent(new CustomEvent('terminal-gesture-sftp-open'));
       gestureCooldown = Date.now();
       resetGestureX();
       resetGestureY();
       return;
     }
-    if (gestureDeltaY > SWIPE_THRESHOLD_Y) {
+    if (gestureWheelCountY >= SWIPE_MIN_WHEEL_EVENTS_Y && gestureDeltaY > SWIPE_THRESHOLD_Y) {
       window.dispatchEvent(new CustomEvent('terminal-gesture-sftp-close'));
       gestureCooldown = Date.now();
       resetGestureX();
@@ -453,29 +485,75 @@ const onTerminalThemeChanged = () => {
   scheduleLineMetrics();
 };
 
-const buildTerminalFontFamily = (configuredFontFamily) => {
+const normalizeTerminalFontFamily = (configuredFontFamily) => {
   const value = String(configuredFontFamily || '').trim();
-  if (!value) {
-    return `"Cascadia Mono", "Consolas", ${CJK_MONO_FALLBACK_FONTS}`;
-  }
-  return `${value}, ${CJK_MONO_FALLBACK_FONTS}`;
+  if (!value) return TERMINAL_DEFAULT_FONT;
+  if (value.includes(',') || value.startsWith('"') || value.startsWith("'")) return value;
+  return /\s/.test(value) ? `"${value.replace(/"/g, '\\"')}"` : value;
+};
+
+const buildTerminalFontFamily = (configuredFontFamily) => {
+  const primary = normalizeTerminalFontFamily(configuredFontFamily);
+  return `${primary}, ${TERMINAL_FONT_FALLBACKS}`;
+};
+
+const refreshTerminalSurface = (fit = true, repaint = false) => {
+  if (!term) return;
+  const run = () => {
+    if (!term) return;
+    if (fit && fitAddon && terminalContainer.value?.clientWidth > 2 && terminalContainer.value?.clientHeight > 2) {
+      try {
+        doFit({ force: true });
+      } catch (error) {
+        console.error('Terminal font/layout refresh failed:', error);
+      }
+    }
+    if (repaint && term.rows > 0) {
+      term.refresh(0, term.rows - 1);
+    }
+    updateLineNumberRowHeight();
+    scheduleLineMetrics();
+  };
+
+  requestAnimationFrame(run);
+  setTimeout(run, 80);
+  document.fonts?.ready?.then(run).catch(() => {});
 };
 
 const applyTerminalTextRendering = (config = {}) => {
   if (!term) return;
-  term.options.fontFamily = buildTerminalFontFamily(config.font_family);
-  term.options.rescaleOverlappingGlyphs = true;
+  const fontFamily = buildTerminalFontFamily(config.font_family);
+  term.options.fontFamily = fontFamily;
+  refreshTerminalSurface(true, true);
+};
+
+const resolveCssColor = (value, fallback) => {
+  if (typeof document === 'undefined') return fallback;
+  const probe = document.createElement('span');
+  probe.style.color = value;
+  probe.style.position = 'absolute';
+  probe.style.pointerEvents = 'none';
+  probe.style.visibility = 'hidden';
+  (terminalWrapperRef.value || document.body || document.documentElement).appendChild(probe);
+  const resolved = getComputedStyle(probe).color;
+  probe.remove();
+  return resolved || fallback;
 };
 
 const applyTerminalTheme = () => {
   if (!term) return;
   const themeKey = terminalThemeSettings.value.theme || 'default';
-  const theme = getTerminalTheme(themeKey, isDark.value);
+  const baseTheme = getTerminalTheme(themeKey, isDark.value);
+  const themeBackground = resolveCssColor('var(--app-bg-dialog)', baseTheme.background || '#1e1e1e');
+  const theme = {
+    ...baseTheme,
+    background: themeBackground
+  };
   term.options.theme = theme;
 
   const wrapper = terminalWrapperRef.value;
   if (wrapper) {
-    wrapper.style.setProperty('--terminal-theme-bg', theme.background || '#1e1e1e');
+    wrapper.style.setProperty('--terminal-theme-bg', themeBackground);
     wrapper.style.setProperty('--terminal-theme-fg', theme.foreground || '#d4d4d4');
   }
 
@@ -769,17 +847,17 @@ const handleQuickHintItemClick = (index) => {
 function handleZoomIn() {
   if (!term) return;
   term.options.fontSize = (term.options.fontSize || 14) + 2;
-  fitAddon.fit();
+  doFit({ force: true });
 }
 function handleZoomOut() {
   if (!term) return;
   term.options.fontSize = Math.max(10, (term.options.fontSize || 14) - 2);
-  fitAddon.fit();
+  doFit({ force: true });
 }
 function handleZoomReset() {
   if (!term) return;
   term.options.fontSize = 14;
-  fitAddon.fit();
+  doFit({ force: true });
 }
 async function handleCopy() {
   if (!term) return;
@@ -1291,11 +1369,20 @@ const scheduleLineMetrics = () => {
     const metrics = collectLineMetrics();
     dispatchLineMetrics(metrics);
     if (lineNumbersEnabled.value) {
-      lineNumberRows.value = metrics?.visibleRows || [];
-      lineNumberGutterWidth.value = `${Math.max(3, Number(metrics?.lineNumberDigits || 1) + 1)}ch`;
+      const nextRows = metrics?.visibleRows || [];
+      const nextWidth = `${Math.max(3, Number(metrics?.lineNumberDigits || 1) + 1)}ch`;
+      const nextSignature = `${nextWidth}|${nextRows.join('\n')}`;
+      if (nextSignature !== lastLineNumberRowsSignature) {
+        lineNumberRows.value = nextRows;
+        lineNumberGutterWidth.value = nextWidth;
+        lastLineNumberRowsSignature = nextSignature;
+      }
       updateLineNumberRowHeight();
     } else {
-      lineNumberRows.value = [];
+      if (lineNumberRows.value.length > 0) {
+        lineNumberRows.value = [];
+      }
+      lastLineNumberRowsSignature = '';
     }
   });
 };
@@ -1311,6 +1398,11 @@ const flushTerminalOutput = () => {
 
 const enqueueTerminalOutput = (chunk) => {
   if (!chunk) return;
+  if (!writeFlushRafId && pendingOutputChunks.length === 0 && chunk.length <= TERMINAL_IMMEDIATE_WRITE_MAX_CHARS) {
+    term?.write(chunk);
+    scheduleLineMetrics();
+    return;
+  }
   pendingOutputChunks.push(chunk);
   if (writeFlushRafId) return;
   writeFlushRafId = requestAnimationFrame(flushTerminalOutput);
@@ -1503,26 +1595,28 @@ function handleKeydown(e) {
   }
 }
 
-function sendResizeIfNeeded(cols, rows) {
+function sendResizeIfNeeded(cols, rows, options = {}) {
   if (cols < 2 || rows < 2) return;
-  if (cols === lastSentCols && rows === lastSentRows) return;
+  const force = options.force === true;
+  const session = sshStore.sessions.find(s => s.id === props.sessionId);
+  if (session?.status !== 'connected') return;
+  if (!force && cols === lastSentCols && rows === lastSentRows) return;
   lastSentCols = cols;
   lastSentRows = rows;
-  const session = sshStore.sessions.find(s => s.id === props.sessionId);
-  if (session?.status === 'connected') {
-    invokeCommand('resize_ssh', { sessionId: props.sessionId, cols, rows }).catch(() => { });
-  }
+  invokeCommand('resize_ssh', { sessionId: props.sessionId, cols, rows }).catch(() => { });
 }
 
 let resizeTimeout = null;
-function doFit() {
+function doFit(options = {}) {
   if (fitAddon && term?.element) {
     if (terminalContainer.value && terminalContainer.value.clientHeight > 2 && terminalContainer.value.clientWidth > 2) {
       try {
+        const force = options.force === true;
         const now = performance.now();
         const width = terminalContainer.value.clientWidth;
         const height = terminalContainer.value.clientHeight;
         if (
+          !force &&
           width === lastFittedContainerWidth &&
           height === lastFittedContainerHeight &&
           now - lastFitAt < 120
@@ -1530,17 +1624,34 @@ function doFit() {
           return;
         }
 
+        const dims = fitAddon.proposeDimensions();
+        if (!dims || dims.rows <= 1 || dims.cols <= 1) return;
+
+        if (
+          !force &&
+          dims.cols === lastProposedCols &&
+          dims.rows === lastProposedRows &&
+          dims.cols === term.cols &&
+          dims.rows === term.rows
+        ) {
+          lastFittedContainerWidth = width;
+          lastFittedContainerHeight = height;
+          lastFitAt = now;
+          updateLineNumberRowHeight();
+          scheduleQuickHintPositionUpdate();
+          return;
+        }
+
         lastFittedContainerWidth = width;
         lastFittedContainerHeight = height;
         lastFitAt = now;
+        lastProposedCols = dims.cols;
+        lastProposedRows = dims.rows;
 
         fitAddon.fit();
         resetPhysicalLineCache();
 
-        const dims = fitAddon.proposeDimensions();
-        if (dims && dims.rows > 1 && dims.cols > 1) {
-          sendResizeIfNeeded(dims.cols, dims.rows);
-        }
+        sendResizeIfNeeded(dims.cols, dims.rows);
         scheduleLineMetrics();
         updateLineNumberRowHeight();
         scheduleQuickHintPositionUpdate();
@@ -1581,11 +1692,16 @@ function scheduleDragFit() {
 function handleResize(immediate = false) {
   if (resizeTimeout) clearTimeout(resizeTimeout);
   if (!immediate && isLayoutDragging) {
+    if (deferLayoutFit) {
+      updateLineNumberRowHeight();
+      scheduleQuickHintPositionUpdate();
+      return;
+    }
     scheduleDragFit();
     return;
   }
   if (immediate) {
-    doFit();
+    doFit({ force: true });
     return;
   }
 
@@ -1600,7 +1716,9 @@ function handleLayoutResize() {
 
 function handleLayoutDragging(event) {
   isLayoutDragging = !!event?.detail?.dragging;
+  deferLayoutFit = isLayoutDragging && event?.detail?.deferFit !== false;
   if (!isLayoutDragging) {
+    deferLayoutFit = false;
     if (dragFitRafId) {
       cancelAnimationFrame(dragFitRafId);
       dragFitRafId = null;
@@ -1685,6 +1803,7 @@ onMounted(async () => {
 
   if (cached) {
     term = cached.term;
+    canvasAddon = cached.canvasAddon || null;
     fitAddon = cached.fitAddon;
     searchAddon = cached.searchAddon;
     unlistenData = cached.unlistenData;
@@ -1699,15 +1818,13 @@ onMounted(async () => {
       terminalContainer.value.innerHTML = '';
       if (term?.element) {
         terminalContainer.value.appendChild(term.element);
-        // Force immediate refresh
-        requestAnimationFrame(() => term?.refresh(0, term.rows - 1));
+        refreshTerminalSurface(true);
       } else {
         term.open(terminalContainer.value);
       }
       setTimeout(() => {
         if (terminalContainer.value && terminalContainer.value.clientHeight > 10) {
-          fitAddon?.fit();
-          term?.refresh(0, term.rows - 1);
+          refreshTerminalSurface(true);
         }
       }, 50);
     }
@@ -1736,10 +1853,16 @@ onMounted(async () => {
     // 3. Initialize Terminal with Config
     term = new Terminal({
       cursorBlink: true,
-      cursorStyle: 'block',
+      cursorStyle: 'bar',
+      cursorWidth: 2,
+      cursorInactiveStyle: 'outline',
       fontSize: config.font_size || 14,
       fontFamily: buildTerminalFontFamily(config.font_family),
-      rescaleOverlappingGlyphs: true,
+      fontWeight: 'normal',
+      fontWeightBold: 'bold',
+      lineHeight: 1.0,
+      letterSpacing: 0,
+      customGlyphs: true,
       theme: getTerminalTheme(terminalThemeSettings.value.theme || 'default', isDark.value),
       allowProposedApi: true,
       scrollback: 50000,
@@ -1750,10 +1873,12 @@ onMounted(async () => {
       drawBoldTextInBrightColors: false
     });
 
+    canvasAddon = new CanvasAddon();
     fitAddon = new FitAddon();
     unicode11Addon = new Unicode11Addon();
     searchAddon = new SearchAddon();
 
+    term.loadAddon(canvasAddon);
     term.loadAddon(fitAddon);
     term.loadAddon(unicode11Addon);
     term.unicode.activeVersion = '11';
@@ -1794,14 +1919,16 @@ onMounted(async () => {
     });
 
       term.open(terminalContainer.value);
+      applyTerminalTextRendering(config);
       focusTerminalSurface();
       applyTerminalTheme();
       attachViewportScrollListener();
       scheduleLineMetrics();
+      refreshTerminalSurface(true);
 
     // Wait a tick for layout to settle before fitting
     setTimeout(() => {
-      fitAddon.fit();
+      doFit({ force: true });
     }, 50);
 
     // Handle user input
@@ -1964,7 +2091,6 @@ onMounted(async () => {
     });
 
     term.onCursorMove(() => {
-      scheduleLineMetrics();
       scheduleQuickHintPositionUpdate();
     });
 
@@ -2004,7 +2130,7 @@ onMounted(async () => {
     // Force a resize + line-metrics refresh after short delay
     setTimeout(() => {
       if (fitAddon) {
-        fitAddon.fit();
+        doFit({ force: true });
         const dims = fitAddon.proposeDimensions();
         if (dims && dims.rows && dims.rows > 1) {
           sendResizeIfNeeded(dims.cols, dims.rows);
@@ -2019,6 +2145,20 @@ onMounted(async () => {
 
     unlistenConnected = await listenEvent(`ssh-connected-${props.sessionId}`, () => {
       sshStore.setSessionStatus(props.sessionId, 'connected');
+      refreshTerminalSurface(true);
+      focusTerminalSurface();
+      setTimeout(() => {
+        if (!fitAddon || !terminalContainer.value) return;
+        try {
+          doFit({ force: true });
+          const dims = fitAddon.proposeDimensions();
+          if (dims && dims.rows > 1 && dims.cols > 1) {
+            sendResizeIfNeeded(dims.cols, dims.rows, { force: true });
+          }
+        } catch (error) {
+          console.error('Terminal connected resize failed:', error);
+        }
+      }, 0);
     });
 
     unlistenClosed = await listenEvent(`ssh-closed-${props.sessionId}`, (reason) => {
@@ -2074,6 +2214,7 @@ onMounted(async () => {
 
     terminalCache.set(cacheKey, {
       term,
+      canvasAddon,
       fitAddon,
       searchAddon,
       unlistenData,
@@ -2152,6 +2293,8 @@ onUnmounted(() => {
   cancelQuickHintPositionUpdate();
   lastSentCols = 0;
   lastSentRows = 0;
+  lastProposedCols = 0;
+  lastProposedRows = 0;
   if (writeFlushRafId) {
     cancelAnimationFrame(writeFlushRafId);
     writeFlushRafId = null;
@@ -2162,6 +2305,7 @@ onUnmounted(() => {
   }
   pendingOutputChunks = [];
   lastLineMetrics = null;
+  lastLineNumberRowsSignature = '';
   safeUnlisten(unlistenData);
   safeUnlisten(unlistenDebug);
   safeUnlisten(unlistenConnected);
@@ -2196,6 +2340,7 @@ onUnmounted(() => {
     term.dispose();
     term = null;
   }
+  canvasAddon = null;
   fitAddon = null;
   searchAddon = null;
 
@@ -2372,7 +2517,7 @@ onUnmounted(() => {
   flex-direction: column;
   align-items: stretch;
   box-sizing: border-box;
-  background-color: var(--app-bg-dialog);
+  background-color: var(--terminal-theme-bg, var(--app-bg-dialog));
   position: relative;
   border-radius: var(--niri-radius-md, 8px);
 }
@@ -2384,23 +2529,10 @@ onUnmounted(() => {
   align-items: stretch;
 }
 
-.terminal-wrapper :deep(.xterm),
-.terminal-wrapper :deep(.xterm-viewport),
-.terminal-wrapper :deep(.xterm-screen),
-.terminal-wrapper :deep(.xterm-scrollable-element),
-.terminal-wrapper :deep(.xterm canvas),
-.terminal-wrapper :deep(.xterm .xterm-text-layer),
-.terminal-wrapper :deep(.xterm .xterm-selection-layer),
-.terminal-wrapper :deep(.xterm .xterm-link-layer) {
-  /* border-radius handled by .terminal-wrapper only — avoids forcing
-     each xterm layer into its own GPU compositing layer on iGPU */
-  overflow: hidden !important;
-}
-
 .line-number-gutter {
   flex: 0 0 auto;
   min-width: 3ch;
-  background: var(--app-bg-dialog);
+  background: var(--terminal-theme-bg, var(--app-bg-dialog));
   color: var(--app-text-muted);
   user-select: none;
   pointer-events: none;
@@ -2433,7 +2565,7 @@ onUnmounted(() => {
   min-height: 0;
   overflow: hidden;
   display: flex;
-  background: var(--app-bg-dialog);
+  background: var(--terminal-theme-bg, var(--app-bg-dialog));
   border-radius: var(--niri-radius-md, 8px);
 }
 
@@ -2444,25 +2576,10 @@ onUnmounted(() => {
 }
 
 .terminal-container :deep(.xterm-viewport) {
-  height: 100% !important;
-  overflow-x: hidden !important;
-  overflow-y: hidden !important;
   background-color: transparent !important;
 }
 
 /* removed local scrollbar rule to allow global scrollbar styling */
-
-.terminal-container :deep(.xterm-screen) {
-  height: auto !important;
-  min-height: 0 !important;
-  overflow: visible !important;
-}
-
-.terminal-container :deep(.xterm-scrollable-element) {
-  overflow: hidden !important;
-  max-width: 100% !important;
-  background-color: var(--app-bg-dialog) !important;
-}
 
 .terminal-container :deep(.xterm-screen canvas) {
   display: block;

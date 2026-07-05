@@ -14,7 +14,7 @@ import { toast } from '@/composables/useToast';
 import {
   Monitor
 } from '@lucide/vue';
-import { computed, defineAsyncComponent, h, onMounted, onUnmounted, ref } from 'vue';
+import { computed, defineAsyncComponent, h, onMounted, onUnmounted, ref, watch } from 'vue';
 
 // ── Lazy-loaded heavy components for faster initial paint ──
 import ConfirmDialog from '@/components/ui/confirm/ConfirmDialog.vue';
@@ -151,10 +151,10 @@ onApp('terminal-gesture-prev', () => {
   keybindingActions.prevSession();
 });
 onApp('terminal-gesture-sftp-open', () => {
-  if (!showSftpPanel.value) showSftpPanel.value = true;
+  setSftpPanelFromGesture(true);
 });
 onApp('terminal-gesture-sftp-close', () => {
-  if (showSftpPanel.value) showSftpPanel.value = false;
+  setSftpPanelFromGesture(false);
 });
 
 // Unified quit handler — calls Rust to force process exit
@@ -198,6 +198,31 @@ const currentEditSession = ref(null);
 const showSessionPanel = ref(false);
 const showSftpPanel = ref(false);
 const showCommandKnowledgePanel = ref(false);
+const SFTP_GESTURE_TOGGLE_COOLDOWN_MS = 1200;
+const SFTP_PANEL_TRANSITION_MS = 220;
+let lastSftpGestureToggleAt = 0;
+let sftpPanelTransitionTimer = null;
+
+const notifyTerminalLayoutDragging = (dragging, options = {}) => {
+  window.dispatchEvent(new CustomEvent('terminal-layout-dragging', {
+    detail: {
+      dragging,
+      ...options
+    }
+  }));
+};
+
+const notifyTerminalLayoutResize = () => {
+  window.dispatchEvent(new CustomEvent('terminal-layout-resize'));
+};
+
+const setSftpPanelFromGesture = (visible) => {
+  if (showSftpPanel.value === visible) return;
+  const now = performance.now();
+  if (now - lastSftpGestureToggleAt < SFTP_GESTURE_TOGGLE_COOLDOWN_MS) return;
+  lastSftpGestureToggleAt = now;
+  showSftpPanel.value = visible;
+};
 
 // ── SFTP bottom panel resize ──
 const sftpPanelHeightRatio = ref(0.35);
@@ -208,6 +233,7 @@ const startSftpResize = (event) => {
   const startRatio = sftpPanelHeightRatio.value;
 
   isSftpResizing.value = true;
+  notifyTerminalLayoutDragging(true, { source: 'sftp-resize' });
   document.body.style.cursor = 'row-resize';
   document.body.style.userSelect = 'none';
 
@@ -226,10 +252,30 @@ const startSftpResize = (event) => {
     document.body.style.cursor = '';
     document.body.style.userSelect = '';
     isSftpResizing.value = false;
+    notifyTerminalLayoutDragging(false, { source: 'sftp-resize' });
+    notifyTerminalLayoutResize();
   };
   document.addEventListener('mousemove', onMove);
   document.addEventListener('mouseup', onUp);
 };
+
+watch(showSftpPanel, () => {
+  if (sftpPanelTransitionTimer) {
+    clearTimeout(sftpPanelTransitionTimer);
+    sftpPanelTransitionTimer = null;
+  }
+
+  notifyTerminalLayoutDragging(true, { source: 'sftp-panel', deferFit: true });
+  measureWorkspace();
+
+  sftpPanelTransitionTimer = setTimeout(() => {
+    sftpPanelTransitionTimer = null;
+    notifyTerminalLayoutDragging(false, { source: 'sftp-panel', deferFit: true });
+    notifyTerminalLayoutResize();
+    measureWorkspace();
+  }, SFTP_PANEL_TRANSITION_MS);
+});
+
 const workspaceRef = ref(null);
 const workspaceWidth = ref(0);
 const workspaceHeight = ref(0);
@@ -850,7 +896,7 @@ const keybindingActions = {
     if (showSessionPanel.value) sshStore.loadSavedSessions();
   },
   sftpPanel: () => { showSftpPanel.value = !showSftpPanel.value; },
-  // Default shortcut: Ctrl+Shift+3
+  // Default shortcut: Ctrl+Alt+3
   commandKnowledge: () => { toggleCommandKnowledgePanel(); },
   overview: () => { isOverviewVisible.value = !isOverviewVisible.value; },
   copySession: () => {
@@ -1000,6 +1046,10 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (unlistenHostkey) unlistenHostkey();
+  if (sftpPanelTransitionTimer) {
+    clearTimeout(sftpPanelTransitionTimer);
+    sftpPanelTransitionTimer = null;
+  }
   window.removeEventListener('keybindings-changed', loadKeybindings);
   window.removeEventListener('main-ui-settings-changed', refreshMainUiSettings);
   window.removeEventListener('keydown', handleGlobalKeydown, true);

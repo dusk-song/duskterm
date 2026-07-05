@@ -17,7 +17,7 @@ const PREFERENCE_DEFINITIONS = {
       prevSession: 'Ctrl+Shift+Tab',
       sessionList: 'Ctrl+Alt+1',
       sftpPanel: 'Ctrl+Alt+2',
-      commandKnowledge: 'Ctrl+Shift+3',
+      commandKnowledge: 'Ctrl+Alt+3',
       overview: 'Ctrl+`',
       copySession: 'Ctrl+P',
       syncMergedPrevPage: 'Ctrl+Shift+PageUp',
@@ -88,6 +88,9 @@ function loadPreference(name) {
     const raw = localStorage.getItem(meta.storageKey);
     if (!raw) return { ...meta.defaults };
     const parsed = JSON.parse(raw);
+    if (name === 'keybindings' && parsed?.commandKnowledge === 'Ctrl+Shift+3') {
+      parsed.commandKnowledge = meta.defaults.commandKnowledge;
+    }
     return { ...meta.defaults, ...(parsed || {}) };
   } catch (e) {
     return { ...meta.defaults };

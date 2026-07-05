@@ -54,6 +54,6 @@ brotli-decompressor = "=5.0.1"
 
 [profile.release]
 opt-level = "s"
-lto = "fat"
-codegen-units = 1
+lto = "thin"
+codegen-units = 16
 strip = true
