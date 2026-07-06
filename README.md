@@ -1,9 +1,4 @@
 # DuskTerm
-
-<p align="center">
-  <img src="./docs/images/logo.png" width="120" alt="DuskTerm Logo" />
-</p>
-
 <p align="center">
   <strong>一款面向 SSH 运维与远程连接管理的跨平台桌面终端工具。</strong>
 </p>
