@@ -77,6 +77,54 @@ pub fn spawn_session_actor(
                         .and_then(|runtime| ssh::resize_ssh_runtime(&runtime.handle, cols, rows));
                     let _ = respond_to.send(result);
                 }
+                SessionMessage::OpenShellChannel {
+                    app_handle,
+                    channel_id,
+                    term_type,
+                    login_script,
+                    respond_to,
+                } => {
+                    let result = if runtime_state.shell_channels.contains_key(&channel_id) {
+                        Err("Shell channel already exists".to_string())
+                    } else if let Some(root_runtime) = runtime_state.ssh.as_ref() {
+                        ssh::open_shared_shell_channel_runtime(
+                            app_handle,
+                            &root_runtime.handle,
+                            channel_id.clone(),
+                            term_type,
+                            login_script,
+                        )
+                        .await
+                        .map(|runtime| {
+                            runtime_state.shell_channels.insert(channel_id, runtime);
+                        })
+                    } else {
+                        Err("Root SSH session is not connected".to_string())
+                    };
+                    let _ = respond_to.send(result);
+                }
+                SessionMessage::WriteShellChannel { channel_id, data, respond_to } => {
+                    let result = runtime_state.shell_channels.get(&channel_id)
+                        .ok_or_else(|| "Shell channel not found".to_string())
+                        .and_then(|runtime| ssh::write_ssh_runtime(&runtime.handle, data));
+                    let _ = respond_to.send(result);
+                }
+                SessionMessage::ResizeShellChannel { channel_id, cols, rows, respond_to } => {
+                    let result = runtime_state.shell_channels.get(&channel_id)
+                        .ok_or_else(|| "Shell channel not found".to_string())
+                        .and_then(|runtime| ssh::resize_ssh_runtime(&runtime.handle, cols, rows));
+                    let _ = respond_to.send(result);
+                }
+                SessionMessage::CloseShellChannel { channel_id, respond_to } => {
+                    let result = if let Some(mut runtime) = runtime_state.shell_channels.remove(&channel_id) {
+                        let _ = runtime.handle.close_tx.send(());
+                        if let Some(task) = runtime.task.take() { let _ = task.await; }
+                        Ok(())
+                    } else {
+                        Ok(())
+                    };
+                    let _ = respond_to.send(result);
+                }
                 SessionMessage::Disconnect {
                     sftp_state,
                     tunnel_state,
@@ -88,6 +136,11 @@ pub fn spawn_session_actor(
                     let sftp_handle = runtime_state.sftp.take();
                     runtime_state.sftp = None;
                     let ssh_runtime = runtime_state.ssh.take();
+                    let child_runtimes = std::mem::take(&mut runtime_state.shell_channels);
+                    for (_, mut runtime) in child_runtimes {
+                        let _ = runtime.handle.close_tx.send(());
+                        if let Some(task) = runtime.task.take() { let _ = task.await; }
+                    }
                     let tunnel_result =
                         tunnel::stop_all_runtime_tunnels(&tunnel_state, &mut runtime_state.tunnels)
                             .await;

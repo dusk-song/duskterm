@@ -1564,6 +1564,101 @@ pub async fn connect_ssh_runtime(
     })
 }
 
+async fn run_shared_shell_channel_task(
+    app_handle: AppHandle,
+    channel_id: String,
+    shared_session: SharedSshSession,
+    term_type: Option<String>,
+    login_script: Option<String>,
+    mut rx: SessionIoReceiver,
+    mut resize_rx: SessionResizeReceiver,
+    mut close_rx: SessionCloseReceiver,
+    ready_tx: oneshot::Sender<Result<(), String>>,
+) {
+    let mut ready_tx = Some(ready_tx);
+    let mut channel = {
+        let session = shared_session.lock().await;
+        match session.channel_open_session().await {
+            Ok(channel) => channel,
+            Err(error) => {
+                let message = format!("Channel open failed: {}", error);
+                if let Some(tx) = ready_tx.take() { let _ = tx.send(Err(message.clone())); }
+                let _ = app_handle.emit(&format!("ssh-error-{}", channel_id), message);
+                return;
+            }
+        }
+    };
+    let terminal_modes = default_terminal_modes();
+    if let Err(error) = channel.request_pty(true, term_type.as_deref().unwrap_or("xterm-256color"), 80, 24, 0, 0, &terminal_modes).await {
+        let message = format!("PTY request failed: {}", error);
+        if let Some(tx) = ready_tx.take() { let _ = tx.send(Err(message.clone())); }
+        let _ = app_handle.emit(&format!("ssh-error-{}", channel_id), message);
+        return;
+    }
+    if let Err(error) = channel.request_shell(true).await {
+        let message = format!("Shell request failed: {}", error);
+        if let Some(tx) = ready_tx.take() { let _ = tx.send(Err(message.clone())); }
+        let _ = app_handle.emit(&format!("ssh-error-{}", channel_id), message);
+        return;
+    }
+    if let Some(script) = login_script.filter(|script| !script.is_empty()) {
+        let _ = channel.data(script.as_bytes()).await;
+        if !script.ends_with('\n') { let _ = channel.data("\n".as_bytes()).await; }
+    }
+    if let Some(tx) = ready_tx.take() { let _ = tx.send(Ok(())); }
+    let _ = app_handle.emit(&format!("ssh-connected-{}", channel_id), ());
+    let mut zmodem_detector = ZmodemDetector::new();
+    loop {
+        tokio::select! {
+            Some(data) = rx.recv() => {
+                if data.len() > 64 * 1024 { continue; }
+                if channel.data(Cursor::new(data)).await.is_err() { break; }
+            }
+            Some((cols, rows)) = resize_rx.recv() => { let _ = channel.window_change(cols, rows, 0, 0).await; }
+            Some(msg) = channel.wait() => match msg {
+                ChannelMsg::Data { data } => {
+                    if let Some(terminal_data) = handle_terminal_transfer_probe(&app_handle, &channel_id, &mut zmodem_detector, data.as_ref()) {
+                        let _ = app_handle.emit(&format!("ssh-data-{}", channel_id), terminal_data);
+                    }
+                }
+                ChannelMsg::ExtendedData { data, .. } => { let _ = app_handle.emit(&format!("ssh-data-{}", channel_id), data.to_vec()); }
+                ChannelMsg::ExitStatus { .. } | ChannelMsg::ExitSignal { .. } | ChannelMsg::Eof | ChannelMsg::Close => break,
+                _ => {}
+            },
+            Some(_) = close_rx.recv() => { let _ = channel.close().await; break; }
+            else => break,
+        }
+    }
+    emit_session_closed(&app_handle, &channel_id, "shell channel closed");
+}
+
+pub async fn open_shared_shell_channel_runtime(
+    app_handle: AppHandle,
+    root_handle: &TerminalRuntimeHandle,
+    channel_id: String,
+    term_type: Option<String>,
+    login_script: Option<String>,
+) -> Result<crate::session::state::ManagedSshRuntime, String> {
+    let shared_session = root_handle.shared_session.lock().unwrap().clone()
+        .ok_or_else(|| "Root SSH transport is not ready".to_string())?;
+    let (tx, rx) = channel::<Vec<u8>>(SSH_INPUT_QUEUE_CAPACITY);
+    let (resize_tx, resize_rx) = unbounded_channel::<(u32, u32)>();
+    let (close_tx, close_rx) = unbounded_channel::<()>();
+    let handle = TerminalRuntimeHandle {
+        tx,
+        window_size_tx: resize_tx,
+        close_tx,
+        shared_session: root_handle.shared_session.clone(),
+    };
+    let (ready_tx, ready_rx) = oneshot::channel();
+    let task = tokio::spawn(run_shared_shell_channel_task(app_handle, channel_id, shared_session, term_type, login_script, rx, resize_rx, close_rx, ready_tx));
+    match ready_rx.await {
+        Ok(Ok(())) => Ok(crate::session::state::ManagedSshRuntime { handle, task: Some(task) }),
+        Ok(Err(error)) => { let _ = task.await; Err(error) }
+        Err(_) => { let _ = task.await; Err("Shell channel task ended before becoming ready".to_string()) }
+    }
+}
+
 #[tauri::command]
 pub async fn test_ssh_connection(config: SshConfig) -> Result<String, String> {
     let address = socket_address(&config.host, config.port)?;
@@ -1748,6 +1843,26 @@ pub async fn resize_ssh(
     rows: u32,
 ) -> Result<(), String> {
     supervisor.resize_terminal(session_id, cols, rows).await
+}
+
+#[tauri::command]
+pub async fn open_ssh_shell_channel(app_handle: AppHandle, supervisor: tauri::State<'_, crate::session::supervisor::SessionSupervisor>, root_session_id: String, channel_id: String, term_type: Option<String>, login_script: Option<String>) -> Result<(), String> {
+    supervisor.open_shell_channel(app_handle, root_session_id, channel_id, term_type, login_script).await
+}
+
+#[tauri::command]
+pub async fn write_ssh_shell_channel(supervisor: tauri::State<'_, crate::session::supervisor::SessionSupervisor>, root_session_id: String, channel_id: String, data: String) -> Result<(), String> {
+    supervisor.write_shell_channel(root_session_id, channel_id, data).await
+}
+
+#[tauri::command]
+pub async fn resize_ssh_shell_channel(supervisor: tauri::State<'_, crate::session::supervisor::SessionSupervisor>, root_session_id: String, channel_id: String, cols: u32, rows: u32) -> Result<(), String> {
+    supervisor.resize_shell_channel(root_session_id, channel_id, cols, rows).await
+}
+
+#[tauri::command]
+pub async fn close_ssh_shell_channel(supervisor: tauri::State<'_, crate::session::supervisor::SessionSupervisor>, root_session_id: String, channel_id: String) -> Result<(), String> {
+    supervisor.close_shell_channel(root_session_id, channel_id).await
 }
 
 #[tauri::command]

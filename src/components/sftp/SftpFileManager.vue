@@ -16,6 +16,7 @@ import { toast } from '@/composables/useToast';
 import {
   ArrowLeft,
   Download,
+  LocateFixed,
   RefreshCw,
   RotateCcw,
   Save as SaveIcon,
@@ -35,17 +36,22 @@ import FileIcon from '@/components/common/FileIcon.vue';
 import IconButton from '@/components/common/IconButton.vue';
 
 const props = defineProps({
-  sessionId: String
+  sessionId: String,
+  followSessionId: String,
+  visible: Boolean
 });
 const emit = defineEmits(['close']);
 
 const sshStore = useSshStore();
 const activeSession = computed(() => sshStore.getSession(props.sessionId));
+const followedTerminalSession = computed(() => sshStore.getSession(props.followSessionId || props.sessionId));
 const activeSessionStatus = computed(() => activeSession.value?.status || 'disconnected');
 const currentPath = ref('/');
 const connected = ref(false);
 const initializing = ref(false);
 const netError = ref('');
+const followTerminalPath = ref(false);
+const lastObservedTerminalCwd = ref('');
 const showBatchActions = ref(false);
 const showSelectionColumn = ref(false);
 
@@ -181,6 +187,12 @@ const visibleRows = computed(() => listVirtual.visibleItems.value.map((item, idx
 
 const selectedRecords = computed(() => selection.selectedList.value.filter(item => !item.__parent));
 const panelStateCache = new Map();
+let sessionSyncGeneration = 0;
+const initializingSessionIds = new Set();
+
+function isCurrentSessionSync(sessionId, generation) {
+  return props.sessionId === sessionId && sessionSyncGeneration === generation;
+}
 let unlistenSftpProgress = null;
 const TELEMETRY_WINDOW_MS = 1500;
 const TELEMETRY_MIN_SAMPLE_MS = 150;
@@ -618,7 +630,9 @@ function cachePanelStateForSession(sessionId) {
     total: Number(pager.total.value || 0),
     totalKnown: !!pager.totalKnown.value,
     offset: Number(pager.offset.value || 0),
-    hasMore: !!pager.hasMore.value
+    hasMore: !!pager.hasMore.value,
+    followTerminalPath: followTerminalPath.value,
+    lastObservedTerminalCwd: lastObservedTerminalCwd.value
   });
 }
 
@@ -626,7 +640,9 @@ async function restorePanelState() {
   if (!props.sessionId) return;
   const state = panelStateCache.get(props.sessionId);
   if (!state) return;
-  currentPath.value = state.path || '/';
+  currentPath.value = normalizeSftpPath(state.path);
+  followTerminalPath.value = !!state.followTerminalPath;
+  lastObservedTerminalCwd.value = state.lastObservedTerminalCwd || '';
   if (Array.isArray(state.items)) {
     pager.items.value = state.items.map(item => ({ ...item }));
     pager.total.value = Number(state.total || state.items.length || 0);
@@ -647,31 +663,38 @@ async function restorePanelState() {
   if (bodyScrollRef.value) bodyScrollRef.value.scrollTop = state.scrollTop || 0;
 }
 
-async function initSftp(forceReconnect = false) {
-  if (!props.sessionId) return;
-  const session = activeSession.value;
+async function initSftp(forceReconnect = false, options = {}) {
+  const sessionId = options.sessionId || props.sessionId;
+  const generation = options.generation ?? sessionSyncGeneration;
+  if (!sessionId) return;
+  const session = sshStore.getSession(sessionId);
   if (!session) return;
 
-  if (initializing.value) return;
+  if (initializingSessionIds.has(sessionId)) return;
   netError.value = '';
   if (session.status !== 'connected') {
-    connected.value = false;
-    sshStore.markSftpDisconnected(props.sessionId);
-    netError.value = session.status === 'connecting' ? '等待终端 SSH 会话建立...' : '终端会话未连接';
+    sshStore.markSftpDisconnected(sessionId);
+    if (isCurrentSessionSync(sessionId, generation)) {
+      connected.value = false;
+      netError.value = session.status === 'connecting' ? '等待终端 SSH 会话建立...' : '终端会话未连接';
+    }
     return;
   }
 
-  if (!forceReconnect && sshStore.isSftpConnected(props.sessionId)) {
+  if (!forceReconnect && sshStore.isSftpConnected(sessionId)) {
+    if (!isCurrentSessionSync(sessionId, generation)) return;
     connected.value = true;
     await restorePanelState();
-    if (!panelStateCache.get(props.sessionId)) await loadFirstPage();
+    if (isCurrentSessionSync(sessionId, generation) && !panelStateCache.get(sessionId)) await loadFirstPage();
     return;
   }
 
   if (forceReconnect) {
-    await disconnectSftpSession(props.sessionId);
+    await disconnectSftpSession(sessionId);
+    if (!isCurrentSessionSync(sessionId, generation)) return;
   }
 
+  initializingSessionIds.add(sessionId);
   initializing.value = true;
   try {
     const config = session.config || {};
@@ -679,22 +702,30 @@ async function initSftp(forceReconnect = false) {
       throw new Error('当前会话不是 SSH 协议，SFTP 仅支持 SSH 会话');
     }
     await invokeCommand('connect_sftp', {
-      sessionId: props.sessionId,
+      sessionId,
       config: {
         ...config,
         connect_timeout: config.connect_timeout ?? 10
       }
     });
+    sshStore.markSftpConnected(sessionId);
+    if (!isCurrentSessionSync(sessionId, generation)) return;
     connected.value = true;
-    sshStore.markSftpConnected(props.sessionId);
     await restorePanelState();
-    if (!panelStateCache.get(props.sessionId)) await loadFirstPage();
+    if (isCurrentSessionSync(sessionId, generation) && !panelStateCache.get(sessionId)) await loadFirstPage();
   } catch (err) {
-    connected.value = false;
-    sshStore.markSftpDisconnected(props.sessionId);
-    netError.value = `SFTP 连接失败：${String(err)}`;
+    sshStore.markSftpDisconnected(sessionId);
+    if (isCurrentSessionSync(sessionId, generation)) {
+      connected.value = false;
+      netError.value = `SFTP 连接失败：${String(err)}`;
+    }
   } finally {
-    initializing.value = false;
+    initializingSessionIds.delete(sessionId);
+    if (props.sessionId === sessionId) initializing.value = false;
+    if (props.sessionId === sessionId && sessionSyncGeneration !== generation) {
+      const latestGeneration = sessionSyncGeneration;
+      queueMicrotask(() => syncVisibleSessionState({ sessionId, generation: latestGeneration }));
+    }
   }
 }
 
@@ -708,15 +739,15 @@ async function queryBackendSftpConnected(sessionId) {
 }
 
 async function syncVisibleSessionState(options = {}) {
-  const { restore = true } = options;
+  const { restore = true, sessionId = props.sessionId, generation = sessionSyncGeneration } = options;
 
-  if (!props.sessionId) {
+  if (!sessionId) {
     connected.value = false;
     netError.value = '暂无连接';
     return;
   }
 
-  const session = activeSession.value;
+  const session = sshStore.getSession(sessionId);
   if (!session) {
     connected.value = false;
     netError.value = '暂无连接';
@@ -729,16 +760,18 @@ async function syncVisibleSessionState(options = {}) {
     return;
   }
 
-  let hasSftp = sshStore.isSftpConnected(props.sessionId);
+  let hasSftp = sshStore.isSftpConnected(sessionId);
   if (!hasSftp) {
-    hasSftp = await queryBackendSftpConnected(props.sessionId);
+    hasSftp = await queryBackendSftpConnected(sessionId);
+    if (!isCurrentSessionSync(sessionId, generation)) return;
     if (hasSftp) {
-      sshStore.markSftpConnected(props.sessionId);
+      sshStore.markSftpConnected(sessionId);
     }
   }
 
   if (!hasSftp) {
-    await initSftp();
+    await initSftp(false, { sessionId, generation });
+    if (!isCurrentSessionSync(sessionId, generation)) return;
     hasSftp = connected.value && sshStore.isSftpConnected(props.sessionId);
   }
 
@@ -747,6 +780,7 @@ async function syncVisibleSessionState(options = {}) {
 
   if (hasSftp && restore) {
     await restorePanelState();
+    if (!isCurrentSessionSync(sessionId, generation)) return;
     if (!panelStateCache.get(props.sessionId)) {
       await loadFirstPage();
     }
@@ -792,18 +826,24 @@ async function ensureSftpReady() {
 }
 
 async function loadFirstPage() {
+  const sessionId = props.sessionId;
+  const path = currentPath.value;
   try {
-    await pager.loadFirstPage();
+    const loaded = await pager.loadFirstPage();
+    if (loaded === false || props.sessionId !== sessionId || currentPath.value !== path) return false;
     netError.value = '';
     await nextTick();
     syncBottomScrollbar();
     cachePanelState();
+    return true;
   } catch (err) {
+    if (props.sessionId !== sessionId || currentPath.value !== path) return false;
     netError.value = `文件列表加载失败：${String(err)}`;
     if (isDisconnectError(err)) {
       connected.value = false;
       sshStore.markSftpDisconnected(props.sessionId);
     }
+    return false;
   }
 }
 
@@ -1055,13 +1095,59 @@ async function navigateTo(segment) {
   try {
     currentPath.value = nextPath;
     selection.clearSelection();
-    await loadFirstPage();
+    const loaded = await loadFirstPage();
+    if (!loaded) throw new Error(netError.value || '目录加载失败');
     cachePanelState();
   } catch (err) {
     currentPath.value = prevPath;
     toast.error(`进入目录失败：${String(err)}`);
   } finally {
     navigatingDir.value = false;
+  }
+}
+
+function normalizeTerminalCwd(cwd) {
+  const normalized = String(cwd || '').trim();
+  return normalized.startsWith('/') ? normalized : '';
+}
+
+function normalizeSftpPath(path) {
+  const normalized = String(path || '').trim();
+  return normalized.startsWith('/') ? normalized : '/';
+}
+
+async function followCurrentTerminalPath({ notifyIfMissing = false } = {}) {
+  const cwd = normalizeTerminalCwd(followedTerminalSession.value?.cwd);
+  if (!cwd) {
+    if (notifyIfMissing) toast.info('暂未获取到终端当前路径，收到路径后将自动跟随');
+    return;
+  }
+
+  lastObservedTerminalCwd.value = cwd;
+  if (cwd === currentPath.value || navigatingDir.value) return;
+
+  const previousPath = currentPath.value;
+  navigatingDir.value = true;
+  try {
+    currentPath.value = cwd;
+    selection.clearSelection();
+    const loaded = await loadFirstPage();
+    if (!loaded) {
+      currentPath.value = previousPath;
+      toast.error(`跟随终端路径失败：${netError.value || cwd}`);
+    } else {
+      cachePanelState();
+    }
+  } finally {
+    navigatingDir.value = false;
+  }
+}
+
+async function toggleFollowTerminalPath() {
+  followTerminalPath.value = !followTerminalPath.value;
+  cachePanelState();
+  if (followTerminalPath.value) {
+    await followCurrentTerminalPath({ notifyIfMissing: true });
   }
 }
 
@@ -1583,8 +1669,11 @@ async function handleClosePanel() {
 }
 
 watch(() => props.sessionId, async (nextSessionId, prevSessionId) => {
+  const generation = ++sessionSyncGeneration;
   if (prevSessionId && prevSessionId !== nextSessionId) {
     cachePanelStateForSession(prevSessionId);
+    await disconnectSftpSession(prevSessionId);
+    if (!isCurrentSessionSync(nextSessionId, generation)) return;
   }
   cancelCreateFolderDraft();
   closeContextMenu();
@@ -1593,9 +1682,46 @@ watch(() => props.sessionId, async (nextSessionId, prevSessionId) => {
   }
   selection.clearSelection();
   connected.value = false;
-  currentPath.value = panelStateCache.get(nextSessionId)?.path || '/';
-  await syncVisibleSessionState();
+  const nextState = panelStateCache.get(nextSessionId);
+  currentPath.value = normalizeSftpPath(nextState?.path);
+  followTerminalPath.value = !!nextState?.followTerminalPath;
+  lastObservedTerminalCwd.value = nextState?.lastObservedTerminalCwd || '';
+  if (!props.visible) {
+    netError.value = '';
+    return;
+  }
+  await syncVisibleSessionState({ sessionId: nextSessionId, generation });
+  if (!isCurrentSessionSync(nextSessionId, generation)) return;
+  if (followTerminalPath.value) await followCurrentTerminalPath();
 }, { immediate: true });
+
+watch(() => props.visible, async (visible) => {
+  const sessionId = props.sessionId;
+  if (!sessionId) return;
+  if (!visible) {
+    cachePanelStateForSession(sessionId);
+    ++sessionSyncGeneration;
+    connected.value = false;
+    await disconnectSftpSession(sessionId);
+    return;
+  }
+  const generation = ++sessionSyncGeneration;
+  await syncVisibleSessionState({ sessionId, generation });
+  if (isCurrentSessionSync(sessionId, generation) && followTerminalPath.value) {
+    await followCurrentTerminalPath();
+  }
+});
+
+watch(() => props.followSessionId, () => {
+  lastObservedTerminalCwd.value = normalizeTerminalCwd(followedTerminalSession.value?.cwd);
+});
+
+watch(() => followedTerminalSession.value?.cwd, async (cwd, previousCwd) => {
+  const normalized = normalizeTerminalCwd(cwd);
+  if (!followTerminalPath.value || !normalized || normalized === normalizeTerminalCwd(previousCwd)) return;
+  if (normalized === lastObservedTerminalCwd.value) return;
+  await followCurrentTerminalPath();
+});
 
 watch(activeSessionStatus, async (status, prevStatus) => {
   if (!props.sessionId) return;
@@ -1618,6 +1744,7 @@ watch([() => pager.items.value.length, () => connected.value], () => nextTick(sy
 
 let resizeHandler = null;
 let activeSftpRefreshHandler = null;
+let sftpLayoutRefreshHandler = null;
 onMounted(() => {
   listenEvent('sftp-progress', (payload) => {
     if (!payload || !payload.direction) return;
@@ -1657,8 +1784,14 @@ onMounted(() => {
     if (!targetSessionId || targetSessionId !== props.sessionId) return;
     manualRefresh();
   };
+  sftpLayoutRefreshHandler = () => nextTick(() => {
+    resizeHandler?.();
+    syncBottomScrollbar();
+    recalcColumnWidths();
+  });
   window.addEventListener('resize', resizeHandler);
   window.addEventListener('app:sftp-refresh-active', activeSftpRefreshHandler);
+  window.addEventListener('app:sftp-layout-refresh', sftpLayoutRefreshHandler);
   window.addEventListener('keydown', onEditorKeydown);
   window.addEventListener('sftp-clear-transfer', (e) => {
     const taskId = e?.detail?.id;
@@ -1693,6 +1826,10 @@ onUnmounted(() => {
     window.removeEventListener('app:sftp-refresh-active', activeSftpRefreshHandler);
     activeSftpRefreshHandler = null;
   }
+  if (sftpLayoutRefreshHandler) {
+    window.removeEventListener('app:sftp-layout-refresh', sftpLayoutRefreshHandler);
+    sftpLayoutRefreshHandler = null;
+  }
   window.removeEventListener('keydown', onEditorKeydown);
   if (_colResizeObserver) { _colResizeObserver.disconnect(); _colResizeObserver = null; }
   disconnectSftpSession(sessionId);
@@ -1709,6 +1846,8 @@ onUnmounted(() => {
       <div class="fm-actions">
         <IconButton :icon="ArrowLeft" size="sm" :disabled="currentPath === '/'" aria-label="返回上级目录"
           :action="goUp" />
+        <IconButton :icon="LocateFixed" size="sm" :active="followTerminalPath" aria-label="跟随终端当前路径"
+          :action="toggleFollowTerminalPath" />
         <IconButton :icon="RefreshCw" size="sm" :disabled="pager.loading.value" aria-label="刷新"
           :action="manualRefresh" />
         <IconButton :icon="Upload" size="sm" aria-label="上传" :action="handleUpload" />

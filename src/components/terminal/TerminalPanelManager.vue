@@ -1,7 +1,8 @@
 <script setup>
 import { X } from '@lucide/vue';
-import { computed, defineComponent, h, KeepAlive, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import IconButton from '@/components/common/IconButton.vue';
+import { computeSplitLayout } from '@/utils/splitTree';
 import Terminal from './Terminal.vue';
 import TerminalTitleBar from './TerminalTitleBar.vue';
 
@@ -124,63 +125,11 @@ onUnmounted(() => {
   window.removeEventListener('wheel', handleWheel);
 });
 
-const SplitNode = defineComponent({
-  name: 'TerminalSplitNode',
-  props: {
-    node: { type: Object, required: true },
-    panelId: { type: String, required: true },
-    focusedLeaf: { type: Object, required: true },
-    onFocus: { type: Function, required: true },
-    onSplitDrag: { type: Function, required: true }
-  },
-  setup(splitProps) {
-    return () => {
-      const node = splitProps.node;
-      if (!node) return h('div', { class: 'panel-empty' }, '无可用面板');
-
-      if (node.type === 'leaf') {
-        const isFocused = splitProps.focusedLeaf?.[splitProps.panelId] === node.sessionId;
-        return h('div', {
-          class: ['split-pane', 'split-leaf', isFocused ? 'split-focused' : ''],
-          onClick: () => splitProps.onFocus(splitProps.panelId, node.sessionId)
-        }, [
-          h(KeepAlive, null, {
-            default: () => h(Terminal, { sessionId: node.sessionId, key: node.sessionId })
-          })
-        ]);
-      }
-
-      const isVertical = node.direction === 'vertical';
-      const firstStyle = { flex: `${node.ratio} 1 0` };
-      const secondStyle = { flex: `${1 - node.ratio} 1 0` };
-
-      return h('div', { class: ['terminal-split', isVertical ? 'split-vertical' : 'split-horizontal'] }, [
-        h('div', { class: 'split-pane', style: firstStyle }, [
-          h(SplitNode, {
-            node: node.first,
-            panelId: splitProps.panelId,
-            focusedLeaf: splitProps.focusedLeaf,
-            onFocus: splitProps.onFocus,
-            onSplitDrag: splitProps.onSplitDrag
-          })
-        ]),
-        h('div', {
-          class: ['split-divider', isVertical ? 'divider-vertical' : 'divider-horizontal'],
-          onMousedown: (event) => splitProps.onSplitDrag(event, node)
-        }),
-        h('div', { class: 'split-pane', style: secondStyle }, [
-          h(SplitNode, {
-            node: node.second,
-            panelId: splitProps.panelId,
-            focusedLeaf: splitProps.focusedLeaf,
-            onFocus: splitProps.onFocus,
-            onSplitDrag: splitProps.onSplitDrag
-          })
-        ])
-      ]);
-    };
-  }
-});
+const panelLayout = (panelId) => computeSplitLayout(props.resolveTree(panelId));
+const leafStyle = (leaf) => ({ left: `${leaf.x}%`, top: `${leaf.y}%`, width: `${leaf.width}%`, height: `${leaf.height}%` });
+const dividerStyle = (divider) => divider.direction === 'vertical'
+  ? { left: `${divider.x}%`, top: `${divider.y}%`, height: `${divider.height}%` }
+  : { left: `${divider.x}%`, top: `${divider.y}%`, width: `${divider.width}%` };
 </script>
 
 <template>
@@ -198,8 +147,15 @@ const SplitNode = defineComponent({
       <div class="panel-scroll-strip" :style="{ transform: `translateX(-${scrollIndex * 100}%)` }"
         :class="{ transitioning: isTransitioning }" @transitionend="onTransitionEnd">
         <div v-for="panel in panels" :key="panel.id" class="scroll-pane">
-          <component :is="SplitNode" :node="resolveTree(panel.id)" :panel-id="panel.id" :focused-leaf="focusedLeaf"
-            :on-focus="onSetFocused" :on-split-drag="onSplitDrag" />
+          <div v-for="leaf in panelLayout(panel.id).leaves" :key="leaf.sessionId" class="split-leaf"
+            :class="{ 'split-focused': panelLayout(panel.id).leaves.length > 1 && focusedLeaf[panel.id] === leaf.sessionId }"
+            :style="leafStyle(leaf)"
+            @mousedown="onSetFocused(panel.id, leaf.sessionId)">
+            <Terminal :session-id="leaf.sessionId" />
+          </div>
+          <div v-for="(divider, index) in panelLayout(panel.id).dividers" :key="index" class="split-divider"
+            :class="divider.direction === 'vertical' ? 'divider-vertical' : 'divider-horizontal'"
+            :style="dividerStyle(divider)" @mousedown="onSplitDrag($event, divider.node, divider.bounds)" />
         </div>
       </div>
     </div>
@@ -258,8 +214,8 @@ const SplitNode = defineComponent({
   min-width: 0;
   min-height: 0;
   height: 100%;
-  display: flex;
-  flex-direction: column;
+  position: relative;
+  overflow: hidden;
 }
 
 .panel-empty {
@@ -270,112 +226,44 @@ const SplitNode = defineComponent({
   color: var(--app-text-muted);
 }
 
-.terminal-split {
-  height: 100%;
-  display: flex;
-  gap: var(--niri-gap-md, 6px);
-  width: 100%;
-}
-
-.terminal-split.split-vertical {
-  flex-direction: row;
-}
-
-.terminal-split.split-horizontal {
-  flex-direction: column;
-}
-
-.terminal-split .split-pane {
-  flex: 0 0 auto;
-  min-width: 0;
-  min-height: 0;
-  display: flex;
-  border: var(--niri-border-width, 2px) solid var(--niri-border-color-idle, transparent);
-  border-radius: var(--niri-radius-md, 8px);
-  overflow: hidden;
-  background: color-mix(in srgb, var(--app-input-bg) 95%, var(--app-bg-dialog));
-  box-shadow: var(--niri-shadow-idle);
-  padding: var(--niri-gap-sm, 4px);
-  box-sizing: border-box;
-  transition:
-    border-color var(--niri-transition-normal, 180ms ease),
-    box-shadow var(--niri-transition-normal, 180ms ease);
-}
-
-.terminal-split .split-pane:hover {
-  border-color: var(--niri-border-color-hover, rgba(192, 132, 47, 0.32));
-}
-
-.terminal-split .split-pane > * {
-  flex: 1;
-  min-width: 0;
-  min-height: 0;
-}
-
 .split-leaf {
-  flex: 1 1 auto;
-  height: 100%;
-  width: 100%;
+  position: absolute;
   display: flex;
   flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 3px;
+  box-sizing: border-box;
+  overflow: hidden;
+  background: var(--app-bg-dialog);
+  border-radius: var(--niri-radius-md, 8px);
+  transition: box-shadow 120ms ease;
 }
 
 .split-divider {
+  position: absolute;
+  z-index: 10;
   background: transparent;
-  position: relative;
-  z-index: 5;
-  flex: 0 0 auto;
-  opacity: 0.4;
   transition: opacity 120ms ease;
 }
 
 .divider-vertical {
-  width: var(--niri-gap-md, 6px);
+  width: 8px;
+  transform: translateX(-50%);
   cursor: col-resize;
-  margin: 0;
 }
 
 .divider-horizontal {
-  height: var(--niri-gap-md, 6px);
-  cursor: row-resize;
-  margin: 0;
-}
-
-.split-divider:hover {
-  opacity: 0.8;
-}
-
-.split-divider::before {
-  content: '';
-  position: absolute;
-  background: var(--color-primary-muted, var(--color-primary));
-  border-radius: 1px;
-  opacity: 0;
-  transition: opacity 120ms ease;
-}
-
-.divider-vertical::before {
-  top: 12px;
-  bottom: 12px;
-  left: 50%;
-  width: 2px;
-  transform: translateX(-50%);
-}
-
-.divider-horizontal::before {
-  left: 12px;
-  right: 12px;
-  top: 50%;
-  height: 2px;
+  height: 8px;
   transform: translateY(-50%);
-}
-
-.split-divider:hover::before {
-  opacity: 0.6;
+  cursor: row-resize;
 }
 
 .split-focused {
-  border-color: var(--niri-border-color-focus, var(--color-primary)) !important;
-  box-shadow: var(--niri-shadow-focus) !important;
+  box-shadow: inset 0 0 0 2px color-mix(
+    in srgb,
+    var(--app-bg-dialog) 82%,
+    var(--app-text) 18%
+  );
 }
 </style>

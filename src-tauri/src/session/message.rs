@@ -28,6 +28,28 @@ pub enum SessionMessage {
         rows: u32,
         respond_to: oneshot::Sender<Result<(), String>>,
     },
+    OpenShellChannel {
+        app_handle: AppHandle,
+        channel_id: String,
+        term_type: Option<String>,
+        login_script: Option<String>,
+        respond_to: oneshot::Sender<Result<(), String>>,
+    },
+    WriteShellChannel {
+        channel_id: String,
+        data: String,
+        respond_to: oneshot::Sender<Result<(), String>>,
+    },
+    ResizeShellChannel {
+        channel_id: String,
+        cols: u32,
+        rows: u32,
+        respond_to: oneshot::Sender<Result<(), String>>,
+    },
+    CloseShellChannel {
+        channel_id: String,
+        respond_to: oneshot::Sender<Result<(), String>>,
+    },
     Disconnect {
         sftp_state: SftpAppState,
         tunnel_state: TunnelState,

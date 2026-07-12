@@ -72,6 +72,7 @@ const keybindingItems = [
   { key: 'splitHorizontal', label: '水平拆分', placeholder: 'Ctrl+Shift+U' },
   { key: 'splitVertical', label: '垂直拆分', placeholder: 'Ctrl+Alt+I' },
   { key: 'closeSession', label: '关闭当前会话', placeholder: 'Ctrl+Shift+W' },
+  { key: 'closeSplitTerminal', label: '关闭当前分屏终端', placeholder: 'Ctrl+Alt+W' },
   { key: 'nextSession', label: '下一个会话', placeholder: 'Ctrl+Tab' },
   { key: 'prevSession', label: '上一个会话', placeholder: 'Ctrl+Shift+Tab' },
   { key: 'sessionList', label: '会话列表', placeholder: 'Ctrl+Alt+1' },

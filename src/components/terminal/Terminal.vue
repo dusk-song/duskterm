@@ -129,7 +129,11 @@ const openSecurityModal = (matched, data) => {
 function sendData(data) {
   const session = sshStore.sessions.find(s => s.id === props.sessionId);
   if (session && (session.status === 'connected' || session.status === 'connecting')) {
-    invokeCommand('write_ssh', { sessionId: props.sessionId, data }).catch(console.error);
+    const command = session.isSplitChild ? 'write_ssh_shell_channel' : 'write_ssh';
+    const payload = session.isSplitChild
+      ? { rootSessionId: session.workspaceSessionId || session.parentId, channelId: props.sessionId, data }
+      : { sessionId: props.sessionId, data };
+    invokeCommand(command, payload).catch(console.error);
   }
 }
 
@@ -371,18 +375,11 @@ let _cachedLastNonEmpty = -1;
 
 // ── Trackpad gesture detection ──
 let gestureDeltaX = 0;
-let gestureDeltaY = 0;
-let gestureDirectionY = 0;
-let gestureWheelCountY = 0;
 let gestureTimerX = null;
-let gestureTimerY = null;
 let gestureCooldown = 0;
 const GESTURE_WINDOW_MS = 350;
 const GESTURE_COOLDOWN_MS = 1200;
 const SWIPE_THRESHOLD_X = 100;
-const SWIPE_THRESHOLD_Y = 260;
-const SWIPE_MIN_WHEEL_EVENTS_Y = 4;
-const SWIPE_VERTICAL_DOMINANCE = 1.8;
 
 const resetGestureX = () => {
   clearTimeout(gestureTimerX);
@@ -390,31 +387,14 @@ const resetGestureX = () => {
   gestureDeltaX = 0;
 };
 
-const resetGestureY = () => {
-  clearTimeout(gestureTimerY);
-  gestureTimerY = null;
-  gestureDeltaY = 0;
-  gestureDirectionY = 0;
-  gestureWheelCountY = 0;
-};
-
 const isGestureCooldown = () => {
   return Date.now() - gestureCooldown < GESTURE_COOLDOWN_MS;
 };
 
-const canUseVerticalPanelGesture = (deltaY) => {
-  if (!viewportElement || Math.abs(deltaY) < 1) return true;
-  const scrollTop = Number(viewportElement.scrollTop || 0);
-  const maxScrollTop = Math.max(0, Number(viewportElement.scrollHeight || 0) - Number(viewportElement.clientHeight || 0));
-  if (deltaY < 0) return scrollTop <= 2;
-  return scrollTop >= maxScrollTop - 2;
-};
-
 const handleTerminalWheel = (e) => {
   const absX = Math.abs(e.deltaX);
-  const absY = Math.abs(e.deltaY);
 
-  // Horizontal tracking — independent of vertical
+  // Horizontal trackpad gestures switch sessions. Vertical wheel input remains terminal scroll only.
   if (absX > 2 && !isGestureCooldown()) {
     gestureDeltaX += e.deltaX;
     if (gestureTimerX) clearTimeout(gestureTimerX);
@@ -424,47 +404,12 @@ const handleTerminalWheel = (e) => {
       window.dispatchEvent(new CustomEvent('terminal-gesture-next'));
       gestureCooldown = Date.now();
       resetGestureX();
-      resetGestureY();
       return;
     }
     if (gestureDeltaX < -SWIPE_THRESHOLD_X) {
       window.dispatchEvent(new CustomEvent('terminal-gesture-prev'));
       gestureCooldown = Date.now();
       resetGestureX();
-      resetGestureY();
-      return;
-    }
-  }
-
-  // Vertical panel gesture: require a clear, repeated overscroll gesture.
-  if (
-    absY > 2 &&
-    absY > absX * SWIPE_VERTICAL_DOMINANCE &&
-    canUseVerticalPanelGesture(e.deltaY) &&
-    !isGestureCooldown()
-  ) {
-    const direction = e.deltaY > 0 ? 1 : -1;
-    if (gestureDirectionY !== 0 && gestureDirectionY !== direction) {
-      resetGestureY();
-    }
-    gestureDirectionY = direction;
-    gestureWheelCountY += 1;
-    gestureDeltaY += e.deltaY;
-    if (gestureTimerY) clearTimeout(gestureTimerY);
-    gestureTimerY = setTimeout(resetGestureY, GESTURE_WINDOW_MS);
-
-    if (gestureWheelCountY >= SWIPE_MIN_WHEEL_EVENTS_Y && gestureDeltaY < -SWIPE_THRESHOLD_Y) {
-      window.dispatchEvent(new CustomEvent('terminal-gesture-sftp-open'));
-      gestureCooldown = Date.now();
-      resetGestureX();
-      resetGestureY();
-      return;
-    }
-    if (gestureWheelCountY >= SWIPE_MIN_WHEEL_EVENTS_Y && gestureDeltaY > SWIPE_THRESHOLD_Y) {
-      window.dispatchEvent(new CustomEvent('terminal-gesture-sftp-close'));
-      gestureCooldown = Date.now();
-      resetGestureX();
-      resetGestureY();
       return;
     }
   }
@@ -1613,7 +1558,11 @@ function sendResizeIfNeeded(cols, rows, options = {}) {
   if (!force && cols === lastSentCols && rows === lastSentRows) return;
   lastSentCols = cols;
   lastSentRows = rows;
-  invokeCommand('resize_ssh', { sessionId: props.sessionId, cols, rows }).catch(() => { });
+  const command = session.isSplitChild ? 'resize_ssh_shell_channel' : 'resize_ssh';
+  const payload = session.isSplitChild
+    ? { rootSessionId: session.workspaceSessionId || session.parentId, channelId: props.sessionId, cols, rows }
+    : { sessionId: props.sessionId, cols, rows };
+  invokeCommand(command, payload).catch(() => { });
 }
 
 let resizeTimeout = null;
@@ -1737,7 +1686,6 @@ function handleLayoutDragging(event) {
       clearTimeout(dragFitTimerId);
       dragFitTimerId = null;
     }
-    handleLayoutResize();
   }
 }
 
@@ -1951,6 +1899,10 @@ onMounted(async () => {
         const isConnected = session?.status === 'connected';
 
         if (!isConnected) {
+          if (session?.status === 'connecting' && session?.isSplitChild) {
+            sendData(data);
+            return;
+          }
           const isEnter = data === '\r' || data === '\n';
           if (isEnter) {
             reconnectAfterDisconnect();
@@ -2371,7 +2323,6 @@ onUnmounted(() => {
   cancelQuickHintDebounce();
   closeQuickHint();
   resetGestureX();
-  resetGestureY();
 
   terminalWrapperRef.value?.removeEventListener('wheel', handleTerminalWheel);
   if (term) {

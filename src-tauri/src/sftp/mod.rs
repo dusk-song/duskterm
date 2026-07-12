@@ -2910,6 +2910,7 @@ pub async fn sftp_disconnect_legacy(
     session_id: String,
 ) -> Result<(), String> {
     if let Some(handle) = handle {
+        let _ = handle.sftp.close().await;
         if let Some(session) = handle.session {
             let _ = session
                 .disconnect(russh::Disconnect::ByApplication, "", "English")

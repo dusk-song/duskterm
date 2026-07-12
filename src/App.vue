@@ -14,7 +14,7 @@ import { toast } from '@/composables/useToast';
 import {
   Monitor
 } from '@lucide/vue';
-import { computed, defineAsyncComponent, h, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 
 // ── Lazy-loaded heavy components for faster initial paint ──
 import ConfirmDialog from '@/components/ui/confirm/ConfirmDialog.vue';
@@ -43,6 +43,7 @@ import { usePanelLayout } from './composables/usePanelLayout';
 import { useTerminalConnection } from './composables/useTerminalConnection';
 import { useTerminalPanels } from './composables/useTerminalPanels';
 import { useTheme } from './composables/useTheme';
+import { createSessionBooleanState, resolveFocusedSessionId } from './utils/sftpPanelState';
 import { useSshStore } from './stores/ssh';
 import { invokeCommand, listenEvent } from './utils/ipc';
 import { loadMainUiSettings, saveMainUiSettings } from './utils/mainUi';
@@ -109,9 +110,10 @@ onApp('app:refresh-sessions', () => {
 });
 onApp('app:refresh-current-view', () => {
   sshStore.loadSavedSessions();
-  if (activeKey.value) {
+  const sessionId = getActiveSftpWorkspaceId();
+  if (sessionId) {
     window.dispatchEvent(new CustomEvent('app:sftp-refresh-active', {
-      detail: { sessionId: activeKey.value }
+      detail: { sessionId }
     }));
   }
 });
@@ -150,13 +152,6 @@ onApp('terminal-gesture-next', () => {
 onApp('terminal-gesture-prev', () => {
   keybindingActions.prevSession();
 });
-onApp('terminal-gesture-sftp-open', () => {
-  setSftpPanelFromGesture(true);
-});
-onApp('terminal-gesture-sftp-close', () => {
-  setSftpPanelFromGesture(false);
-});
-
 // Unified quit handler — calls Rust to force process exit
 const performQuit = async () => {
   try {
@@ -196,11 +191,11 @@ const isTunnelModalVisible = ref(false);
 const preferredTunnelSessionId = ref('');
 const currentEditSession = ref(null);
 const showSessionPanel = ref(false);
+const sftpPanelVisibility = createSessionBooleanState(false);
+let getActiveSftpWorkspaceId = () => '';
 const showSftpPanel = ref(false);
 const showCommandKnowledgePanel = ref(false);
-const SFTP_GESTURE_TOGGLE_COOLDOWN_MS = 1200;
 const SFTP_PANEL_TRANSITION_MS = 220;
-let lastSftpGestureToggleAt = 0;
 let sftpPanelTransitionTimer = null;
 
 const notifyTerminalLayoutDragging = (dragging, options = {}) => {
@@ -214,14 +209,6 @@ const notifyTerminalLayoutDragging = (dragging, options = {}) => {
 
 const notifyTerminalLayoutResize = () => {
   window.dispatchEvent(new CustomEvent('terminal-layout-resize'));
-};
-
-const setSftpPanelFromGesture = (visible) => {
-  if (showSftpPanel.value === visible) return;
-  const now = performance.now();
-  if (now - lastSftpGestureToggleAt < SFTP_GESTURE_TOGGLE_COOLDOWN_MS) return;
-  lastSftpGestureToggleAt = now;
-  showSftpPanel.value = visible;
 };
 
 // ── SFTP bottom panel resize ──
@@ -260,6 +247,9 @@ const startSftpResize = (event) => {
 };
 
 watch(showSftpPanel, () => {
+  const sessionId = getActiveSftpWorkspaceId();
+  if (sessionId) sftpPanelVisibility.set(sessionId, showSftpPanel.value);
+
   if (sftpPanelTransitionTimer) {
     clearTimeout(sftpPanelTransitionTimer);
     sftpPanelTransitionTimer = null;
@@ -267,12 +257,14 @@ watch(showSftpPanel, () => {
 
   notifyTerminalLayoutDragging(true, { source: 'sftp-panel', deferFit: true });
   measureWorkspace();
+  nextTick(() => window.dispatchEvent(new CustomEvent('app:sftp-layout-refresh')));
 
   sftpPanelTransitionTimer = setTimeout(() => {
     sftpPanelTransitionTimer = null;
     notifyTerminalLayoutDragging(false, { source: 'sftp-panel', deferFit: true });
     notifyTerminalLayoutResize();
     measureWorkspace();
+    window.dispatchEvent(new CustomEvent('app:sftp-layout-refresh'));
   }, SFTP_PANEL_TRANSITION_MS);
 });
 
@@ -696,6 +688,7 @@ const {
   splitActive,
   mergeToSingle,
   closeCurrentPanel,
+  closeLeaf,
   removePanelRoot,
   startSplitDrag
 } = usePanelLayout({
@@ -704,6 +697,18 @@ const {
   ensureSplitSession,
   visibleSessions
 });
+
+const focusedTerminalRuntimeId = computed(() => resolveFocusedSessionId(activeKey.value, focusedLeaf.value));
+const activeSftpWorkspaceId = computed(() => activeKey.value || '');
+getActiveSftpWorkspaceId = () => activeSftpWorkspaceId.value;
+watch(activeSftpWorkspaceId, async (sessionId) => {
+  showSftpPanel.value = sftpPanelVisibility.get(sessionId);
+  await nextTick();
+  if (showSftpPanel.value) {
+    measureWorkspace();
+    window.dispatchEvent(new CustomEvent('app:sftp-layout-refresh'));
+  }
+}, { immediate: true });
 
 function dispatchCommandKnowledgeToActiveTerminal(mode, detail = {}) {
   const targetSessionId = focusedLeaf.value?.[activeKey.value] || activeKey.value;
@@ -875,6 +880,7 @@ const keybindingActions = {
   splitHorizontal: () => splitActive('horizontal'),
   splitVertical: () => splitActive('vertical'),
   closeSession: () => { if (activeKey.value) removePanelRoot(activeKey.value); },
+  closeSplitTerminal: () => closeCurrentPanel(),
   nextSession: () => {
     const list = visibleSessions.value;
     if (list.length > 1) {
@@ -1199,7 +1205,9 @@ const toolbarRightItems = computed(() => toolbarItems.value
                 :style="{ height: `${sftpPanelHeightRatio * 100}vh` }">
                 <div class="sftp-resize-handle" :class="{ 'is-dragging': isSftpResizing }"
                   @mousedown="startSftpResize" />
-                <FileManager :sessionId="activeKey" @close="showSftpPanel = false" />
+                <FileManager :sessionId="activeSftpWorkspaceId" :follow-session-id="focusedTerminalRuntimeId"
+                  :visible="showSftpPanel"
+                  @close="showSftpPanel = false" />
               </div>
             </Transition>
 

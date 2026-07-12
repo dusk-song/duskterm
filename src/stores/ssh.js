@@ -135,10 +135,26 @@ export const useSshStore = defineStore('ssh', () => {
   function removeSession(id) {
     const idx = sessions.value.findIndex(s => s.id === id);
     if (idx !== -1) {
-      invokeCommand('disconnect_ssh', { sessionId: id }).catch(() => { });
+      const session = sessions.value[idx];
+      if (session.isSplitChild && session.workspaceSessionId) {
+        invokeCommand('close_ssh_shell_channel', {
+          rootSessionId: session.workspaceSessionId,
+          channelId: id
+        }).catch(() => { });
+      } else {
+        invokeCommand('disconnect_ssh', { sessionId: id }).catch(() => { });
+      }
       if (activeSessionId.value === id) {
-        // Switch to neighbor
-        const next = sessions.value[idx + 1] || sessions.value[idx - 1];
+        // Workspace navigation must skip split child runtimes.
+        let next = null;
+        for (let i = idx + 1; i < sessions.value.length; i += 1) {
+          if (!sessions.value[i].isSplitChild) { next = sessions.value[i]; break; }
+        }
+        if (!next) {
+          for (let i = idx - 1; i >= 0; i -= 1) {
+            if (!sessions.value[i].isSplitChild) { next = sessions.value[i]; break; }
+          }
+        }
         activeSessionId.value = next ? next.id : null;
       }
       markSftpDisconnected(id);
@@ -377,6 +393,20 @@ export const useSshStore = defineStore('ssh', () => {
 
     try {
       session.status = 'connecting';
+      if (session.isSplitChild && session.workspaceSessionId) {
+        const root = getSession(session.workspaceSessionId);
+        await invokeCommand('close_ssh_shell_channel', {
+          rootSessionId: session.workspaceSessionId,
+          channelId: sessionId
+        }).catch(() => { });
+        await invokeCommand('open_ssh_shell_channel', {
+          rootSessionId: session.workspaceSessionId,
+          channelId: sessionId,
+          termType: root?.config?.term_type || null,
+          loginScript: root?.config?.login_script || null
+        });
+        return true;
+      }
       markSftpDisconnected(sessionId);
       await invokeCommand('disconnect_ssh', { sessionId }).catch(() => { });
       await connectSessionById(sessionId, { ...session.config });
@@ -390,7 +420,7 @@ export const useSshStore = defineStore('ssh', () => {
   }
 
   async function reconnectAllSessions() {
-    const candidates = [...sessions.value].filter((session) => session?.config);
+    const candidates = [...sessions.value].filter((session) => session?.config && !session.isSplitChild);
     if (candidates.length === 0) {
       toast.info('当前没有可重连的会话');
       return 0;
@@ -431,18 +461,19 @@ export const useSshStore = defineStore('ssh', () => {
   // Connect logic with metadata (e.g., split child sessions)
   async function connectLogicWithMeta(config, meta = {}) {
     const sessionId = crypto.randomUUID();
+    const independentConfig = JSON.parse(JSON.stringify(config || {}));
 
     addSession({
       id: sessionId,
-      name: buildSessionDisplayName(config),
+      name: buildSessionDisplayName(independentConfig),
       status: 'connecting',
-      config: config,
+      config: independentConfig,
       ...meta,
       noActivate: meta?.noActivate ?? false
     });
 
     try {
-      await connectSessionById(sessionId, config);
+      await connectSessionById(sessionId, independentConfig);
     } catch (err) {
       removeSession(sessionId);
       console.error(err);
@@ -450,6 +481,41 @@ export const useSshStore = defineStore('ssh', () => {
     }
 
     return sessionId;
+  }
+
+  async function openSplitShell(sourceSessionId, workspaceSessionId) {
+    const source = getSession(sourceSessionId);
+    const root = getSession(workspaceSessionId);
+    if (!source || !root?.config) return null;
+    const channelId = crypto.randomUUID();
+    addSession({
+      id: channelId,
+      name: root.name,
+      status: 'connecting',
+      config: root.config,
+      cwd: source.cwd || '',
+      isSplitChild: true,
+      parentId: workspaceSessionId,
+      workspaceSessionId,
+      noActivate: true
+    });
+    void (async () => {
+      try {
+        await waitForTerminalReady(channelId);
+        await invokeCommand('open_ssh_shell_channel', {
+          rootSessionId: workspaceSessionId,
+          channelId,
+          termType: root.config.term_type || null,
+          loginScript: root.config.login_script || null
+        });
+        setSessionStatus(channelId, 'connected');
+      } catch (error) {
+        setSessionStatus(channelId, 'error');
+        console.error('Failed to open shared SSH shell channel:', error);
+        toast.error('创建分屏 Shell Channel 失败');
+      }
+    })();
+    return channelId;
   }
 
   return {
@@ -481,6 +547,7 @@ export const useSshStore = defineStore('ssh', () => {
     setSessionStatus,
     connectLogic,
     connectLogicWithMeta,
+    openSplitShell,
     reconnectSession,
     reconnectAllSessions,
     updateSessionCwd,

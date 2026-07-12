@@ -23,7 +23,7 @@ const showCommandKnowledgePanel = computed(() => props.showCommandKnowledgePanel
 
 // ── Session dots ──
 const sessionDots = computed(() => {
-  return (sshStore.sessions || []).map((s, i) => ({
+  return (sshStore.sessions || []).filter(s => !s.isSplitChild).map((s, i) => ({
     id: s.id,
     active: s.id === sshStore.activeSessionId,
     connected: s.status === 'connected',

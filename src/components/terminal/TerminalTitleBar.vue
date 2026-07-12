@@ -50,7 +50,6 @@ const displayName = computed(() => {
 });
 
 const isConnected = computed(() => session.value?.status === 'connected');
-
 const connectionTitle = computed(() => {
   if (session.value?.status === 'connected') return '连接中';
   if (session.value?.status === 'connecting') return '连接中';

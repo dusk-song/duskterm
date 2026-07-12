@@ -1,4 +1,5 @@
-import { ref, watch } from 'vue';
+import { nextTick, ref, watch } from 'vue';
+import { collectSplitLeafIds, createSplitLeaf, removeSplitLeaf, splitLeaf } from '@/utils/splitTree';
 
 const STORAGE_KEY = 'terminal-panel-layout-v1';
 const MODE_KEY = 'terminal-layout-mode-v1';
@@ -88,6 +89,7 @@ export function usePanelLayout({ sshStore, activeKey, ensureSplitSession, visibl
     if (!splitTrees.value[panelId]) {
       splitTrees.value[panelId] = createLeaf(panelId);
     }
+    if (!focusedLeaf.value[panelId]) focusedLeaf.value[panelId] = findFirstLeaf(splitTrees.value[panelId]) || panelId;
     return splitTrees.value[panelId];
   };
 
@@ -205,6 +207,7 @@ export function usePanelLayout({ sshStore, activeKey, ensureSplitSession, visibl
 
   const setFocused = (panelId, sessionId) => {
     focusedLeaf.value[panelId] = sessionId;
+    window.dispatchEvent(new CustomEvent('terminal:focus', { detail: { sessionId } }));
   };
 
   const splitActive = async (direction) => {
@@ -215,9 +218,26 @@ export function usePanelLayout({ sshStore, activeKey, ensureSplitSession, visibl
     const splitId = await ensureSplitSession(targetId);
     if (!splitId) return;
 
-    const newNode = createSplit(direction, createLeaf(targetId), createLeaf(splitId));
-    splitTrees.value[panelId] = replaceLeaf(tree, targetId, newNode);
+    splitTrees.value[panelId] = splitLeaf(tree, targetId, splitId, direction);
     setFocused(panelId, splitId);
+  };
+
+  const scheduleLayoutResize = () => nextTick(() => {
+    window.dispatchEvent(new CustomEvent('terminal-layout-resize'));
+  });
+
+  const closeLeaf = (panelId, targetId) => {
+    const tree = ensureTree(panelId);
+    const leafIds = collectSplitLeafIds(tree);
+    if (!targetId || leafIds.length <= 1) return false;
+    const nextTree = removeSplitLeaf(tree, targetId);
+    if (!nextTree) return false;
+    splitTrees.value[panelId] = nextTree;
+    if (targetId !== panelId) sshStore.removeSession(targetId);
+    const remaining = collectSplitLeafIds(nextTree);
+    setFocused(panelId, remaining[0] || panelId);
+    scheduleLayoutResize();
+    return true;
   };
 
   const mergeToSingle = (panelId) => {
@@ -239,33 +259,7 @@ export function usePanelLayout({ sshStore, activeKey, ensureSplitSession, visibl
     const targetId = focusedLeaf.value[panelId] || findFirstLeaf(tree);
     if (!targetId) return;
 
-    const leafIds = getLeafIds(tree);
-    if (leafIds.length <= 1) return;
-
-    if (targetId === panelId) {
-      const siblingId = leafIds.find((id) => id !== panelId);
-      if (!siblingId) return;
-
-      const sibling = sshStore.getSession(siblingId);
-      if (sibling) {
-        sibling.isSplitChild = false;
-        delete sibling.parentId;
-      }
-      sshStore.removeSession(panelId);
-
-      const newTree = removeLeaf(tree, targetId) || createLeaf(siblingId);
-      splitTrees.value[siblingId] = newTree;
-      delete splitTrees.value[panelId];
-      delete focusedLeaf.value[panelId];
-      setFocused(siblingId, siblingId);
-      activeKey.value = siblingId;
-      return;
-    }
-
-    splitTrees.value[panelId] = removeLeaf(tree, targetId) || createLeaf(panelId);
-    sshStore.removeSession(targetId);
-    const remaining = getLeafIds(splitTrees.value[panelId]);
-    setFocused(panelId, remaining[0] || panelId);
+    closeLeaf(panelId, targetId);
   };
 
   const cleanupSplitTrees = () => {
@@ -296,12 +290,18 @@ export function usePanelLayout({ sshStore, activeKey, ensureSplitSession, visibl
     syncTileTree();
   };
 
-  const startSplitDrag = (e, node) => {
+  const startSplitDrag = (e, node, layoutBounds = null) => {
     e.preventDefault();
     e.stopPropagation();
     const container = e.currentTarget?.parentElement;
     if (!container) return;
-    const rect = container.getBoundingClientRect();
+    const rootRect = container.getBoundingClientRect();
+    const rect = layoutBounds ? {
+      left: rootRect.left + rootRect.width * layoutBounds.x / 100,
+      top: rootRect.top + rootRect.height * layoutBounds.y / 100,
+      width: rootRect.width * layoutBounds.width / 100,
+      height: rootRect.height * layoutBounds.height / 100
+    } : rootRect;
     const isVertical = node.direction === 'vertical';
     dragGestureActive = true;
     notifyLayoutDragging(true);
@@ -511,6 +511,7 @@ export function usePanelLayout({ sshStore, activeKey, ensureSplitSession, visibl
     splitActive,
     mergeToSingle,
     closeCurrentPanel,
+    closeLeaf,
     removePanelRoot,
     cleanupSplitTrees,
     startSplitDrag,

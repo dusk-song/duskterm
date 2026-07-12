@@ -13,6 +13,7 @@ const PREFERENCE_DEFINITIONS = {
       splitHorizontal: 'Ctrl+Shift+U',
       splitVertical: 'Ctrl+Alt+I',
       closeSession: 'Ctrl+Shift+W',
+      closeSplitTerminal: 'Ctrl+Alt+W',
       nextSession: 'Ctrl+Tab',
       prevSession: 'Ctrl+Shift+Tab',
       sessionList: 'Ctrl+Alt+1',
