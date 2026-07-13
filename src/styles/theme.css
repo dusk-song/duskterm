@@ -72,6 +72,16 @@
   will-change: auto !important;
 }
 
+[data-performance="reduced"] .dusk-dock,
+[data-performance="reduced"] .tb-dropdown,
+[data-performance="reduced"] .transfer-popup,
+[data-performance="reduced"] .recent-sessions-tree-container,
+[data-performance="reduced"] .fm-state,
+[data-performance="reduced"] .fm-nav-loading-mask {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
 /* ===== Terminal renderer performance ===== */
 .xterm canvas {
   will-change: auto !important;

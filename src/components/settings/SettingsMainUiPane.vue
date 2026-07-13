@@ -90,7 +90,6 @@ const ensureBackgroundSettings = () => {
 };
 
 const notifyBackgroundPreviewChange = () => {
-  props.mainUiSettings.background = normalizeBackgroundSettings(props.mainUiSettings.background || {});
   emit('background-preview-change');
 };
 

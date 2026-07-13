@@ -1,4 +1,5 @@
 <script setup>
+import { ChevronLeft, ChevronRight } from '@lucide/vue';
 import { computed } from 'vue';
 import { useSshStore } from '@/stores/ssh';
 import DuskDock from './DuskDock.vue';
@@ -6,13 +7,14 @@ import DuskDock from './DuskDock.vue';
 const sshStore = useSshStore();
 const sessions = computed(() => (sshStore.sessions || []).filter((session) => !session.isSplitChild));
 const active = computed(() => sessions.value.find((session) => session.id === sshStore.activeSessionId) || null);
-const sessionName = computed(() => active.value?.name || active.value?.config?.name || '暂无活动会话');
-const endpoint = computed(() => {
-  if (!active.value) return '';
+const activeIndex = computed(() => sessions.value.findIndex((session) => session.id === sshStore.activeSessionId));
+const canSwitchSession = computed(() => sessions.value.length > 1);
+const sessionIdentity = computed(() => {
+  if (!active.value) return '暂无活动会话';
   const config = active.value.config || active.value;
   const username = config.username || '';
   const host = config.host || config.hostname || '';
-  return username && host ? `${username}@${host}` : (host || username);
+  return username && host ? `${username}@${host}` : (host || username || '暂无活动会话');
 });
 const stateClass = (session) => ({
   active: session.id === sshStore.activeSessionId,
@@ -24,34 +26,68 @@ const activate = (session) => {
   sshStore.activeSessionId = session.id;
   window.dispatchEvent(new CustomEvent('terminal:focus', { detail: { sessionId: session.id } }));
 };
+const switchSession = (direction) => {
+  const list = sessions.value;
+  if (!list.length) return;
+  if (activeIndex.value < 0) return activate(list[0]);
+  const nextIndex = (activeIndex.value + direction + list.length) % list.length;
+  activate(list[nextIndex]);
+};
 </script>
 
 <template>
   <div class="session-dock-wrap">
-    <DuskDock compact class="session-current">
-      <span class="session-state" :class="active ? stateClass(active) : null" />
-      <span class="session-name">{{ sessionName }}</span>
-      <span v-if="endpoint" class="session-endpoint">· {{ endpoint }}</span>
+    <DuskDock interactive class="session-current">
+      <button class="session-nav session-nav--prev" :disabled="!canSwitchSession" title="上一个会话"
+        @click.stop="switchSession(-1)">
+        <ChevronLeft :size="13" />
+      </button>
+      <span class="session-state session-drag-region" :class="active ? stateClass(active) : null" />
+      <span class="session-identity session-drag-region">{{ sessionIdentity }}</span>
+      <button class="session-nav session-nav--next" :disabled="!canSwitchSession" title="下一个会话"
+        @click.stop="switchSession(1)">
+        <ChevronRight :size="13" />
+      </button>
     </DuskDock>
-    <div v-if="sessions.length" class="session-dots" aria-label="活动会话">
-      <button v-for="(session, index) in sessions" :key="session.id" class="session-dot"
-        :class="stateClass(session)" :title="session.name || `Session ${index + 1}`" @click="activate(session)" />
-    </div>
   </div>
 </template>
 
 <style scoped>
-.session-dock-wrap { display: flex; flex-direction: column; align-items: center; min-width: 0; pointer-events: none; }
-.session-current { max-width: min(360px, 34vw); font-size: 11px; white-space: nowrap; }
-.session-state, .session-dot { width: 6px; height: 6px; border-radius: 50%; background: color-mix(in srgb, var(--app-text-muted) 55%, transparent); flex: 0 0 auto; }
-.session-state { margin-right: 6px; }
-.session-state.connected, .session-dot.connected { background: var(--color-success); }
-.session-state.failed, .session-dot.failed { background: var(--color-danger); }
-.session-name, .session-endpoint { overflow: hidden; text-overflow: ellipsis; }
-.session-name { color: var(--app-text); font-weight: 600; }
-.session-endpoint { color: var(--app-text-muted); margin-left: 4px; }
-.session-dots { display: flex; gap: 6px; max-width: min(320px, 32vw); overflow-x: auto; padding: 3px 4px 0; scrollbar-width: none; pointer-events: auto; }
-.session-dots::-webkit-scrollbar { display: none; }
-.session-dot { border: 0; padding: 0; cursor: pointer; transition: transform 120ms ease, box-shadow 120ms ease; }
-.session-dot.active { background: var(--color-primary); transform: scale(1.45); box-shadow: 0 0 0 2px color-mix(in srgb, var(--color-primary) 24%, transparent); }
+.session-dock-wrap { display: flex; align-items: center; min-width: 0; pointer-events: none; }
+.session-current { max-width: min(360px, 34vw); gap: 6px; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.session-nav {
+  display: inline-flex;
+  width: 20px;
+  height: 20px;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  color: var(--tb-text-muted, var(--app-text-muted));
+  background: transparent;
+  cursor: default;
+}
+.session-nav:not(:disabled):hover {
+  color: var(--tb-text, var(--app-text));
+  background: color-mix(in srgb, var(--app-text) 8%, transparent);
+}
+.session-nav:disabled { opacity: 0.32; }
+.session-drag-region { pointer-events: none !important; }
+.session-state {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--app-text-muted) 55%, transparent);
+  flex: 0 0 auto;
+}
+.session-state.connected { background: var(--color-success); }
+.session-state.failed { background: var(--color-danger); }
+.session-identity {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--app-text);
+  text-overflow: ellipsis;
+}
 </style>

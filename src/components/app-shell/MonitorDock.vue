@@ -1,4 +1,5 @@
 <script setup>
+import { ArrowDown, ArrowUp, Cpu, HardDrive, MemoryStick } from '@lucide/vue';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useSshStore } from '@/stores/ssh';
 import { invokeCommand, isTauriRuntime } from '@/utils/ipc';
@@ -12,10 +13,6 @@ const stats = ref({ cpu: 0, memory: 0, disk: 0, net_rx: 0, net_tx: 0 });
 const netRate = ref({ rx: 0, tx: 0 });
 const activeSession = computed(() => sshStore.sessions.find((session) => session.id === sshStore.activeSessionId));
 const remoteSource = ref(false);
-const sourceColor = computed(() => remoteSource.value
-  ? (settings.value.remoteColor || 'var(--color-primary)')
-  : (settings.value.localColor || 'var(--app-text)'));
-const labelColor = computed(() => settings.value.labelColor || 'var(--app-text-muted)');
 let lastNetSample = null;
 let lastCpuSample = null;
 let polling = false;
@@ -29,6 +26,7 @@ const rate = (value) => {
 };
 
 async function fetchStats(diskOnly = false) {
+  if (document.hidden) return;
   if (polling && !diskOnly) return;
   if (!diskOnly) polling = true;
   try {
@@ -66,12 +64,17 @@ async function fetchStats(diskOnly = false) {
   finally { if (!diskOnly) polling = false; }
 }
 
-function startPolling() {
+function stopPolling() {
   clearInterval(pollTimer);
   clearInterval(diskTimer);
   pollTimer = null;
   diskTimer = null;
-  if (!isTauriRuntime() || !settings.value.showMonitor) return;
+  polling = false;
+}
+
+function startPolling() {
+  stopPolling();
+  if (!isTauriRuntime() || !settings.value.showMonitor || document.hidden) return;
   const battery = isOnBattery() ? 2 : 1;
   pollTimer = setInterval(() => fetchStats(), Math.max(2000, Number(settings.value.refreshIntervalMs) || 2000) * battery);
   if (settings.value.showDisk) diskTimer = setInterval(() => fetchStats(true), Math.max(10000, Number(settings.value.diskIntervalMs) || 10000) * battery);
@@ -79,18 +82,35 @@ function startPolling() {
 }
 
 function refreshSettings() { settings.value = loadMonitorSettings(); startPolling(); }
-onMounted(() => { window.addEventListener('monitor-settings-changed', refreshSettings); startPolling(); });
-onUnmounted(() => { window.removeEventListener('monitor-settings-changed', refreshSettings); clearInterval(pollTimer); clearInterval(diskTimer); });
+function handleVisibilityChange() {
+  if (document.hidden) {
+    stopPolling();
+    return;
+  }
+  lastCpuSample = null;
+  lastNetSample = null;
+  startPolling();
+}
+onMounted(() => {
+  window.addEventListener('monitor-settings-changed', refreshSettings);
+  document.addEventListener('visibilitychange', handleVisibilityChange);
+  startPolling();
+});
+onUnmounted(() => {
+  window.removeEventListener('monitor-settings-changed', refreshSettings);
+  document.removeEventListener('visibilitychange', handleVisibilityChange);
+  stopPolling();
+});
 watch(() => activeSession.value?.id, () => { lastCpuSample = null; lastNetSample = null; startPolling(); });
 </script>
 
 <template>
-  <DuskDock v-if="settings.showMonitor" class="monitor-dock"
-    :style="{ '--monitor-value': sourceColor, '--monitor-label': labelColor }">
-    <span v-if="settings.showCpu"><b>CPU</b>{{ percent(stats.cpu) }}</span>
-    <span v-if="settings.showMemory"><b>内存</b>{{ percent(stats.memory) }}</span>
-    <span v-if="settings.showDisk"><b>磁盘</b>{{ percent(stats.disk) }}</span>
-    <span v-if="settings.showNet"><b>↑</b>{{ rate(netRate.tx) }} <b>↓</b>{{ rate(netRate.rx) }}</span>
+  <DuskDock v-if="settings.showMonitor" class="monitor-dock" @dblclick.stop>
+    <span v-if="settings.showCpu" title="CPU"><Cpu :size="12" />{{ percent(stats.cpu) }}</span>
+    <span v-if="settings.showMemory" title="Memory"><MemoryStick :size="12" />{{ percent(stats.memory) }}</span>
+    <span v-if="settings.showDisk" title="Disk"><HardDrive :size="12" />{{ percent(stats.disk) }}</span>
+    <span v-if="settings.showNet" title="Network upload"><ArrowUp :size="12" />{{ rate(netRate.tx) }}</span>
+    <span v-if="settings.showNet" title="Network download"><ArrowDown :size="12" />{{ rate(netRate.rx) }}</span>
   </DuskDock>
 </template>
 
@@ -98,13 +118,10 @@ watch(() => activeSession.value?.id, () => { lastCpuSample = null; lastNetSample
 .monitor-dock {
   gap: 10px;
   padding: 0 10px;
-  border-color: color-mix(in srgb, var(--app-text) 18%, var(--app-border-light)) !important;
-  background: color-mix(in srgb, var(--app-bg-dialog) 92%, transparent) !important;
-  color: color-mix(in srgb, var(--monitor-value) 92%, var(--app-text)) !important;
-  font: 700 11px/1 Consolas, monospace;
-  text-shadow: 0 1px 2px color-mix(in srgb, var(--app-workspace-gap, #000) 40%, transparent);
+  font-size: 11px;
+  font-weight: 600;
   white-space: nowrap;
 }
 .monitor-dock span { display: inline-flex; align-items: center; gap: 3px; }
-.monitor-dock b { color: color-mix(in srgb, var(--monitor-label) 72%, var(--app-text)); font-weight: 800; }
+.monitor-dock svg { color: var(--tb-text-muted, var(--app-text-muted)); flex: 0 0 auto; stroke-width: 2.2; }
 </style>

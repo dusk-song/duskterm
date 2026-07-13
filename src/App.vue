@@ -18,7 +18,6 @@ import { computed, defineAsyncComponent, h, nextTick, onMounted, onUnmounted, re
 
 // ── Lazy-loaded heavy components for faster initial paint ──
 import ConfirmDialog from '@/components/ui/confirm/ConfirmDialog.vue';
-import ToastContainer from '@/components/ui/toast/ToastContainer.vue';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import CustomTitlebar from './components/app-shell/CustomTitlebar.vue';
 import GlobalBackground from './components/app-shell/GlobalBackground.vue';
@@ -1142,7 +1141,6 @@ const toolbarRightItems = computed(() => toolbarItems.value
 
 <template>
   <TooltipProvider :delay-duration="200">
-    <ToastContainer />
     <ConfirmDialog />
 
     <!-- Hostkey fingerprint confirmation (declarative, not imperative confirm) -->
@@ -1354,10 +1352,10 @@ const toolbarRightItems = computed(() => toolbarItems.value
 .app-shell.has-floating-surfaces .sftp-bottom-panel .fm-table-header,
 .app-shell.has-floating-surfaces .sftp-bottom-panel .fm-table-body,
 .app-shell.has-floating-surfaces .sftp-bottom-panel .fm-bottom-scrollbar {
-  background: transparent !important;
+  background: var(--terminal-surface-bg, var(--app-bg-dialog)) !important;
 }
 .app-shell.has-floating-surfaces .sftp-bottom-panel .fm-load-more {
-  background: color-mix(in srgb, var(--app-bg-dialog) 42%, transparent) !important;
+  background: var(--terminal-surface-bg, var(--app-bg-dialog)) !important;
 }
 
 /* will-change removed: triggers excessive GPU layering on iGPU,
@@ -1479,7 +1477,7 @@ const toolbarRightItems = computed(() => toolbarItems.value
 }
 
 .main-panel-body.has-sftp-panel .sftp-bottom-panel {
-  background: transparent;
+  background: var(--terminal-surface-bg, var(--app-bg-dialog));
 }
 
 .empty-state {

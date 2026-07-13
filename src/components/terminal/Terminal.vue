@@ -2566,6 +2566,8 @@ onUnmounted(() => {
   flex: 1;
   min-width: 0;
   min-height: 0;
+  box-sizing: border-box;
+  padding: 6px 8px;
   overflow: hidden;
   display: flex;
   background: transparent;
@@ -2573,6 +2575,7 @@ onUnmounted(() => {
 }
 
 .terminal-container :deep(.xterm) {
+  flex: 1 1 auto;
   height: 100% !important;
   width: 100% !important;
   min-height: 0 !important;

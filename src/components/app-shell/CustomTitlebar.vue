@@ -6,6 +6,7 @@ import { executeMenuAction } from '@/composables/useMenu';
 import { useTheme } from '@/composables/useTheme';
 import { isTauriRuntime } from '@/utils/ipc';
 import { resolveTitlebarVisibility } from '@/utils/titlebarLayout';
+import ToastContainer from '@/components/ui/toast/ToastContainer.vue';
 import DuskDock from './DuskDock.vue';
 import MonitorDock from './MonitorDock.vue';
 import SessionDock from './SessionDock.vue';
@@ -54,6 +55,8 @@ let win = null;
 let resizeObserver = null;
 let unlistenResize = null;
 let syncTimer = null;
+let titlebarResizeFrame = null;
+let pendingTitlebarWidth = Math.round(window.innerWidth);
 
 const closeMenu = () => { openKey.value = ''; };
 const handleClick = (key) => { closeMenu(); executeMenuAction(key); };
@@ -81,7 +84,7 @@ async function initWindow() {
   unlistenResize = await win.onResized(syncMaximized);
 }
 const winMax = async () => { await win?.toggleMaximize(); syncMaximized(); };
-const onDoubleClick = (event) => { if (!event.target.closest('button,.tb-menu-item')) winMax(); };
+const onDoubleClick = (event) => { if (!event.target.closest('button,.tb-menu-item,.monitor-dock,.transfer-dock-root')) winMax(); };
 const shortcuts = {};
 menus.forEach((menu) => menu.items.forEach((item) => { if (item.key && item.shortcut) shortcuts[item.shortcut.replace(/\s+/g, '').toLowerCase()] = item.key; }));
 function onKeydown(event) {
@@ -98,15 +101,25 @@ function onKeydown(event) {
 function onDocumentClick(event) {
   if (!event.target.closest('.tb-menu-item') && !event.target.closest('.tb-dropdown')) closeMenu();
 }
+function scheduleTitlebarWidth(nextWidth) {
+  pendingTitlebarWidth = Math.round(nextWidth);
+  if (titlebarResizeFrame) return;
+  titlebarResizeFrame = requestAnimationFrame(() => {
+    titlebarResizeFrame = null;
+    const nextWidth = pendingTitlebarWidth;
+    if (Math.round(width.value) !== nextWidth) width.value = nextWidth;
+  });
+}
 onMounted(() => {
   initWindow().catch((error) => console.warn('Initialize titlebar window bindings failed:', error));
-  resizeObserver = new ResizeObserver(([entry]) => { width.value = entry.contentRect.width; });
+  resizeObserver = new ResizeObserver(([entry]) => { scheduleTitlebarWidth(entry.contentRect.width); });
   if (titlebarRef.value) resizeObserver.observe(titlebarRef.value);
   document.addEventListener('keydown', onKeydown, true);
   document.addEventListener('click', onDocumentClick, true);
 });
 onUnmounted(() => {
   resizeObserver?.disconnect(); unlistenResize?.(); clearTimeout(syncTimer);
+  if (titlebarResizeFrame) cancelAnimationFrame(titlebarResizeFrame);
   document.removeEventListener('keydown', onKeydown, true);
   document.removeEventListener('click', onDocumentClick, true);
 });
@@ -122,7 +135,10 @@ onUnmounted(() => {
           @click.stop="openMenu(menu.key, $event)" @mouseenter="hoverMenu(menu.key, $event)">{{ menu.label }}</button>
       </DuskDock>
     </div>
-    <div class="titlebar-center"><SessionDock /></div>
+    <div class="titlebar-center">
+      <ToastContainer class="titlebar-toast" />
+      <SessionDock />
+    </div>
     <div class="titlebar-right">
       <MonitorDock v-if="visibility.monitor" />
       <TransferDock v-show="visibility.transfer" />
@@ -151,15 +167,16 @@ onUnmounted(() => {
 .titlebar-left, .titlebar-right { position: relative; z-index: 1; display: flex; align-items: center; min-width: 0; gap: 6px; }
 .titlebar-left { justify-content: flex-start; }
 .titlebar-right { justify-content: flex-end; }
-.titlebar-center { position: relative; z-index: 1; justify-self: center; pointer-events: none; min-width: 0; }
-.menu-dock { padding-left: 7px; }
+.titlebar-center { position: relative; z-index: 1; display: flex; align-items: center; justify-self: center; pointer-events: none; min-width: 0; gap: 8px; }
+.titlebar-toast { flex: 0 1 auto; }
+.menu-dock { padding-left: 8px; }
 .app-icon { width: 17px; height: 17px; margin-right: 4px; pointer-events: none; }
-.tb-menu-item, .tb-btn { height: 24px; border: 0; border-radius: 5px; color: var(--tb-text, var(--app-text)); background: transparent; cursor: default; }
+.tb-menu-item, .tb-btn { height: 24px; border: 0; border-radius: 999px; color: var(--tb-text, var(--app-text)); background: transparent; cursor: default; }
 .tb-menu-item { padding: 0 7px; font-size: 12px; }
 .tb-btn { display: inline-flex; width: 29px; align-items: center; justify-content: center; padding: 0; opacity: .78; }
 .tb-menu-item:hover, .tb-menu-item.open, .tb-btn:hover { background: var(--tb-hover-bg, color-mix(in srgb, var(--app-text) 8%, transparent)); opacity: 1; }
 .tb-btn.close:hover { color: #fff; background: var(--tb-close-hover, var(--color-danger)); }
-.window-dock { padding: 0 2px; }
+.window-dock { padding: 0 4px; }
 </style>
 
 <style>

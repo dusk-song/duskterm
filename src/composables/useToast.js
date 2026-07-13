@@ -2,7 +2,9 @@ import { ref } from 'vue';
 
 const toasts = ref([]);
 let _id = 0;
-const keyMap = {};
+const keyToId = new Map();
+const keyToTimer = new Map();
+const idToKey = new Map();
 
 const DEFAULT_DURATION = 2500;
 
@@ -28,24 +30,28 @@ function addToast(raw, type = 'info', duration) {
   if (duration !== undefined) opts.duration = duration;
 
   // Key-based: replace existing toast with same key
-  if (opts.key && keyMap[opts.key] != null) {
-    const existingId = keyMap[opts.key];
+  if (opts.key && keyToId.has(opts.key)) {
+    const existingId = keyToId.get(opts.key);
     const idx = toasts.value.findIndex(t => t.id === existingId);
     if (idx !== -1) {
       toasts.value.splice(idx, 1);
     }
-    clearTimeout(keyMap[opts.key + '_timer']);
+    clearTimeout(keyToTimer.get(opts.key));
+    keyToTimer.delete(opts.key);
+    keyToId.delete(opts.key);
+    idToKey.delete(existingId);
   }
 
   const id = ++_id;
   toasts.value.push({ id, message: opts.message, type: opts.type, duration: opts.duration, leaving: false });
   if (opts.key) {
-    keyMap[opts.key] = id;
+    keyToId.set(opts.key, id);
+    idToKey.set(id, opts.key);
   }
 
   if (opts.duration > 0) {
     const timer = setTimeout(() => removeToast(id), opts.duration);
-    if (opts.key) keyMap[opts.key + '_timer'] = timer;
+    if (opts.key) keyToTimer.set(opts.key, timer);
   }
   return id;
 }
@@ -53,13 +59,16 @@ function addToast(raw, type = 'info', duration) {
 function removeToast(id) {
   const idx = toasts.value.findIndex(t => t.id === id);
   if (idx === -1) return;
+  const key = idToKey.get(id);
+  if (key) {
+    clearTimeout(keyToTimer.get(key));
+    keyToTimer.delete(key);
+    keyToId.delete(key);
+    idToKey.delete(id);
+  }
   toasts.value[idx].leaving = true;
   setTimeout(() => {
     toasts.value = toasts.value.filter(t => t.id !== id);
-    // Clean up key map
-    for (const [k, v] of Object.entries(keyMap)) {
-      if (v === id) delete keyMap[k];
-    }
   }, 200);
 }
 

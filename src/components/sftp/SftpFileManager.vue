@@ -73,6 +73,8 @@ const colPx = reactive({
 // Container width tracking for auto-fit
 const containerWidth = ref(800);
 let _colResizeObserver = null;
+let _colResizeFrame = null;
+let _pendingContainerWidth = 800;
 
 // Recompute column widths when container resizes
 function recalcColumnWidths() {
@@ -193,9 +195,24 @@ const initializingSessionIds = new Set();
 function isCurrentSessionSync(sessionId, generation) {
   return props.sessionId === sessionId && sessionSyncGeneration === generation;
 }
+
+function scheduleColumnWidthRecalc(width) {
+  const nextWidth = Math.round(Number(width) || 0);
+  if (nextWidth <= 0) return;
+  _pendingContainerWidth = nextWidth;
+  if (_colResizeFrame) return;
+  _colResizeFrame = requestAnimationFrame(() => {
+    _colResizeFrame = null;
+    if (containerWidth.value !== _pendingContainerWidth) {
+      containerWidth.value = _pendingContainerWidth;
+      recalcColumnWidths();
+    }
+  });
+}
 let unlistenSftpProgress = null;
 const TELEMETRY_WINDOW_MS = 1500;
 const TELEMETRY_MIN_SAMPLE_MS = 150;
+let transferStatusFrame = null;
 
 const confirmOverwrite = (remotePath) => new Promise((resolve) => {
   confirm({
@@ -240,6 +257,22 @@ const emitTransferStatus = () => {
   );
 };
 
+const scheduleTransferStatus = () => {
+  if (transferStatusFrame) return;
+  transferStatusFrame = requestAnimationFrame(() => {
+    transferStatusFrame = null;
+    emitTransferStatus();
+  });
+};
+
+const flushTransferStatus = () => {
+  if (transferStatusFrame) {
+    cancelAnimationFrame(transferStatusFrame);
+    transferStatusFrame = null;
+  }
+  emitTransferStatus();
+};
+
 const findTransferTaskById = (id) => transferTasks.value.find((task) => task.id === id);
 
 const handleCancelTransfer = async (taskId) => {
@@ -254,7 +287,7 @@ const handleCancelTransfer = async (taskId) => {
 const handleRemoveTransfer = (taskId) => {
   const idx = transferTasks.value.findIndex((t) => t.id === taskId);
   if (idx >= 0) transferTasks.value.splice(idx, 1);
-  emitTransferStatus();
+  flushTransferStatus();
 };
 
 const activeTransferCount = computed(() =>
@@ -1743,8 +1776,11 @@ watch(activeSessionStatus, async (status, prevStatus) => {
 watch([() => pager.items.value.length, () => connected.value], () => nextTick(syncBottomScrollbar));
 
 let resizeHandler = null;
+let resizeFrame = null;
+let scheduleResizeHandler = null;
 let activeSftpRefreshHandler = null;
 let sftpLayoutRefreshHandler = null;
+let clearTransferHandler = null;
 onMounted(() => {
   listenEvent('sftp-progress', (payload) => {
     if (!payload || !payload.direction) return;
@@ -1778,6 +1814,13 @@ onMounted(() => {
     const height = viewportRef.value?.clientHeight || 400;
     listVirtual.setViewportHeight(height);
   };
+  scheduleResizeHandler = () => {
+    if (resizeFrame) return;
+    resizeFrame = requestAnimationFrame(() => {
+      resizeFrame = null;
+      resizeHandler?.();
+    });
+  };
   resizeHandler();
   activeSftpRefreshHandler = (event) => {
     const targetSessionId = event?.detail?.sessionId;
@@ -1789,20 +1832,21 @@ onMounted(() => {
     syncBottomScrollbar();
     recalcColumnWidths();
   });
-  window.addEventListener('resize', resizeHandler);
+  window.addEventListener('resize', scheduleResizeHandler);
   window.addEventListener('app:sftp-refresh-active', activeSftpRefreshHandler);
   window.addEventListener('app:sftp-layout-refresh', sftpLayoutRefreshHandler);
   window.addEventListener('keydown', onEditorKeydown);
-  window.addEventListener('sftp-clear-transfer', (e) => {
+  clearTransferHandler = (e) => {
     const taskId = e?.detail?.id;
     if (taskId) handleRemoveTransfer(taskId);
-  });
+  };
+  window.addEventListener('sftp-clear-transfer', clearTransferHandler);
 
   // Track container width for auto-fit column widths
   if (viewportRef.value) {
     _colResizeObserver = new ResizeObserver((entries) => {
       const w = entries[0]?.contentRect?.width;
-      if (w && w > 0) { containerWidth.value = w; recalcColumnWidths(); }
+      scheduleColumnWidthRecalc(w);
     });
     _colResizeObserver.observe(viewportRef.value);
     recalcColumnWidths();
@@ -1810,7 +1854,7 @@ onMounted(() => {
 });
 
 watch(transferTasks, () => {
-  emitTransferStatus();
+  scheduleTransferStatus();
 }, { deep: true });
 
 onUnmounted(() => {
@@ -1821,7 +1865,14 @@ onUnmounted(() => {
     unlistenSftpProgress();
     unlistenSftpProgress = null;
   }
-  if (resizeHandler) window.removeEventListener('resize', resizeHandler);
+  if (scheduleResizeHandler) {
+    window.removeEventListener('resize', scheduleResizeHandler);
+    scheduleResizeHandler = null;
+  }
+  if (resizeFrame) {
+    cancelAnimationFrame(resizeFrame);
+    resizeFrame = null;
+  }
   if (activeSftpRefreshHandler) {
     window.removeEventListener('app:sftp-refresh-active', activeSftpRefreshHandler);
     activeSftpRefreshHandler = null;
@@ -1831,6 +1882,18 @@ onUnmounted(() => {
     sftpLayoutRefreshHandler = null;
   }
   window.removeEventListener('keydown', onEditorKeydown);
+  if (clearTransferHandler) {
+    window.removeEventListener('sftp-clear-transfer', clearTransferHandler);
+    clearTransferHandler = null;
+  }
+  if (transferStatusFrame) {
+    cancelAnimationFrame(transferStatusFrame);
+    transferStatusFrame = null;
+  }
+  if (_colResizeFrame) {
+    cancelAnimationFrame(_colResizeFrame);
+    _colResizeFrame = null;
+  }
   if (_colResizeObserver) { _colResizeObserver.disconnect(); _colResizeObserver = null; }
   disconnectSftpSession(sessionId);
   window.dispatchEvent(new CustomEvent('sftp-transfer-status', {
@@ -2070,7 +2133,7 @@ onUnmounted(() => {
   height: 100%;
   min-height: 0;
   min-width: 260px;
-  background: transparent;
+  background: var(--terminal-surface-bg, var(--app-bg-dialog));
 }
 
 .fm-address,
@@ -2211,7 +2274,7 @@ onUnmounted(() => {
 .fm-table-header {
   overflow: hidden;
   border-bottom: 1px solid color-mix(in srgb, var(--app-border-shadow) 62%, transparent);
-  background: transparent;
+  background: var(--terminal-surface-bg, var(--app-bg-dialog));
 }
 
 .fm-grid,
@@ -2266,7 +2329,7 @@ onUnmounted(() => {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  background: transparent;
+  background: var(--terminal-surface-bg, var(--app-bg-dialog));
   scrollbar-width: thin;
   scrollbar-color: var(--app-btn-border) transparent;
 }

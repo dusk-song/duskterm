@@ -42,17 +42,90 @@ const toastToneMap = {
 </script>
 
 <template>
-  <Teleport to="body">
-    <div class="fixed top-7 left-1/2 -translate-x-1/2 z-[var(--z-alert)] flex flex-col items-center gap-2 pointer-events-none">
-      <div v-for="t in toasts" :key="t.id" :class="['pointer-events-auto relative flex min-w-64 max-w-[min(420px,calc(100vw-2rem))] items-center gap-2.5 overflow-hidden rounded-[10px] border border-[var(--app-toast-border)] bg-[var(--app-toast-bg)] px-3.5 py-2.5 text-[var(--app-font-body-size)] text-[var(--app-toast-text)] shadow-[var(--app-toast-shadow)] transition-[opacity,transform,box-shadow] duration-[var(--app-motion-panel)] ease-[var(--app-motion-ease)]',
-        t.leaving ? 'opacity-0 translate-y-2' : 'opacity-100 translate-y-0']">
-        <div data-slot="toast-rail" :class="['absolute inset-y-0 left-0 w-1', (toastToneMap[t.type] || toastToneMap.info).rail]" />
-        <div :class="['grid size-6 shrink-0 place-items-center rounded-[8px] border', (toastToneMap[t.type] || toastToneMap.info).icon]">
-          <component :is="iconMap[t.type]" :size="15" :class="{ 'animate-spin': t.type === 'loading' }" />
-        </div>
-        <span class="min-w-0 flex-1 truncate pr-1">{{ t.message }}</span>
-        <div :class="['absolute bottom-0 left-0 h-0.5 w-2/3 rounded-r-full opacity-70', (toastToneMap[t.type] || toastToneMap.info).progress]" />
+  <div v-if="toasts.length" class="toast-viewport">
+    <div v-for="t in toasts" :key="t.id" :class="['toast-card', t.leaving ? 'toast-card--leaving' : '']">
+      <div data-slot="toast-rail" :class="['absolute inset-y-0 left-0 w-1', (toastToneMap[t.type] || toastToneMap.info).rail]" />
+      <div :class="['toast-icon', (toastToneMap[t.type] || toastToneMap.info).icon]">
+        <component :is="iconMap[t.type]" :size="15" :class="{ 'animate-spin': t.type === 'loading' }" />
       </div>
+      <span class="toast-message">{{ t.message }}</span>
+      <div :class="['absolute bottom-0 left-0 h-0.5 w-2/3 rounded-r-full opacity-70', (toastToneMap[t.type] || toastToneMap.info).progress]" />
     </div>
-  </Teleport>
+  </div>
 </template>
+
+<style scoped>
+.toast-viewport {
+  position: relative;
+  z-index: var(--z-alert);
+  display: flex;
+  max-width: min(340px, 28vw);
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  pointer-events: none;
+  overflow: visible;
+}
+
+.toast-card {
+  pointer-events: none;
+  position: relative;
+  display: flex;
+  min-width: 180px;
+  max-width: min(340px, 28vw);
+  height: 30px;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+  border: 1px solid var(--app-toast-border);
+  border-radius: 999px;
+  color: var(--app-toast-text);
+  background: color-mix(in srgb, var(--app-toast-bg) 90%, transparent);
+  box-shadow: var(--app-toast-shadow);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  padding: 0 12px 0 9px;
+  font-size: var(--app-font-body-size);
+  transform: translateY(0);
+  opacity: 1;
+  transition:
+    opacity var(--app-motion-panel) var(--app-motion-ease),
+    transform var(--app-motion-panel) var(--app-motion-ease),
+    box-shadow var(--app-motion-panel) var(--app-motion-ease);
+}
+
+.toast-card--leaving {
+  transform: translateY(-4px);
+  opacity: 0;
+}
+
+.toast-icon {
+  display: grid;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 999px;
+  border-width: 1px;
+}
+
+.toast-message {
+  min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+  padding-right: 2px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 980px) {
+  .toast-viewport {
+    max-width: 220px;
+  }
+
+  .toast-card {
+    min-width: 160px;
+    max-width: 220px;
+  }
+}
+</style>
