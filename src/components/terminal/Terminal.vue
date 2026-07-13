@@ -492,7 +492,9 @@ const applyTerminalTheme = () => {
   if (!term) return;
   const themeKey = terminalThemeSettings.value.theme || 'default';
   const baseTheme = getTerminalTheme(themeKey, isDark.value);
-  const themeBackground = resolveCssColor('var(--app-bg-dialog)', baseTheme.background || '#1e1e1e');
+  const hasFloatingSurfaces = !!terminalWrapperRef.value?.closest('.has-floating-surfaces');
+  const opaqueThemeBackground = resolveCssColor('var(--app-bg-dialog)', baseTheme.background || '#1e1e1e');
+  const themeBackground = hasFloatingSurfaces ? 'rgba(0, 0, 0, 0)' : opaqueThemeBackground;
   const selectionBackground = resolveCssColor(
     baseTheme.selectionBackground || 'var(--app-selection-bg)',
     'rgba(192,132,47,0.28)'
@@ -500,7 +502,7 @@ const applyTerminalTheme = () => {
   const theme = {
     ...baseTheme,
     background: themeBackground,
-    cursorAccent: baseTheme.cursorAccent || themeBackground,
+    cursorAccent: baseTheme.cursorAccent || opaqueThemeBackground,
     selectionBackground,
     selectionInactiveBackground: baseTheme.selectionInactiveBackground || selectionBackground
   };
@@ -509,6 +511,12 @@ const applyTerminalTheme = () => {
   const wrapper = terminalWrapperRef.value;
   if (wrapper) {
     wrapper.style.setProperty('--terminal-theme-bg', themeBackground);
+    wrapper.style.setProperty(
+      '--terminal-surface-bg',
+      hasFloatingSurfaces
+        ? 'color-mix(in srgb, var(--app-bg-dialog) 52%, transparent)'
+        : opaqueThemeBackground
+    );
     wrapper.style.setProperty('--terminal-theme-fg', theme.foreground || '#d4d4d4');
   }
 
@@ -523,6 +531,8 @@ const handleTerminalThemeChanged = () => {
   // Sync line-number state from global pref
   onTerminalThemeChanged();
 };
+
+const handleMainUiChanged = () => requestAnimationFrame(applyTerminalTheme);
 
 watch(isDark, () => {
   applyTerminalTheme();
@@ -1832,7 +1842,7 @@ onMounted(async () => {
       cols: 120,
       rows: 40,
       // iGPU optimizations: skip transparency blending, skip bold-bright conversion
-      allowTransparency: false,
+      allowTransparency: true,
       drawBoldTextInBrightColors: false
     });
 
@@ -2201,6 +2211,7 @@ onMounted(async () => {
   quickCommandHandler = handleKnowledgeCommandEvent;
   window.addEventListener('command-knowledge-insert', quickCommandHandler);
   window.addEventListener('terminal-theme-changed', handleTerminalThemeChanged);
+  window.addEventListener('main-ui-settings-changed', handleMainUiChanged);
   window.addEventListener('terminal-layout-resize', handleLayoutResize);
   window.addEventListener('terminal-layout-dragging', handleLayoutDragging);
   window.addEventListener('terminal:toggle-line-numbers', handleExternalLineNumberToggle);
@@ -2314,6 +2325,7 @@ onUnmounted(() => {
   terminalCache.delete(props.sessionId);
   window.removeEventListener('keydown', handleKeydown);
   window.removeEventListener('terminal-theme-changed', handleTerminalThemeChanged);
+  window.removeEventListener('main-ui-settings-changed', handleMainUiChanged);
   window.removeEventListener('terminal-layout-resize', handleLayoutResize);
   window.removeEventListener('terminal-layout-dragging', handleLayoutDragging);
   window.removeEventListener('terminal:toggle-line-numbers', handleExternalLineNumberToggle);
@@ -2506,9 +2518,9 @@ onUnmounted(() => {
   flex-direction: column;
   align-items: stretch;
   box-sizing: border-box;
-  background-color: var(--terminal-theme-bg, var(--app-bg-dialog));
+  background-color: var(--terminal-surface-bg, var(--app-bg-dialog));
   position: relative;
-  border-radius: var(--niri-radius-md, 8px);
+  border-radius: 0;
   --terminal-cursor-color: var(--terminal-theme-fg, #d4d4d4);
 }
 
@@ -2517,12 +2529,13 @@ onUnmounted(() => {
   min-height: 0;
   display: flex;
   align-items: stretch;
+  background: transparent;
 }
 
 .line-number-gutter {
   flex: 0 0 auto;
   min-width: 3ch;
-  background: var(--terminal-theme-bg, var(--app-bg-dialog));
+  background: transparent;
   color: var(--app-text-muted);
   user-select: none;
   pointer-events: none;
@@ -2555,8 +2568,8 @@ onUnmounted(() => {
   min-height: 0;
   overflow: hidden;
   display: flex;
-  background: var(--terminal-theme-bg, var(--app-bg-dialog));
-  border-radius: var(--niri-radius-md, 8px);
+  background: transparent;
+  border-radius: 0;
 }
 
 .terminal-container :deep(.xterm) {
@@ -2569,6 +2582,7 @@ onUnmounted(() => {
   font-kerning: none;
   letter-spacing: 0 !important;
   line-height: normal;
+  background: transparent !important;
 }
 
 .terminal-container :deep(.xterm),
@@ -2594,6 +2608,13 @@ onUnmounted(() => {
 
 .terminal-container :deep(.xterm-viewport) {
   background-color: transparent !important;
+}
+
+.terminal-container :deep(.xterm-screen),
+.terminal-container :deep(.xterm-screen canvas),
+.terminal-container :deep(.xterm-helpers),
+.terminal-container :deep(.xterm-rows) {
+  background: transparent !important;
 }
 
 /* removed local scrollbar rule to allow global scrollbar styling */

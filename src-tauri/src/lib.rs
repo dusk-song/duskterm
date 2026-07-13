@@ -3,6 +3,7 @@ use tauri::Manager;
 use tauri::PhysicalSize;
 
 mod fileio;
+mod background;
 mod remote_monitor;
 mod session;
 mod sftp;
@@ -37,6 +38,9 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             exit_app,
+            background::import_background_image,
+            background::ensure_background_image,
+            background::delete_background_image,
             ssh::connect_ssh,
             ssh::test_ssh_connection,
             ssh::list_serial_ports,

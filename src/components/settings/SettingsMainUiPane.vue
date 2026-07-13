@@ -10,8 +10,12 @@ import Slider from '@/components/ui/slider/Slider.vue';
 import Switch from '@/components/ui/switch/Switch.vue';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { useTheme } from '@/composables/useTheme';
+import { toast } from '@/composables/useToast';
+import { invokeCommand } from '@/utils/ipc';
+import { normalizeBackgroundSettings, resolveBackgroundUrl } from '@/utils/background';
+import { open } from '@tauri-apps/plugin-dialog';
 import { GripVertical, HelpCircle, Plus, RefreshCw, Trash2, Upload } from '@lucide/vue';
-import { nextTick, onBeforeUnmount, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 
 const { isDark, toggleTheme, isFollowingSystem, followSystem, setTheme } = useTheme();
 
@@ -58,7 +62,7 @@ const props = defineProps({
   }
 });
 
-const emit = defineEmits(['update:selectedDesktopPetNodeId']);
+const emit = defineEmits(['update:selectedDesktopPetNodeId', 'background-imported', 'background-preview-change', 'background-importing']);
 
 const editingNodeId = ref('');
 const editingNodeName = ref('');
@@ -66,6 +70,68 @@ const editingInputRef = ref(null);
 const draggingNodeId = ref('');
 const dragOverNodeId = ref('');
 const isPointerDragging = ref(false);
+const isImportingBackground = ref(false);
+const backgroundPreview = ref('');
+const displayTarget = () => {
+  const scale = window.devicePixelRatio || 1;
+  return { targetWidth: Math.round(window.screen.width * scale), targetHeight: Math.round(window.screen.height * scale) };
+};
+const refreshBackgroundPreview = async (resourceId) => {
+  if (!resourceId) { backgroundPreview.value = ''; return; }
+  try {
+    const asset = await invokeCommand('ensure_background_image', { resourceId, ...displayTarget() });
+    backgroundPreview.value = resolveBackgroundUrl(asset.optimized_path);
+  } catch { backgroundPreview.value = ''; }
+};
+
+const ensureBackgroundSettings = () => {
+  props.mainUiSettings.background = normalizeBackgroundSettings(props.mainUiSettings.background || {});
+  return props.mainUiSettings.background;
+};
+
+const notifyBackgroundPreviewChange = () => {
+  props.mainUiSettings.background = normalizeBackgroundSettings(props.mainUiSettings.background || {});
+  emit('background-preview-change');
+};
+
+const selectBackgroundImage = async () => {
+  const selected = await open({ multiple: false, filters: [{ name: '静态图片', extensions: ['png', 'jpg', 'jpeg', 'webp'] }] });
+  if (!selected) return;
+  const sourcePath = typeof selected === 'string' ? selected : selected.path;
+  isImportingBackground.value = true;
+  emit('background-importing', true);
+  try {
+    const asset = await invokeCommand('import_background_image', {
+      sourcePath,
+      ...displayTarget(),
+    });
+    props.mainUiSettings.background = normalizeBackgroundSettings({
+      ...props.mainUiSettings.background,
+      enabled: true,
+      resourceId: asset.resource_id,
+      fileName: asset.file_name,
+    });
+    backgroundPreview.value = resolveBackgroundUrl(asset.optimized_path);
+    emit('background-imported', asset.resource_id);
+    notifyBackgroundPreviewChange();
+  } catch (error) { toast.error(`背景图片导入失败：${error}`); }
+  finally { isImportingBackground.value = false; emit('background-importing', false); }
+};
+
+const removeBackgroundImage = () => {
+  props.mainUiSettings.background = normalizeBackgroundSettings();
+  backgroundPreview.value = '';
+  notifyBackgroundPreviewChange();
+};
+
+ensureBackgroundSettings();
+watch(() => props.mainUiSettings.background?.resourceId, refreshBackgroundPreview, { immediate: true });
+watch(() => [
+  props.mainUiSettings.background?.blur,
+  props.mainUiSettings.background?.opacity,
+  props.mainUiSettings.background?.darkOverlay,
+  props.mainUiSettings.background?.lightOverlay
+], notifyBackgroundPreviewChange);
 
 const getNodeDisplayName = (node, index) => node?.name?.trim() || `节点 ${index + 1}`;
 
@@ -163,6 +229,21 @@ onBeforeUnmount(() => {
         <Switch :model-value="isFollowingSystem"
           @update:model-value="(v) => { if (v) followSystem(); else setTheme(isDark ? 'dark' : 'light'); }" />
       </div>
+    </div>
+
+    <div class="settings-section idea-panel background-settings">
+      <div class="settings-section-title-wrap"><div class="settings-section-title">全局背景图片</div></div>
+      <div class="background-preview" :class="{ empty: !backgroundPreview }"
+        :style="backgroundPreview ? { backgroundImage: `url(${backgroundPreview})` } : null">
+        <span v-if="!backgroundPreview">未选择背景图片</span>
+      </div>
+      <div class="setting-row"><div class="setting-label">启用背景</div><Switch v-model="mainUiSettings.background.enabled" :disabled="!backgroundPreview" /></div>
+      <div class="setting-row background-actions"><div class="setting-label">图片文件</div><span class="background-file">{{ mainUiSettings.background.fileName || '无' }}</span><Button size="sm" variant="outline" :disabled="isImportingBackground" @click="selectBackgroundImage">{{ isImportingBackground ? '处理中…' : '选择图片' }}</Button><Button size="sm" variant="outline" :disabled="!backgroundPreview" @click="removeBackgroundImage">移除</Button></div>
+      <div class="setting-row"><div class="setting-label">铺放方式</div><Select v-model="mainUiSettings.background.fit"><SelectTrigger size="sm" class="background-select"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="cover">填充</SelectItem><SelectItem value="contain">适应</SelectItem><SelectItem value="stretch">拉伸</SelectItem><SelectItem value="center">居中</SelectItem><SelectItem value="tile">平铺</SelectItem></SelectContent></Select></div>
+      <div class="setting-row"><div class="setting-label">模糊度</div><Slider v-model="mainUiSettings.background.blur" :min="0" :max="40" :step="1" class="line-slider" /><span class="setting-value">{{ mainUiSettings.background.blur }}px</span></div>
+      <div class="setting-row"><div class="setting-label">图片透明度</div><Slider v-model="mainUiSettings.background.opacity" :min="0" :max="1" :step="0.05" class="line-slider" /><span class="setting-value">{{ Math.round(mainUiSettings.background.opacity * 100) }}%</span></div>
+      <div class="setting-row"><div class="setting-label">暗色遮罩</div><Slider v-model="mainUiSettings.background.darkOverlay" :min="0" :max="0.9" :step="0.05" class="line-slider" /><span class="setting-value">{{ Math.round(mainUiSettings.background.darkOverlay * 100) }}%</span></div>
+      <div class="setting-row"><div class="setting-label">亮色遮罩</div><Slider v-model="mainUiSettings.background.lightOverlay" :min="0" :max="0.9" :step="0.05" class="line-slider" /><span class="setting-value">{{ Math.round(mainUiSettings.background.lightOverlay * 100) }}%</span></div>
     </div>
 
     <div class="settings-section idea-panel">
@@ -405,6 +486,12 @@ onBeforeUnmount(() => {
 
 <style scoped>
 @import './settingsPaneShared.css';
+
+.background-preview { height: 120px; margin: 8px 0 12px; border: 1px solid var(--app-border-shadow); border-radius: 8px; background-position: center; background-size: cover; }
+.background-preview.empty { display: flex; align-items: center; justify-content: center; color: var(--app-text-muted); background: var(--app-input-bg); }
+.background-actions { gap: 8px; }
+.background-file { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--app-text-muted); font-size: 12px; }
+.background-select { width: 140px; }
 
 
 .pet-asset-layout {

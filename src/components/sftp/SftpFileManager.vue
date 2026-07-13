@@ -2070,13 +2070,13 @@ onUnmounted(() => {
   height: 100%;
   min-height: 0;
   min-width: 260px;
-  background: var(--app-bg-dialog);
+  background: transparent;
 }
 
 .fm-address,
 .fm-toolbar {
   flex-shrink: 0;
-  padding: 4px 8px;
+  padding: 6px 16px 8px;
 }
 
 .fm-address-row {
@@ -2084,20 +2084,24 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   /* keep actions fixed to right */
-  border-bottom: 1px solid var(--app-border-shadow);
+  background: transparent;
+  border-bottom: 1px solid color-mix(in srgb, var(--app-border-shadow) 64%, transparent);
 }
 
 .fm-address-row :deep(.ant-input),
+.fm-address-row :deep(input),
 .fm-address-input {
   /* allow the input to grow and match session-list top behavior */
   flex: 1 1 auto;
   width: auto;
   min-width: 140px;
   max-width: none;
-  background: transparent;
-  box-shadow: none !important;
-  border: none !important;
-  padding: 4px 8px;
+  height: 30px;
+  border: 1px solid color-mix(in srgb, var(--app-border-shadow) 82%, transparent) !important;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--app-input-bg) 72%, transparent) !important;
+  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--app-text) 4%, transparent) !important;
+  padding: 4px 10px;
   color: var(--app-text);
 }
 
@@ -2113,14 +2117,25 @@ onUnmounted(() => {
   gap: 4px;
 }
 
+.fm-actions :deep(.icon-button) {
+  --icon-btn-size: 28px;
+  --icon-btn-color: color-mix(in srgb, var(--app-text) 70%, transparent);
+  --icon-btn-hover-color: var(--app-text);
+  --icon-btn-hover-bg: color-mix(in srgb, var(--app-text) 8%, transparent);
+  --icon-btn-active-bg: color-mix(in srgb, var(--color-primary) 16%, transparent);
+  --icon-btn-active-color: var(--app-text);
+  border-radius: 7px;
+  box-shadow: none;
+}
+
 .fm-actions :deep(.ant-btn) {
   width: 24px;
   min-width: 24px;
   height: 24px;
   padding: 0;
-  color: var(--app-text);
-  border: 1px solid var(--app-text);
-  border-radius: 2px;
+  color: color-mix(in srgb, var(--app-text) 82%, transparent);
+  border: 1px solid transparent;
+  border-radius: 6px;
   cursor: pointer;
   background: transparent !important;
   box-shadow: none !important;
@@ -2130,7 +2145,7 @@ onUnmounted(() => {
 .fm-actions :deep(.ant-btn-text) {
   background: transparent !important;
   box-shadow: none !important;
-  border: 1px solid var(--app-border-shadow) !important;
+  border: 1px solid transparent !important;
 }
 
 .fm-actions :deep(.ant-btn::before) {
@@ -2141,8 +2156,8 @@ onUnmounted(() => {
 .fm-actions :deep(.ant-btn:focus),
 .fm-actions :deep(.ant-btn:active) {
   color: var(--app-text) !important;
-  border-color: var(--app-text) !important;
-  background: transparent !important;
+  border-color: color-mix(in srgb, var(--app-text) 18%, transparent) !important;
+  background: color-mix(in srgb, var(--app-text) 8%, transparent) !important;
   box-shadow: none !important;
 }
 
@@ -2163,16 +2178,27 @@ onUnmounted(() => {
 .fm-content {
   flex: 1;
   min-height: 0;
-  margin: 0 8px;
+  margin: 0 16px 12px;
   display: flex;
+  background: transparent;
 }
 
 .fm-state {
   margin: auto;
+  min-width: 260px;
+  min-height: 92px;
+  justify-content: center;
   display: flex;
   flex-direction: column;
   gap: 8px;
   align-items: center;
+  border: 1px solid color-mix(in srgb, var(--app-border-light) 62%, transparent);
+  border-radius: var(--niri-radius-lg, 14px);
+  background: color-mix(in srgb, var(--app-bg-dialog) 30%, transparent);
+  color: color-mix(in srgb, var(--app-text) 88%, transparent);
+  font-weight: 650;
+  backdrop-filter: blur(8px) saturate(110%);
+  -webkit-backdrop-filter: blur(8px) saturate(110%);
 }
 
 .fm-table {
@@ -2184,8 +2210,8 @@ onUnmounted(() => {
 
 .fm-table-header {
   overflow: hidden;
-  border-bottom: 1px solid var(--app-border-shadow);
-  background: var(--app-bg-dialog);
+  border-bottom: 1px solid color-mix(in srgb, var(--app-border-shadow) 62%, transparent);
+  background: transparent;
 }
 
 .fm-grid,
@@ -2240,9 +2266,9 @@ onUnmounted(() => {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  background: var(--app-bg-dialog);
+  background: transparent;
   scrollbar-width: thin;
-  scrollbar-color: var(--app-btn-border) var(--app-bg-dialog);
+  scrollbar-color: var(--app-btn-border) transparent;
 }
 
 .fm-nav-loading-mask {
@@ -2252,7 +2278,8 @@ onUnmounted(() => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(0, 0, 0, 0.18);
+  background: color-mix(in srgb, var(--app-bg-dialog) 34%, transparent);
+  backdrop-filter: blur(4px);
   pointer-events: all;
 }
 
@@ -2278,7 +2305,7 @@ onUnmounted(() => {
 }
 
 .fm-row:hover {
-  background: var(--app-btn-hover);
+  background: color-mix(in srgb, var(--app-text) 7%, transparent);
   color: var(--app-text);
 }
 
@@ -2377,7 +2404,7 @@ onUnmounted(() => {
   right: 0;
   text-align: center;
   padding: 6px;
-  background: var(--app-bg-dialog);
+  background: color-mix(in srgb, var(--app-bg-dialog) 42%, transparent);
   color: var(--app-text-muted);
   font-size: 12px;
 }
@@ -2387,10 +2414,10 @@ onUnmounted(() => {
   margin: 0 8px 8px;
   overflow-x: auto;
   overflow-y: hidden;
-  background: var(--app-bg-dialog);
+  background: transparent;
   flex-shrink: 0;
   scrollbar-width: thin;
-  scrollbar-color: var(--app-btn-border) var(--app-bg-dialog);
+  scrollbar-color: var(--app-btn-border) transparent;
 }
 
 .fm-bottom-scrollbar-inner {

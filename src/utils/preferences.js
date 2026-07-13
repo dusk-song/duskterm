@@ -1,4 +1,5 @@
 import { defaultDesktopPetSettings } from './desktopPet';
+import { defaultBackgroundSettings } from './background';
 
 const PREFERENCE_DEFINITIONS = {
   appTheme: {
@@ -25,18 +26,6 @@ const PREFERENCE_DEFINITIONS = {
       syncMergedNextPage: 'Ctrl+Shift+PageDown',
       toggleLineNumbers: 'Ctrl+Alt+L',
       toggleFind: 'Ctrl+Shift+F'
-    }
-  },
-  lightbar: {
-    storageKey: 'lightbar-settings-v1',
-    defaults: {
-      colorStart: '#8b857c',
-      colorEnd: '#c0842f',
-      speed: 1.2,
-      enableTrail: false,
-      enablePeakHold: false,
-      peakHoldMs: 600,
-      trailDecay: 0.7
     }
   },
   monitor: {
@@ -66,6 +55,7 @@ const PREFERENCE_DEFINITIONS = {
     storageKey: 'main-ui-settings-v1',
     defaults: {
       showSnakeGame: false,
+      background: defaultBackgroundSettings,
       desktopPet: defaultDesktopPetSettings
     }
   }

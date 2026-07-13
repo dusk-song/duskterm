@@ -5,6 +5,7 @@ import {
   savePreference
 } from './preferences';
 import { normalizeDesktopPetSettings } from './desktopPet';
+import { normalizeBackgroundSettings } from './background';
 
 const MAIN_UI_SETTINGS_KEY = getPreferenceStorageKey('mainUi');
 const defaultMainUiSettings = getPreferenceDefaults('mainUi');
@@ -15,6 +16,7 @@ function normalizeMainUiSettings(settings = {}) {
     ...(settings || {})
   };
   next.desktopPet = normalizeDesktopPetSettings(next.desktopPet || defaultMainUiSettings.desktopPet);
+  next.background = normalizeBackgroundSettings(next.background || defaultMainUiSettings.background);
   return next;
 }
 

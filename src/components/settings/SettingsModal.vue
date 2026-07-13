@@ -26,8 +26,7 @@ import {
   resolveDesktopPetAssetUrl
 } from '@/utils/desktopPet';
 import { invokeCommand } from '@/utils/ipc';
-import { loadLightbarSettings, saveLightbarSettings } from '@/utils/lightbar';
-import { loadMainUiSettings, saveMainUiSettings } from '@/utils/mainUi';
+import { loadMainUiSettings, normalizeMainUiSettings, saveMainUiSettings } from '@/utils/mainUi';
 import { loadMonitorSettings, saveMonitorSettings } from '@/utils/monitor';
 import { getPreferenceDefaults, loadPreference, savePreference } from '@/utils/preferences';
 import { loadTerminalThemeSettings, saveTerminalThemeSettings } from '@/utils/terminalTheme';
@@ -60,11 +59,31 @@ const settingsTabs = [
   { key: 'terminal', label: '终端', icon: Terminal },
   { key: 'keybindings', label: '快捷键', icon: Keyboard },
 ];
-const lightbarSettings = ref(loadLightbarSettings());
 const monitorSettings = ref(loadMonitorSettings());
 const terminalThemeSettings = ref(loadTerminalThemeSettings());
 const mainUiSettings = ref(loadMainUiSettings());
+let persistedBackgroundId = '';
+const temporaryBackgroundIds = new Set();
+const backgroundImporting = ref(false);
+
+const deleteBackgroundResource = async (resourceId) => {
+  if (!resourceId) return;
+  try { await invokeCommand('delete_background_image', { resourceId }); } catch { /* best-effort cleanup */ }
+};
+
+const handleBackgroundImported = (resourceId) => {
+  if (resourceId) temporaryBackgroundIds.add(resourceId);
+};
 const selectedDesktopPetNodeId = ref('');
+
+const dispatchMainUiSettingsPreview = () => {
+  window.dispatchEvent(new CustomEvent('main-ui-settings-changed', {
+    detail: {
+      preview: true,
+      settings: normalizeMainUiSettings(mainUiSettings.value)
+    }
+  }));
+};
 
 const defaultKeybindings = getPreferenceDefaults('keybindings');
 
@@ -149,10 +168,11 @@ watch(() => props.visible, (val) => {
     } catch (e) {
       keybindings.value = { ...defaultKeybindings };
     }
-    lightbarSettings.value = loadLightbarSettings();
     monitorSettings.value = loadMonitorSettings();
     terminalThemeSettings.value = loadTerminalThemeSettings();
     mainUiSettings.value = loadMainUiSettings();
+    persistedBackgroundId = mainUiSettings.value.background?.resourceId || '';
+    temporaryBackgroundIds.clear();
     ensureSelectedDesktopPetNode();
   } else {
     bindingActionKey.value = '';
@@ -160,6 +180,7 @@ watch(() => props.visible, (val) => {
 });
 
 const handleSave = async () => {
+  if (backgroundImporting.value) return;
   if (keybindingConflictEntries.value.length > 0) {
     const conflictText = keybindingConflictEntries.value
       .map((entry) => `${entry.labels.join('、')}（${entry.combo}）`)
@@ -176,12 +197,6 @@ const handleSave = async () => {
     toast.error('快捷键保存失败');
   }
   try {
-    saveLightbarSettings(lightbarSettings.value);
-    window.dispatchEvent(new CustomEvent('lightbar-settings-changed'));
-  } catch (e) {
-    toast.error('灯条设置保存失败');
-  }
-  try {
     saveMonitorSettings(monitorSettings.value);
     window.dispatchEvent(new CustomEvent('monitor-settings-changed'));
   } catch (e) {
@@ -192,17 +207,33 @@ const handleSave = async () => {
   } catch (e) {
     toast.error('终端样式保存失败');
   }
+  let mainUiSaved = false;
   try {
     saveMainUiSettings(mainUiSettings.value);
     window.dispatchEvent(new CustomEvent('main-ui-settings-changed'));
+    mainUiSaved = true;
   } catch (e) {
     toast.error('主界面设置保存失败');
   }
+  if (!mainUiSaved) return;
+  const currentBackgroundId = mainUiSettings.value.background?.resourceId || '';
+  await Promise.all([...temporaryBackgroundIds]
+    .filter((resourceId) => resourceId !== currentBackgroundId)
+    .map(deleteBackgroundResource));
+  if (persistedBackgroundId && persistedBackgroundId !== currentBackgroundId) {
+    await deleteBackgroundResource(persistedBackgroundId);
+  }
+  temporaryBackgroundIds.clear();
+  persistedBackgroundId = currentBackgroundId;
   emit('update:visible', false);
   toast.success('设置已保存');
 };
 
-const handleCancel = () => {
+const handleCancel = async () => {
+  if (backgroundImporting.value) return;
+  await Promise.all([...temporaryBackgroundIds].map(deleteBackgroundResource));
+  temporaryBackgroundIds.clear();
+  window.dispatchEvent(new CustomEvent('main-ui-settings-changed'));
   emit('update:visible', false);
 };
 
@@ -415,7 +446,7 @@ async function verifyAndChange() {
 
       <div class="flex-1 min-h-0 flex overflow-hidden">
         <div class="config-tab-sidebar flex flex-col gap-0.5 w-34 shrink-0 pr-2 border-r border-border">
-          <button v-for="tab in settingsTabs" :key="tab.key" type="button"
+          <button v-for="tab in settingsTabs" :key="tab.key" type="button" :disabled="backgroundImporting"
             :class="['flex items-center gap-2 px-2 py-1.5 rounded text-sm text-left outline-none transition-[background,color,box-shadow]', 'focus-visible:bg-[var(--app-focus-bg)] focus-visible:text-foreground focus-visible:shadow-[var(--app-focus-shadow)]', activeKey === tab.key ? 'bg-primary/15 text-primary font-semibold' : 'text-muted-foreground hover:text-foreground']"
             @click="activeKey = tab.key">
             <component :is="tab.icon" class="settings-tab-icon" aria-hidden="true" />
@@ -439,10 +470,12 @@ async function verifyAndChange() {
             :reorder-desktop-pet-node="reorderDesktopPetNode"
             :handle-select-desktop-pet-node-asset="handleSelectDesktopPetNodeAsset"
             :clear-desktop-pet-node-asset="clearDesktopPetNodeAsset" :remove-desktop-pet-node="removeDesktopPetNode"
-            @update:selected-desktop-pet-node-id="selectedDesktopPetNodeId = $event" />
+            @update:selected-desktop-pet-node-id="selectedDesktopPetNodeId = $event"
+            @background-imported="handleBackgroundImported"
+            @background-preview-change="dispatchMainUiSettingsPreview"
+            @background-importing="backgroundImporting = $event" />
 
-          <SettingsStatusBarPane v-if="activeKey === 'statusbar'" :lightbar-settings="lightbarSettings"
-            :monitor-settings="monitorSettings" />
+          <SettingsStatusBarPane v-if="activeKey === 'statusbar'" :monitor-settings="monitorSettings" />
 
           <SettingsTerminalPane v-if="activeKey === 'terminal'" :terminal-theme-settings="terminalThemeSettings" />
 
@@ -455,8 +488,8 @@ async function verifyAndChange() {
       </div>
 
       <DialogFooter>
-        <Button variant="outline" size="sm" @click="handleCancel">取消</Button>
-        <Button size="sm" @click="handleSave">保存</Button>
+        <Button variant="outline" size="sm" :disabled="backgroundImporting" @click="handleCancel">取消</Button>
+        <Button size="sm" :disabled="backgroundImporting" @click="handleSave">保存</Button>
       </DialogFooter>
     </DialogContent>
   </Dialog>

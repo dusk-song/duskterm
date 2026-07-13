@@ -17,7 +17,8 @@ import {
   Server,
   Upload,
   X,
-  Usb
+  Usb,
+  FolderOpen
 } from '@lucide/vue';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { v4 as uuidv4 } from 'uuid';
@@ -31,9 +32,11 @@ const props = defineProps({
   width: {
     type: [String, Number],
     default: '100%'
-  }
+  },
+  sftpActive: Boolean,
+  sftpDisabled: Boolean
 });
-const emit = defineEmits(['open-create', 'open-edit', 'close']);
+const emit = defineEmits(['open-create', 'open-edit', 'toggle-sftp', 'close']);
 
 const sshStore = useSshStore();
 const expandedKeys = ref([]);
@@ -462,8 +465,11 @@ const handleImportSessions = async () => {
   <div class="session-panel" :style="panelWidthStyle">
     <div class="panel-content" ref="panelContentRef">
       <div class="search-bar">
-        <Input v-model="searchKeyword" placeholder="搜索…" size="sm" />
+        <Input v-model="searchKeyword" placeholder="搜索…" size="sm" class="session-search-input" />
         <div class="search-actions">
+          <IconButton :icon="FolderOpen" size="sm" aria-label="切换 SFTP 文件面板"
+            :active="props.sftpActive" :disabled="props.sftpDisabled"
+            :action="() => emit('toggle-sftp')" />
           <IconButton :icon="Plus" size="sm" aria-label="新建会话" :action="() => $emit('open-create')" />
           <IconButton :icon="Upload" size="sm" aria-label="导入" :action="handleImportSessions" />
           <IconButton :icon="Download" size="sm" aria-label="导出" :action="handleExportSessions" />
@@ -573,25 +579,24 @@ const handleImportSessions = async () => {
   align-items: center;
   gap: 6px;
   padding: 6px 8px;
-  background: var(--app-bg-dialog);
-  border-bottom: 1px solid var(--app-border-shadow);
+  background: transparent;
+  border-bottom: 0;
   flex-wrap: nowrap;
   overflow-x: hidden;
 }
 
-.search-bar input {
+.search-bar :deep(.session-search-input) {
   flex: 1 1 140px;
   min-width: 120px;
-  height: 24px;
-  background: transparent !important;
-  border: none !important;
-  box-shadow: none !important;
+  height: 30px;
+  border-radius: 8px;
+  background: var(--app-input-bg) !important;
+  border: 1px solid var(--app-border-shadow) !important;
   font-size: 13px;
   color: var(--app-text);
-  outline: none;
 }
 
-.search-bar input::placeholder {
+.search-bar :deep(.session-search-input::placeholder) {
   color: var(--app-text-muted);
 }
 

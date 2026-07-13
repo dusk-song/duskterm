@@ -168,6 +168,9 @@ const dividerStyle = (divider) => divider.direction === 'vertical'
   display: flex;
   flex-direction: column;
   min-height: 0;
+  overflow: hidden;
+  border-radius: var(--niri-radius-lg, 14px);
+  background: var(--terminal-surface-bg, var(--app-bg-dialog));
 }
 
 .session-name-bar {
@@ -175,8 +178,8 @@ const dividerStyle = (divider) => divider.direction === 'vertical'
   display: flex;
   align-items: center;
   flex-shrink: 0;
-  background: var(--app-bg-dialog);
-  border-bottom: 1px solid var(--app-border-shadow, rgba(255,255,255,0.08));
+  background: color-mix(in srgb, var(--terminal-surface-bg, var(--app-bg-dialog)) 88%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--app-border-shadow, rgba(255,255,255,0.08)) 62%, transparent);
   padding: 0 8px;
 }
 
@@ -197,6 +200,7 @@ const dividerStyle = (divider) => divider.direction === 'vertical'
   min-height: 0;
   overflow: hidden;
   position: relative;
+  background: transparent;
 }
 
 .panel-scroll-strip {
@@ -216,6 +220,7 @@ const dividerStyle = (divider) => divider.direction === 'vertical'
   height: 100%;
   position: relative;
   overflow: hidden;
+  background: transparent;
 }
 
 .panel-empty {
@@ -232,11 +237,11 @@ const dividerStyle = (divider) => divider.direction === 'vertical'
   flex-direction: column;
   min-width: 0;
   min-height: 0;
-  padding: 3px;
+  padding: 0;
   box-sizing: border-box;
   overflow: hidden;
-  background: var(--app-bg-dialog);
-  border-radius: var(--niri-radius-md, 8px);
+  background: transparent;
+  border-radius: 0;
   transition: box-shadow 120ms ease;
 }
 

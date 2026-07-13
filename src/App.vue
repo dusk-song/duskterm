@@ -21,6 +21,7 @@ import ConfirmDialog from '@/components/ui/confirm/ConfirmDialog.vue';
 import ToastContainer from '@/components/ui/toast/ToastContainer.vue';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import CustomTitlebar from './components/app-shell/CustomTitlebar.vue';
+import GlobalBackground from './components/app-shell/GlobalBackground.vue';
 import { useInputRouter } from './composables/useInputRouter';
 const DesktopPet = defineAsyncComponent(() => import('./components/misc/DesktopPet.vue'));
 const FileManager = defineAsyncComponent(() => import('./components/sftp/FileManager.vue'));
@@ -32,7 +33,6 @@ const SessionModal = defineAsyncComponent(() => import('./components/session/Ses
 const SessionOverview = defineAsyncComponent(() => import('./components/session/SessionOverview.vue'));
 const SettingsModal = defineAsyncComponent(() => import('./components/settings/SettingsModal.vue'));
 const SnakeGame = defineAsyncComponent(() => import('./components/misc/SnakeGame.vue'));
-const StatusBar = defineAsyncComponent(() => import('./components/app-shell/StatusBar.vue'));
 const SyncInputModal = defineAsyncComponent(() => import('./components/terminal/SyncInputModal.vue'));
 const SyncMergedPanelManager = defineAsyncComponent(() => import('./components/terminal/SyncMergedPanelManager.vue'));
 const TerminalPanelManager = defineAsyncComponent(() => import('./components/terminal/TerminalPanelManager.vue'));
@@ -46,7 +46,7 @@ import { useTheme } from './composables/useTheme';
 import { createSessionBooleanState, resolveFocusedSessionId } from './utils/sftpPanelState';
 import { useSshStore } from './stores/ssh';
 import { invokeCommand, listenEvent } from './utils/ipc';
-import { loadMainUiSettings, saveMainUiSettings } from './utils/mainUi';
+import { loadMainUiSettings, normalizeMainUiSettings, saveMainUiSettings } from './utils/mainUi';
 import { getPreferenceDefaults, loadPreference } from './utils/preferences';
 
 const sshStore = useSshStore();
@@ -761,6 +761,18 @@ const persistSyncInputAutoMerge = (value) => {
 };
 
 const mainUiSettings = ref(loadMainUiSettings());
+const backgroundAvailable = ref(false);
+const backgroundActive = computed(() => mainUiSettings.value.background?.enabled && backgroundAvailable.value);
+watch(backgroundActive, () => {
+  requestAnimationFrame(() => {
+    window.dispatchEvent(new CustomEvent('main-ui-settings-changed', {
+      detail: {
+        preview: true,
+        settings: mainUiSettings.value
+      }
+    }));
+  });
+});
 const showSnakeGame = computed(() => mainUiSettings.value.showSnakeGame !== false);
 const desktopPetSettings = computed(() => mainUiSettings.value.desktopPet || {});
 const isAnyModalOpen = computed(() =>
@@ -1022,8 +1034,11 @@ const onHostkeyReject = async () => {
   }
 };
 
-const refreshMainUiSettings = () => {
-  mainUiSettings.value = loadMainUiSettings();
+const refreshMainUiSettings = (event) => {
+  const previewSettings = event?.detail?.settings;
+  mainUiSettings.value = previewSettings
+    ? normalizeMainUiSettings(previewSettings)
+    : loadMainUiSettings();
 };
 
 onMounted(async () => {
@@ -1153,7 +1168,8 @@ const toolbarRightItems = computed(() => toolbarItems.value
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
-    <div style="height: 100vh; display: flex; flex-direction: column; background: hsl(var(--background));">
+    <div class="app-shell has-floating-surfaces" :class="{ 'has-global-background': backgroundActive }">
+      <GlobalBackground :settings="mainUiSettings.background" @availability-change="backgroundAvailable = $event" />
       <CustomTitlebar />
       <div ref="workspaceRef" class="workspace-grid main-only"
         :class="{ 'has-left-panels': hasWorkspaceLeftPanels, 'has-right-panel': hasWorkspaceRightPanel }"
@@ -1161,8 +1177,9 @@ const toolbarRightItems = computed(() => toolbarItems.value
         <!-- Left: Session List (inline panel, not overlay) -->
         <div v-if="hasWorkspaceLeftPanels" class="workspace-left-stack" :style="workspaceLeftStackStyle">
           <TiledPanel class="workspace-panel workspace-panel-session" :dense="true" :padded="false">
-            <SessionList :width="'100%'" @open-create="() => { showSessionModal(null); }"
-              @open-edit="(s) => { openSavedSessionEditor(s); }" @close="showSessionPanel = false" />
+            <SessionList :width="'100%'" :sftp-active="showSftpPanel" :sftp-disabled="visibleSessions.length === 0"
+              @open-create="() => { showSessionModal(null); }" @open-edit="(s) => { openSavedSessionEditor(s); }"
+              @toggle-sftp="showSftpPanel = !showSftpPanel" @close="showSessionPanel = false" />
           </TiledPanel>
         </div>
 
@@ -1171,7 +1188,7 @@ const toolbarRightItems = computed(() => toolbarItems.value
           @mousedown="startWorkspaceResize('columns', $event)" />
 
         <TiledPanel class="workspace-panel workspace-panel-main" :dense="true" :padded="false" aria-label="主界面面板">
-          <div class="main-panel-body">
+          <div class="main-panel-body" :class="{ 'has-sftp-panel': showSftpPanel && visibleSessions.length > 0 }">
             <div v-if="visibleSessions.length === 0" class="empty-state">
               <div class="empty-left">
                 <div class="recent-sessions-tree-container">
@@ -1249,12 +1266,6 @@ const toolbarRightItems = computed(() => toolbarItems.value
       <SessionOverview :visible="isOverviewVisible" :sessions="visibleSessions" :active-session-id="activeKey"
         @close="isOverviewVisible = false" @select="(id) => { setActivePanel(id); }" />
 
-      <StatusBar :show-session-panel="showSessionPanel" :show-sftp-panel="showSftpPanel"
-        :show-command-knowledge-panel="showCommandKnowledgePanel"
-        @toggle-session-panel="() => { showSessionPanel = !showSessionPanel; if (showSessionPanel) { sshStore.loadSavedSessions(); isSettingsVisible = false; } }"
-        @toggle-sftp-panel="() => { showSftpPanel = !showSftpPanel; }"
-        @toggle-command-knowledge-panel="toggleCommandKnowledgePanel" />
-
     </div>
 
   </TooltipProvider>
@@ -1298,6 +1309,55 @@ const toolbarRightItems = computed(() => toolbarItems.value
   background: var(--app-workspace-bg);
   box-shadow: inset 0 0 0 1px var(--app-workspace-gap);
   contain: layout style;
+}
+
+.app-shell {
+  position: relative;
+  z-index: 0;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  background: hsl(var(--background));
+  isolation: isolate;
+}
+
+.app-shell > :not(.global-background) { position: relative; z-index: 1; }
+.app-shell.has-floating-surfaces {
+  --terminal-surface-bg: color-mix(in srgb, var(--app-bg-dialog) 52%, transparent);
+}
+.app-shell.has-global-background {
+  background: transparent;
+}
+.app-shell.has-floating-surfaces .workspace-grid {
+  padding: 0 7px 7px;
+  background: transparent;
+  box-shadow: none;
+}
+.app-shell.has-floating-surfaces .workspace-panel.tiled-panel:not(.workspace-panel-main) {
+  background: color-mix(in srgb, var(--app-bg-dialog) 78%, transparent);
+}
+.app-shell.has-floating-surfaces .workspace-panel-main.tiled-panel {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+.app-shell.has-floating-surfaces .workspace-panel-main :deep(.tiled-panel__body) {
+  padding: 0;
+}
+.app-shell.has-floating-surfaces .file-manager,
+.app-shell.has-floating-surfaces .fm-table-header,
+.app-shell.has-floating-surfaces .fm-load-more,
+.app-shell.has-floating-surfaces .fm-bottom-scrollbar {
+  background: color-mix(in srgb, var(--app-bg-dialog) 80%, transparent) !important;
+}
+.app-shell.has-floating-surfaces .sftp-bottom-panel .file-manager,
+.app-shell.has-floating-surfaces .sftp-bottom-panel .fm-table-header,
+.app-shell.has-floating-surfaces .sftp-bottom-panel .fm-table-body,
+.app-shell.has-floating-surfaces .sftp-bottom-panel .fm-bottom-scrollbar {
+  background: transparent !important;
+}
+.app-shell.has-floating-surfaces .sftp-bottom-panel .fm-load-more {
+  background: color-mix(in srgb, var(--app-bg-dialog) 42%, transparent) !important;
 }
 
 /* will-change removed: triggers excessive GPU layering on iGPU,
@@ -1407,6 +1467,21 @@ const toolbarRightItems = computed(() => toolbarItems.value
   height: 100%;
 }
 
+.main-panel-body.has-sftp-panel {
+  overflow: hidden;
+  border-radius: var(--niri-radius-lg, 14px);
+  background: var(--terminal-surface-bg, var(--app-bg-dialog));
+}
+
+.main-panel-body.has-sftp-panel .terminal-panel-manager {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.main-panel-body.has-sftp-panel .sftp-bottom-panel {
+  background: transparent;
+}
+
 .empty-state {
   flex: 1;
   min-height: 0;
@@ -1419,8 +1494,9 @@ const toolbarRightItems = computed(() => toolbarItems.value
 }
 
 .empty-left {
-  width: 260px;
-  height: 240px;
+  width: min(340px, 34vw);
+  min-width: 260px;
+  height: 260px;
   background: transparent;
   border-right: none;
   display: flex;
@@ -1471,6 +1547,14 @@ const toolbarRightItems = computed(() => toolbarItems.value
   flex-direction: column;
   gap: 4px;
   height: 100%;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--app-border-light) 70%, transparent);
+  border-radius: var(--niri-radius-lg, 14px);
+  background: color-mix(in srgb, var(--app-bg-dialog) 54%, transparent);
+  box-shadow: 0 8px 28px color-mix(in srgb, var(--app-workspace-gap, #000) 18%, transparent);
+  backdrop-filter: blur(10px) saturate(112%);
+  -webkit-backdrop-filter: blur(10px) saturate(112%);
+  box-sizing: border-box;
 }
 
 .tree-header {
@@ -1828,29 +1912,29 @@ html.dark .h-resize-handle:hover {
 /* ── SFTP bottom panel ── */
 
 .sftp-bottom-panel {
-  --sftp-resize-bg: color-mix(in srgb, var(--app-bg-dialog) 92%, transparent);
+  --sftp-resize-bg: transparent;
   --sftp-resize-hover-bg: color-mix(in srgb, var(--app-text) 6%, transparent);
   --sftp-resize-active-bg: color-mix(in srgb, var(--color-primary) 14%, transparent);
-  --sftp-resize-line: color-mix(in srgb, var(--app-text) 34%, transparent);
+  --sftp-resize-line: color-mix(in srgb, var(--app-text) 20%, transparent);
   --sftp-resize-hover-line: color-mix(in srgb, var(--app-text) 54%, transparent);
   --sftp-resize-active-line: var(--color-primary);
   flex: 0 0 auto;
   min-height: 120px;
   display: flex;
   flex-direction: column;
-  border-top: 1px solid var(--app-border-shadow, rgba(255, 255, 255, 0.08));
-  background: var(--app-input-bg, rgba(255, 255, 255, 0.04));
+  border-top: 0;
+  background: transparent;
   overflow: hidden;
 }
 
 .sftp-resize-handle {
   position: relative;
-  height: 6px;
+  height: 10px;
   cursor: row-resize;
   background: var(--sftp-resize-bg);
   flex-shrink: 0;
   border: 0;
-  margin: 0 8px;
+  margin: 0;
   transition: background var(--app-motion-control, 120ms ease);
   touch-action: none;
 }
@@ -1861,16 +1945,24 @@ html.dark .h-resize-handle:hover {
   left: 0;
   right: 0;
   top: 50%;
-  border-top: 1px dashed var(--sftp-resize-line);
+  border-top: 1px solid var(--sftp-resize-line);
   transform: translateY(-50%);
   transition: border-color var(--app-motion-control, 120ms ease), opacity var(--app-motion-control, 120ms ease);
-  opacity: 0.82;
+  opacity: 0.76;
 }
 
 .sftp-resize-handle::after {
   content: '';
   position: absolute;
-  inset: -4px 0;
+  left: 50%;
+  top: 50%;
+  width: 46px;
+  height: 3px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--app-text) 18%, transparent);
+  transform: translate(-50%, -50%);
+  opacity: 0;
+  transition: opacity var(--app-motion-control, 120ms ease), background var(--app-motion-control, 120ms ease);
 }
 
 .sftp-resize-handle:hover {
@@ -1881,6 +1973,12 @@ html.dark .h-resize-handle:hover {
 .sftp-resize-handle:hover::before {
   border-top-color: var(--sftp-resize-hover-line);
   opacity: 1;
+}
+
+.sftp-resize-handle:hover::after,
+.sftp-resize-handle.is-dragging::after {
+  opacity: 1;
+  background: color-mix(in srgb, var(--color-primary) 54%, var(--app-text) 18%);
 }
 
 .sftp-resize-handle.is-dragging {
