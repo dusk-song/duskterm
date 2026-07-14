@@ -31,11 +31,10 @@ jobs:
             platform: macos-latest
             args: "--target x86_64-apple-darwin --bundles dmg"
 
-          # Linux x64：生成 .deb + .AppImage
+          # Linux x64：生成 .deb + .rpm + .AppImage
           - name: Linux x64
             platform: ubuntu-22.04
-            args: "--bundles deb,appimage"
-            
+            args: "--bundles deb,rpm,appimage"
 
     steps:
       - name: Checkout source
@@ -122,7 +121,9 @@ jobs:
             - **macOS Apple Silicon**：适用于 M1、M2、M3、M4 等 Apple 芯片 Mac。
             - **macOS Intel**：适用于 Intel 芯片 Mac。
             - **Linux Debian / Ubuntu**：下载 `.deb`。
+            - **Linux CentOS / RHEL / Fedora / Rocky Linux / AlmaLinux**：下载 `.rpm`。
             - **其他 Linux 发行版**：下载 `.AppImage`，赋予执行权限后运行。
+
             ## 注意事项
             - macOS 首次打开未正式签名的应用时，可能需要在“系统设置 → 隐私与安全性”中手动允许。
             - Windows 未配置代码签名证书前，首次运行可能出现 SmartScreen 提示。
@@ -135,5 +136,4 @@ jobs:
           # 后续接入 updater、签名密钥后再改为 true。
           uploadUpdaterJson: false
           uploadUpdaterSignatures: false
-
           args: ${{ matrix.args }}
