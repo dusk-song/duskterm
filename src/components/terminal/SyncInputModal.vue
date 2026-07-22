@@ -13,7 +13,6 @@ import SelectContent from '@/components/ui/select/SelectContent.vue';
 import SelectItem from '@/components/ui/select/SelectItem.vue';
 import SelectTrigger from '@/components/ui/select/SelectTrigger.vue';
 import SelectValue from '@/components/ui/select/SelectValue.vue';
-import Switch from '@/components/ui/switch/Switch.vue';
 import { confirm } from '@/composables/useConfirm';
 import { toast } from '@/composables/useToast';
 import { computed, ref, watch } from 'vue';
@@ -37,14 +36,6 @@ const props = defineProps({
     type: String,
     default: '',
   },
-  visibleSessions: {
-    type: Array,
-    default: () => [],
-  },
-  autoMerge: {
-    type: Boolean,
-    default: true,
-  },
   replaceSyncChannels: {
     type: Function,
     required: true,
@@ -59,7 +50,7 @@ const props = defineProps({
   },
 });
 
-const emit = defineEmits(['update:visible', 'sync-changed', 'sync-merged-page-change', 'auto-merge-change']);
+const emit = defineEmits(['update:visible', 'sync-changed']);
 
 const sshStore = useSshStore();
 
@@ -73,7 +64,6 @@ const dialogOpen = computed({
 const syncChannelsDraft = ref([]);
 const selectedChannelIdDraft = ref('');
 const sessionSearchText = ref('');
-const syncInputAutoMerge = ref(props.autoMerge);
 
 const openSessions = computed(() => Array.isArray(sshStore.sessions) ? sshStore.sessions : []);
 const openSessionIds = computed(() => openSessions.value.map((session) => session.id));
@@ -177,7 +167,6 @@ const cloneFromProps = () => {
     ? props.selectedChannelId
     : (syncChannelsDraft.value[0]?.id || '');
   sessionSearchText.value = '';
-  syncInputAutoMerge.value = props.autoMerge;
 };
 
 const closeDialog = () => {
@@ -279,7 +268,6 @@ const applySyncChannels = () => {
     }))
     .filter((channel) => channel.sessionIds.length > 0);
 
-  emit('auto-merge-change', syncInputAutoMerge.value);
   props.replaceSyncChannels(trimmedChannels, selectedChannelIdDraft.value);
   props.setSelectedSyncChannelId(selectedChannelIdDraft.value);
   emit('sync-changed');
@@ -314,10 +302,6 @@ watch(() => props.visible, (visible) => {
   if (visible) {
     cloneFromProps();
   }
-});
-
-watch(() => props.autoMerge, (value) => {
-  syncInputAutoMerge.value = value;
 });
 
 watch(selectedChannelIdDraft, (channelId) => {
@@ -496,16 +480,6 @@ watch(() => currentChannelDraft.value?.sourceMode, (mode) => {
                     @click="updateCurrentChannel({ sendMode: 'line' })">
                     回车
                   </button>
-                </div>
-              </div>
-
-              <div class="space-y-2 rounded-md border border-border bg-background/70 p-3">
-                <div class="flex items-center justify-between">
-                  <span class="text-xs text-muted-foreground">自动合并视图</span>
-                  <Switch v-model="syncInputAutoMerge" />
-                </div>
-                <div class="text-[11px] text-muted-foreground">
-                  当当前激活终端属于某个同步频道时，可以自动切到该频道的合并视图。
                 </div>
               </div>
 

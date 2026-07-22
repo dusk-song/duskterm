@@ -1,17 +1,17 @@
 ﻿<script setup>
 import { Code2, Server, Usb } from '@lucide/vue';
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
-import { useSshStore } from '@/stores/ssh';
+import { buildSessionOverviewItems } from '@/utils/sessionOverview';
 
 const props = defineProps({
   visible: Boolean,
   sessions: { type: Array, default: () => [] },
+  syncChannels: { type: Array, default: () => [] },
   activeSessionId: { type: String, default: '' }
 });
 
 const emit = defineEmits(['close', 'select']);
 
-const sshStore = useSshStore();
 const selectedIndex = ref(0);
 const gridRef = ref(null);
 
@@ -22,15 +22,15 @@ const scrollToSelected = async () => {
 };
 
 const gridItems = computed(() => {
-  return (props.sessions || []).map((s, i) => ({
-    ...s,
+  return buildSessionOverviewItems(props.sessions, props.syncChannels, props.activeSessionId).map((item, i) => ({
+    ...item,
     _index: i,
-    isActive: s.id === props.activeSessionId,
-    isConnected: s.status === 'connected'
+    isActive: item.sessions.some((session) => session.id === props.activeSessionId),
   }));
 });
 
 const totalItems = computed(() => gridItems.value.length);
+const channelCount = computed(() => gridItems.value.filter((item) => item.type === 'channel').length);
 
 const getProtocolIcon = (session) => {
   const p = String(session?.config?.protocol || 'ssh').toLowerCase();
@@ -57,10 +57,16 @@ const navigateTo = (dir) => {
 
 const confirmSelection = () => {
   const item = gridItems.value[selectedIndex.value];
-  if (item) {
-    emit('select', item.id);
+  if (item?.selectSessionId) {
+    emit('select', item.selectSessionId);
     emit('close');
   }
+};
+
+const selectItem = (item) => {
+  if (!item?.selectSessionId) return;
+  emit('select', item.selectSessionId);
+  emit('close');
 };
 
 const handleKeyDown = (e) => {
@@ -87,7 +93,7 @@ onUnmounted(() => {
 // Scroll to active session when overview opens
 watch(() => props.visible, (v) => {
   if (v) {
-    const idx = gridItems.value.findIndex(item => item.id === props.activeSessionId);
+    const idx = gridItems.value.findIndex(item => item.isActive);
     if (idx >= 0) selectedIndex.value = idx;
     scrollToSelected();
   }
@@ -101,22 +107,39 @@ watch(() => props.visible, (v) => {
         <div class="overview-container">
           <div class="overview-header">
             <span class="overview-title">会话总览</span>
-            <span class="overview-count">{{ totalItems }} 个会话</span>
+            <span class="overview-count">{{ props.sessions.length }} 个会话<span v-if="channelCount"> · {{ channelCount }} 个同步频道</span></span>
           </div>
 
           <div ref="gridRef" class="overview-grid" v-if="totalItems > 0">
             <div v-for="item in gridItems" :key="item.id" class="overview-card"
-              :class="{ active: item._index === selectedIndex }"
-              @click="emit('select', item.id); emit('close')"
+              :class="{ active: item._index === selectedIndex, channel: item.type === 'channel' }"
+              @click="selectItem(item)"
               @mouseenter="selectedIndex = item._index">
-              <div class="card-preview">
-                <component :is="getProtocolIcon(item)" class="card-protocol-icon" />
-                <!-- Status dot: green = connected, dim = disconnected -->
-                <span class="card-dot" :class="{ live: item.isConnected, dead: !item.isConnected }" />
+              <div v-if="item.type === 'channel'" class="card-preview channel-preview">
+                <div class="channel-mini-grid">
+                  <div v-for="member in item.sessions.slice(0, 6)" :key="member.id" class="channel-mini-session"
+                    :title="member.name || member.config?.host || member.id">
+                    <component :is="getProtocolIcon(member)" class="channel-mini-icon" />
+                    <span class="channel-mini-name">{{ member.name || member.config?.host || '会话' }}</span>
+                    <span class="channel-mini-dot" :class="{ live: member.status === 'connected' }" />
+                  </div>
+                  <div v-if="item.sessions.length > 6" class="channel-mini-more">+{{ item.sessions.length - 6 }}</div>
+                </div>
+              </div>
+              <div v-else class="card-preview">
+                <component :is="getProtocolIcon(item.session)" class="card-protocol-icon" />
+                <span class="card-dot"
+                  :class="{ live: item.session.status === 'connected', dead: item.session.status !== 'connected' }" />
               </div>
               <div class="card-info">
-                <div class="card-name">{{ item.name || item.config?.host || '未命名' }}</div>
-                <div class="card-host">{{ item.config?.username || '' }}{{ item.config?.username ? '@' : '' }}{{ item.config?.host || item.host || '—' }}</div>
+                <template v-if="item.type === 'channel'">
+                  <div class="card-name">{{ item.name }}</div>
+                  <div class="card-host">{{ item.description }}</div>
+                </template>
+                <template v-else>
+                  <div class="card-name">{{ item.session.name || item.session.config?.host || '未命名' }}</div>
+                  <div class="card-host">{{ item.session.config?.username || '' }}{{ item.session.config?.username ? '@' : '' }}{{ item.session.config?.host || item.session.host || '—' }}</div>
+                </template>
               </div>
             </div>
           </div>
@@ -176,6 +199,7 @@ watch(() => props.visible, (v) => {
   background: color-mix(in srgb, var(--color-primary) 12%, transparent);
   border-color: var(--color-primary);
 }
+.overview-card.channel { min-height: 146px; }
 
 /* Preview area */
 .card-preview {
@@ -184,6 +208,31 @@ watch(() => props.visible, (v) => {
   border-radius: 6px; position: relative; min-height: 56px;
 }
 .card-protocol-icon { font-size: 26px; color: var(--app-text-muted); opacity: 0.3; }
+.channel-preview { padding: 7px; align-items: stretch; }
+.channel-mini-grid {
+  width: 100%; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 5px;
+}
+.channel-mini-session {
+  position: relative; min-width: 0; height: 28px; padding: 0 17px 0 6px;
+  display: flex; align-items: center; gap: 5px;
+  border: 1px solid color-mix(in srgb, var(--app-text) 10%, transparent);
+  border-radius: 4px; background: color-mix(in srgb, var(--app-input-bg) 76%, transparent);
+}
+.channel-mini-icon { flex: 0 0 auto; width: 12px; height: 12px; color: var(--app-text-muted); opacity: .65; }
+.channel-mini-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--app-text); font-size: 9px;
+}
+.channel-mini-dot {
+  position: absolute; top: 5px; right: 5px; width: 5px; height: 5px; border-radius: 50%;
+  background: color-mix(in srgb, var(--app-text) 18%, transparent);
+}
+.channel-mini-dot.live { background: var(--color-success); }
+.channel-mini-more {
+  height: 28px; display: flex; align-items: center; justify-content: center;
+  border-radius: 4px; color: var(--app-text-muted); font-size: 10px;
+  background: color-mix(in srgb, var(--app-text) 6%, transparent);
+}
 
 /* Status dot — top-right corner */
 .card-dot {

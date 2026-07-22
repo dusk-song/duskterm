@@ -30,6 +30,21 @@ const uniqueStrings = (values = []) => {
 export const normalizeSourceMode = (value) => (value === 'primary' ? 'primary' : 'all');
 export const normalizeSendMode = (value) => (value === 'line' ? 'line' : 'realtime');
 
+export const buildSyncInputWriteRequest = (session, data) => {
+  const sessionId = String(session?.id || '').trim();
+  const rootSessionId = String(session?.workspaceSessionId || session?.parentId || '').trim();
+  if (session?.isSplitChild && rootSessionId) {
+    return {
+      command: 'write_ssh_shell_channel',
+      args: { rootSessionId, channelId: sessionId, data },
+    };
+  }
+  return {
+    command: 'write_ssh',
+    args: { sessionId, data },
+  };
+};
+
 export const createSyncChannelName = (index = 1) => `${DEFAULT_CHANNEL_NAME_PREFIX} ${Math.max(1, Number(index) || 1)}`;
 
 export const createSyncChannel = (overrides = {}) => ({

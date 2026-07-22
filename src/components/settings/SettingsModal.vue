@@ -99,8 +99,6 @@ const keybindingItems = [
   { key: 'commandKnowledge', label: '命令知识库', placeholder: 'Ctrl+Alt+3' },
   { key: 'overview', label: '总览模式', placeholder: 'Ctrl+`' },
   { key: 'copySession', label: '复制当前会话', placeholder: 'Ctrl+P' },
-  { key: 'syncMergedPrevPage', label: '合并视图上一页', placeholder: 'Ctrl+Shift+PageUp' },
-  { key: 'syncMergedNextPage', label: '合并视图下一页', placeholder: 'Ctrl+Shift+PageDown' },
   { key: 'toggleLineNumbers', label: '切换行号', placeholder: 'Ctrl+Alt+L' },
   { key: 'toggleFind', label: '终端搜索', placeholder: 'Ctrl+Shift+F' }
 ];

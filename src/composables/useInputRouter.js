@@ -7,6 +7,7 @@ import { matchSensitiveCommand, sanitizeCommandText } from '../utils/sensitiveCo
 import {
   LEGACY_SYNC_INPUT_GROUP_STORAGE_KEY,
   SYNC_INPUT_CHANNELS_STORAGE_KEY,
+  buildSyncInputWriteRequest,
   cloneSyncChannels,
   createSyncChannel,
   findChannelBySessionId,
@@ -244,6 +245,11 @@ export function useInputRouter({ sshStore }) {
         continue;
       }
 
+      if (ch === '\u0015') {
+        buffer = '';
+        continue;
+      }
+
       if (ch === '\u007F' || ch === '\b') {
         buffer = buffer.slice(0, -1);
         continue;
@@ -337,6 +343,12 @@ export function useInputRouter({ sshStore }) {
     return syncChannels.value.find((channel) => channel.id === channelId) || null;
   };
 
+  const writeSessionInput = (sessionId, data) => {
+    const session = (sshStore.sessions || []).find((candidate) => candidate.id === sessionId) || { id: sessionId };
+    const request = buildSyncInputWriteRequest(session, data);
+    return invokeCommand(request.command, request.args);
+  };
+
   const broadcastOnce = async (sourceSessionId, payload, explicitTargets = null) => {
     const channel = resolveRoutingChannel(sourceSessionId);
     if (!channel?.broadcastEnabled) return;
@@ -354,7 +366,7 @@ export function useInputRouter({ sshStore }) {
     await Promise.all(
       targets.map(async (sessionId) => {
         try {
-          await invokeCommand('write_ssh', { sessionId, data: payload });
+          await writeSessionInput(sessionId, payload);
         } catch (error) {
           const msg = String(error || 'broadcast failed');
           syncStats.value = {
@@ -470,7 +482,7 @@ export function useInputRouter({ sshStore }) {
     }
 
     try {
-      await invokeCommand('write_ssh', { sessionId: sourceSessionId, data: payload });
+      await writeSessionInput(sourceSessionId, payload);
     } catch (error) {
       const msg = String(error || 'write source failed');
       syncStats.value = {

@@ -35,6 +35,13 @@ import { useSshStore } from '@/stores/ssh';
 import { invokeCommand, listenEvent } from '@/utils/ipc';
 import { findMatchedCommandInPayload, matchSensitiveCommand } from '@/utils/sensitiveCommand';
 import { getSessionSyncBadgeState, SYNC_INPUT_CHANNELS_STORAGE_KEY } from '@/utils/syncInputChannels';
+import {
+  buildTerminalLineReplacementPayload,
+  extractCommandFromTerminalLine,
+  findCommandHistoryMatches,
+  normalizeCommandHistory,
+  recordCommandHistoryEntry,
+} from '@/utils/terminalCommandHistory';
 import { getTerminalTheme, loadTerminalThemeSettings } from '@/utils/terminalTheme';
 
 const props = defineProps({
@@ -87,22 +94,36 @@ const commandHistory = ref([]); // [{ cmd: string, count: number }]
 const HISTORY_MAX = 200;
 const HISTORY_MIN_LEN = 5;
 const HISTORY_STORAGE_KEY = 'cmd-history-v1';
+const HISTORY_CHANGED_EVENT = 'command-history-changed';
 const SERIAL_RECEIVE_VISIBLE_KEY_PREFIX = 'serial-receive-visible-v1:';
 const SERIAL_CAPTURE_MAX_CHARS = 5 * 1024 * 1024;
 const SERIAL_SAVE_IPC_CHUNK_BYTES = 128 * 1024;
 const knowledgeSensitiveRules = computed(() => commandKnowledgeStore.sensitiveRules || []);
 
-const loadCommandHistory = () => {
+const readStoredCommandHistory = () => {
   try {
     const raw = localStorage.getItem(HISTORY_STORAGE_KEY);
-    commandHistory.value = raw ? JSON.parse(raw) : [];
-  } catch { commandHistory.value = []; }
+    return normalizeCommandHistory(raw ? JSON.parse(raw) : []);
+  } catch {
+    return [];
+  }
+};
+
+const loadCommandHistory = () => {
+  commandHistory.value = readStoredCommandHistory();
 };
 
 const persistCommandHistory = () => {
   try {
     localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(commandHistory.value));
   } catch { /* ignore */ }
+  window.dispatchEvent(new CustomEvent(HISTORY_CHANGED_EVENT, {
+    detail: { history: commandHistory.value },
+  }));
+};
+
+const onCommandHistoryChanged = (event) => {
+  commandHistory.value = normalizeCommandHistory(event?.detail?.history || []);
 };
 const syncBadgeState = ref({
   visible: false,
@@ -409,6 +430,8 @@ let textDecoder = new TextDecoder('utf-8'); // Default
 let quickCommandHandler = null;
 let terminalFocusHandler = null;
 let quickHintDebounceTimer = null;
+let shellCompletionSyncTimer = null;
+let shellCompletionSyncPending = false;
 let quickHintPositionRafId = null;
 let quickHintSearchToken = 0;
 let isLayoutDragging = false;
@@ -639,20 +662,11 @@ watch(isDark, () => {
 });
 
 const recordCommandHistory = (command) => {
-  const text = String(command || '').trim();
-  if (text.length < HISTORY_MIN_LEN) return;
-  const hist = commandHistory.value;
-  const existing = hist.find(h => h.cmd === text);
-  if (existing) {
-    existing.count += 1;
-    // Move to end (most recent)
-    const idx = hist.indexOf(existing);
-    hist.splice(idx, 1);
-    hist.push(existing);
-    return;
-  }
-  hist.push({ cmd: text, count: 1 });
-  while (hist.length > HISTORY_MAX) hist.shift();
+  const latestHistory = readStoredCommandHistory();
+  commandHistory.value = recordCommandHistoryEntry(latestHistory, command, {
+    max: HISTORY_MAX,
+    minLength: HISTORY_MIN_LEN,
+  });
   persistCommandHistory();
 };
 
@@ -682,31 +696,7 @@ const getCursorLogicalLineText = () => {
 };
 
 const stripPromptFromCommandLine = (line, fallbackInput = '') => {
-  const text = String(line || '').trimEnd();
-  const fallback = String(fallbackInput || '').trim();
-  if (!text) return '';
-
-  if (fallback) {
-    const fallbackIndex = text.lastIndexOf(fallback);
-    if (fallbackIndex >= 0) {
-      return text.slice(fallbackIndex).trim();
-    }
-  }
-
-  const promptPatterns = [
-    /^\s*PS\s+[^>]+>\s*(.+)$/s,
-    /^\s*[A-Za-z]:\\[^>]*>\s*(.+)$/s,
-    /^\s*[\w.-]+@[\w.-]+(?::[^#$%]*)?[#$%]\s*(.+)$/s,
-    /^\s*(?:~|\/|[^\s]+\/)[^#$%]*[#$%]\s*(.+)$/s,
-    /^\s*[#$%]\s*(.+)$/s
-  ];
-
-  for (const pattern of promptPatterns) {
-    const match = text.match(pattern);
-    if (match?.[1]) return match[1].trim();
-  }
-
-  return fallback;
+  return extractCommandFromTerminalLine(line, fallbackInput);
 };
 
 const getSubmittedCommandText = () => {
@@ -716,7 +706,37 @@ const getSubmittedCommandText = () => {
   return String(fallback || '').trim();
 };
 
+const syncInputBufferFromTerminal = ({ refreshHints = true } = {}) => {
+  const command = stripPromptFromCommandLine(getCursorLogicalLineText(), currentInputBuffer.value);
+  if (!command) return '';
+  if (command !== currentInputBuffer.value) {
+    currentInputBuffer.value = command;
+    if (refreshHints) scheduleQuickHintUpdate(command);
+  }
+  return command;
+};
+
+const cancelShellCompletionSync = () => {
+  if (shellCompletionSyncTimer) {
+    clearTimeout(shellCompletionSyncTimer);
+    shellCompletionSyncTimer = null;
+  }
+  shellCompletionSyncPending = false;
+};
+
+const scheduleShellCompletionSync = () => {
+  if (!shellCompletionSyncPending) return;
+  if (shellCompletionSyncTimer) clearTimeout(shellCompletionSyncTimer);
+  shellCompletionSyncTimer = setTimeout(() => {
+    shellCompletionSyncTimer = null;
+    if (!shellCompletionSyncPending) return;
+    syncInputBufferFromTerminal();
+    shellCompletionSyncPending = false;
+  }, 80);
+};
+
 const closeQuickHint = () => {
+  cancelQuickHintDebounce();
   quickHintSearchToken += 1;
   quickHintVisible.value = false;
   quickHintItems.value = [];
@@ -853,23 +873,13 @@ const collectQuickHintMatchesAsync = async (query, token) => {
       name: entry.title,
     }));
 
-  // Search command history (left-match, sorted by frequency * match precision, top 10)
-  const hist = commandHistory.value;
   const seenCmds = new Set(knowledgeItems.map(item => String(item.command || '')));
-  const scoredHist = [];
-  for (let i = hist.length - 1; i >= 0; i -= 1) {
-    const entry = hist[i];
-    if (!entry.cmd.startsWith(query) || seenCmds.has(entry.cmd)) continue;
-    // Score: exact match gets bonus, frequency counts
-    const exact = entry.cmd === query ? 1000 : 0;
-    const score = entry.count * 10 + exact;
-    scoredHist.push({ cmd: entry.cmd, count: entry.count, score });
-    seenCmds.add(entry.cmd);
-  }
-  scoredHist.sort((a, b) => b.score - a.score);
-  const histResults = scoredHist.slice(0, 10).map(h => h.cmd);
+  const historyItems = findCommandHistoryMatches(commandHistory.value, query, {
+    excludedCommands: seenCmds,
+    limit: 10,
+  });
 
-  return { knowledgeItems, histResults, scoredHist };
+  return { knowledgeItems, historyItems };
 };
 
 const updateQuickHintMatches = async (rawInput) => {
@@ -883,13 +893,12 @@ const updateQuickHintMatches = async (rawInput) => {
   const result = await collectQuickHintMatchesAsync(query, token);
   if (!result || token !== quickHintSearchToken) return;
 
-  const { knowledgeItems, histResults, scoredHist } = result;
+  const { knowledgeItems, historyItems } = result;
 
   // Build items: knowledge trigger matches first, then history
-  const histItems = histResults.map((cmd) => ({
-    id: `hist-${cmd}`,
-    name: `×${scoredHist.find(h => h.cmd === cmd)?.count || 1}`,
-    command: cmd,
+  const histItems = historyItems.map((entry) => ({
+    id: `hist-${entry.cmd}`,
+    command: entry.cmd,
     _source: 'history'
   }));
   const nextItems = [...knowledgeItems, ...histItems];
@@ -940,13 +949,12 @@ const applyQuickHintSelection = () => {
 
   const matched = matchSensitiveCommand(command, knowledgeSensitiveRules.value);
   if (matched) {
-    openSecurityModal(matched, command + '\r');
+    openSecurityModal(matched, `${buildTerminalLineReplacementPayload(command)}\r`);
     closeQuickHint();
     return true;
   }
 
-  sendData('\u0015');
-  forwardTerminalInput(command);
+  forwardTerminalInput(buildTerminalLineReplacementPayload(command));
   currentInputBuffer.value = command;
   if (selected?._source === 'knowledge' && selected?.id) {
     commandKnowledgeStore.recordUsage(selected.id);
@@ -2269,6 +2277,12 @@ onMounted(async () => {
           }
         }
 
+        if (data === '\t') {
+          shellCompletionSyncPending = true;
+          forwardTerminalInput(data);
+          return;
+        }
+
         const isEnter = data === '\r' || data === '\n';
         const isPasteWithNewline = data.length > 1 && (data.includes('\r') || data.includes('\n'));
         const routedBySync = isCurrentSessionSyncSource();
@@ -2281,6 +2295,8 @@ onMounted(async () => {
         }
 
         if (routedBySync && isEnter) {
+          syncInputBufferFromTerminal({ refreshHints: false });
+          cancelShellCompletionSync();
           recordCommandHistory(getSubmittedCommandText());
           currentInputBuffer.value = '';
           closeQuickHint();
@@ -2301,6 +2317,8 @@ onMounted(async () => {
         }
 
         if (!routedBySync && isEnter) {
+          syncInputBufferFromTerminal({ refreshHints: false });
+          cancelShellCompletionSync();
           const submittedCommand = getSubmittedCommandText();
           const matched = matchSensitiveCommand(submittedCommand, knowledgeSensitiveRules.value);
           if (matched) {
@@ -2322,6 +2340,7 @@ onMounted(async () => {
         }
 
         if (data === '\u0003') {
+          cancelShellCompletionSync();
           currentInputBuffer.value = '';
           closeQuickHint();
           forwardTerminalInput(data);
@@ -2355,6 +2374,7 @@ onMounted(async () => {
 
     termCursorMoveDisposable = term.onCursorMove(() => {
       scheduleQuickHintPositionUpdate();
+      scheduleShellCompletionSync();
     });
 
     termSelectionDisposable = term.onSelectionChange(() => {
@@ -2523,6 +2543,7 @@ onMounted(async () => {
   window.addEventListener('terminal:toggle-line-numbers', handleExternalLineNumberToggle);
   window.addEventListener('mousedown', handleQuickHintPointerDown, true);
   window.addEventListener('sync-input-changed', onSyncInputChanged);
+  window.addEventListener(HISTORY_CHANGED_EVENT, onCommandHistoryChanged);
 
   if (resizeObserver) resizeObserver.disconnect();
   resizeObserver = new ResizeObserver(() => handleResize());
@@ -2639,8 +2660,10 @@ onUnmounted(() => {
   window.removeEventListener('terminal:toggle-line-numbers', handleExternalLineNumberToggle);
   window.removeEventListener('mousedown', handleQuickHintPointerDown, true);
   window.removeEventListener('sync-input-changed', onSyncInputChanged);
+  window.removeEventListener(HISTORY_CHANGED_EVENT, onCommandHistoryChanged);
   detachViewportScrollListener();
   cancelQuickHintDebounce();
+  cancelShellCompletionSync();
   closeQuickHint();
   resetGestureX();
 
@@ -2810,16 +2833,13 @@ onUnmounted(() => {
         :class="{ active: quickHintFocused && index === quickHintSelectedIndex }" role="option"
         :aria-selected="quickHintFocused && index === quickHintSelectedIndex" :data-index="index" @mousedown.prevent
         @click="handleQuickHintItemClick(index)">
-        <div class="quick-hint-main">
+        <div v-if="item._source === 'history'" class="quick-hint-history-command">{{ item.command }}</div>
+        <div v-else class="quick-hint-main">
           <div class="quick-hint-title">
-            <span v-if="item._source === 'knowledge'" class="quick-hint-trigger">{{ item.trigger }}</span>
+            <span class="quick-hint-trigger">{{ item.trigger }}</span>
             {{ item.title || item.name || item.command }}
           </div>
           <div class="quick-hint-command">{{ item.command }}</div>
-        </div>
-        <div class="quick-hint-meta">
-          <span v-if="item._source === 'history'" class="quick-hint-hist-tag">H</span>
-          {{ item._source === 'history' ? item.name : '' }}
         </div>
       </div>
     </div>
@@ -3163,18 +3183,6 @@ onUnmounted(() => {
   font-family: var(--font-mono);
 }
 
-.quick-hint-meta {
-  font-size: 11px;
-  font-weight: 500;
-  color: hsl(var(--muted-foreground));
-  white-space: nowrap;
-  flex: 0 0 auto;
-  max-width: 40%;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  text-align: right;
-}
-
 .quick-hint-command {
   margin-top: 2px;
   font-size: 11px;
@@ -3185,16 +3193,15 @@ onUnmounted(() => {
   text-overflow: ellipsis;
   font-family: var(--font-mono);
 }
-
-.quick-hint-hist-tag {
-  display: inline-block;
-  font-size: 9px;
-  padding: 1px 4px;
-  border-radius: 3px;
-  background: hsl(var(--muted));
-  color: hsl(var(--muted-foreground));
-  margin-right: 4px;
-  vertical-align: middle;
+.quick-hint-history-command {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: hsl(var(--foreground));
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 500;
 }
 
 /* Context menu styling provided by shadcn-vue ContextMenu component */

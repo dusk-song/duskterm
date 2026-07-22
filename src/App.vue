@@ -31,7 +31,6 @@ const SessionModal = defineAsyncComponent(() => import('./components/session/Ses
 const SessionOverview = defineAsyncComponent(() => import('./components/session/SessionOverview.vue'));
 const SettingsModal = defineAsyncComponent(() => import('./components/settings/SettingsModal.vue'));
 const SyncInputModal = defineAsyncComponent(() => import('./components/terminal/SyncInputModal.vue'));
-const SyncMergedPanelManager = defineAsyncComponent(() => import('./components/terminal/SyncMergedPanelManager.vue'));
 const TerminalPanelManager = defineAsyncComponent(() => import('./components/terminal/TerminalPanelManager.vue'));
 const TiledPanel = defineAsyncComponent(() => import('./components/terminal/TiledPanel.vue'));
 const TunnelModal = defineAsyncComponent(() => import('./components/tunnel/TunnelModal.vue'));
@@ -748,33 +747,9 @@ const {
   replaceSyncChannels,
   clearSyncChannels,
   setSelectedSyncChannelId,
-  findChannelBySessionId: findSyncChannelBySessionId,
 } = useInputRouter({ sshStore });
 
-const SYNC_INPUT_PAGE_SIZE = 4;
-const SYNC_INPUT_AUTO_MERGE_KEY = 'sync-input-auto-merge-v1';
 const isSyncInputVisible = ref(false);
-const syncMergedPageIndex = ref(0);
-const syncInputAutoMerge = ref(true);
-
-const loadSyncInputAutoMerge = () => {
-  try {
-    const raw = localStorage.getItem(SYNC_INPUT_AUTO_MERGE_KEY);
-    if (raw === null) return true;
-    return raw !== '0';
-  } catch {
-    return true;
-  }
-};
-
-syncInputAutoMerge.value = loadSyncInputAutoMerge();
-
-const persistSyncInputAutoMerge = (value) => {
-  try {
-    localStorage.setItem(SYNC_INPUT_AUTO_MERGE_KEY, value ? '1' : '0');
-  } catch {
-  }
-};
 
 const mainUiSettings = ref(loadMainUiSettings());
 const backgroundAvailable = ref(false);
@@ -819,34 +794,9 @@ const handleDesktopPetSettingsChange = (nextDesktopPetSettings) => {
   }, false);
 };
 
-const currentSyncChannel = computed(() => {
-  if (!activeKey.value) return null;
-  return findSyncChannelBySessionId(activeKey.value);
-});
-
-const syncMergedSessions = computed(() => {
-  if (!currentSyncChannel.value?.broadcastEnabled) return [];
-  const selected = new Set(currentSyncChannel.value.sessionIds || []);
-  if (selected.size < 2) return [];
-  return (visibleSessions.value || []).filter((session) => selected.has(session.id));
-});
-
-const syncMergedPageCount = computed(() =>
-  Math.max(1, Math.ceil(syncMergedSessions.value.length / SYNC_INPUT_PAGE_SIZE))
-);
-
-const shouldUseSyncMergedView = computed(() =>
-  currentSyncChannel.value?.broadcastEnabled && syncInputAutoMerge.value && syncMergedSessions.value.length >= 2
-);
-
 onApp('app:open-sync-input', () => {
   isSyncInputVisible.value = true;
 });
-
-const handleSyncMergedPageChange = (nextPage) => {
-  const maxPage = Math.max(0, syncMergedPageCount.value - 1);
-  syncMergedPageIndex.value = Math.max(0, Math.min(nextPage, maxPage));
-};
 
 // --- Modal State ---
 const isModalVisible = ref(false);
@@ -935,13 +885,6 @@ const keybindingActions = {
   copySession: () => {
     const active = sshStore.getSession(activeKey.value);
     if (active?.config) sshStore.connectLogicWithMeta(active.config);
-  },
-  syncMergedPrevPage: () => {
-    if (syncMergedPageIndex.value > 0) syncMergedPageIndex.value--;
-  },
-  syncMergedNextPage: () => {
-    const maxPage = Math.max(0, syncMergedPageCount.value - 1);
-    if (syncMergedPageIndex.value < maxPage) syncMergedPageIndex.value++;
   },
   toggleLineNumbers: () => {
     window.dispatchEvent(new CustomEvent('terminal:toggle-line-numbers'));
@@ -1231,10 +1174,6 @@ const toolbarRightItems = computed(() => toolbarItems.value
                 </div>
               </div>
             </div>
-            <SyncMergedPanelManager v-else-if="shouldUseSyncMergedView" :sessions="syncMergedSessions"
-              :channel-name="currentSyncChannel?.name || ''"
-              :active-panel-id="activeKey" :page-size="SYNC_INPUT_PAGE_SIZE" :page-index="syncMergedPageIndex"
-              @activate="setActivePanel" @close-panel="removePanelRoot" @change-page="handleSyncMergedPageChange" />
             <TerminalPanelManager v-else :panels="visibleSessions" :active-panel-id="activeKey"
               :split-trees="splitTrees" :focused-leaf="focusedLeaf" :resolve-tree="ensureTree"
               :on-split-drag="startSplitDrag" :on-set-focused="setFocused" @activate="setActivePanel"
@@ -1277,17 +1216,16 @@ const toolbarRightItems = computed(() => toolbarItems.value
       <SettingsModal v-model:visible="isSettingsVisible" />
 
       <SyncInputModal v-model:visible="isSyncInputVisible" :active-key="activeKey" :sync-channels="syncChannels"
-        :selected-channel-id="selectedSyncChannelId" :visible-sessions="visibleSessions" :auto-merge="syncInputAutoMerge"
+        :selected-channel-id="selectedSyncChannelId"
         :replace-sync-channels="replaceSyncChannels" :clear-sync-channels="clearSyncChannels"
-        :set-selected-sync-channel-id="setSelectedSyncChannelId" @sync-changed="() => { syncMergedPageIndex = 0; }"
-        @sync-merged-page-change="(page) => { syncMergedPageIndex = page; }"
-        @auto-merge-change="(value) => { syncInputAutoMerge = value; persistSyncInputAutoMerge(value); }" />
+        :set-selected-sync-channel-id="setSelectedSyncChannelId" />
 
       <!-- Security Lock Screen -->
       <LockScreen />
 
       <!-- Session Overview (Ctrl+`) -->
-      <SessionOverview :visible="isOverviewVisible" :sessions="visibleSessions" :active-session-id="activeKey"
+      <SessionOverview :visible="isOverviewVisible" :sessions="visibleSessions" :sync-channels="syncChannels"
+        :active-session-id="activeKey"
         @close="isOverviewVisible = false" @select="(id) => { setActivePanel(id); }" />
 
     </div>

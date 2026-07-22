@@ -1,4 +1,4 @@
-use std::io::{Cursor, Read, Write};
+use std::io::{Read, Write};
 use std::future::Future;
 use std::net::{Shutdown, TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
@@ -1790,8 +1790,7 @@ async fn run_ssh_session_task(
                 let write_kind = connection_log::describe_payload(&data);
                 sent_packets = sent_packets.saturating_add(1);
                 sent_bytes = sent_bytes.saturating_add(write_len as u64);
-                let reader = Cursor::new(data);
-                if let Err(error) = channel.data(reader).await {
+                if let Err(error) = channel.data_bytes(data).await {
                     connection_log::append(&session_id, format!("channel write failed bytes={} kind={} error={}", write_len, write_kind, error));
                     let _ = app_handle.emit(
                         &format!("ssh-error-{}", session_id),
@@ -2101,7 +2100,7 @@ async fn run_shared_shell_channel_task(
                 let write_kind = connection_log::describe_payload(&data);
                 sent_packets = sent_packets.saturating_add(1);
                 sent_bytes = sent_bytes.saturating_add(write_len as u64);
-                if let Err(error) = channel.data(Cursor::new(data)).await {
+                if let Err(error) = channel.data_bytes(data).await {
                     connection_log::append(&channel_id, format!("shared channel write failed bytes={} kind={} error={}", write_len, write_kind, error));
                     terminate_channel(&app_handle, &channel_id, &channel_lifecycle, channel_state::TerminalCause::TransportError(error.to_string()));
                     break;

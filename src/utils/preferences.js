@@ -22,8 +22,6 @@ const PREFERENCE_DEFINITIONS = {
       commandKnowledge: 'Ctrl+Alt+3',
       overview: 'Ctrl+`',
       copySession: 'Ctrl+P',
-      syncMergedPrevPage: 'Ctrl+Shift+PageUp',
-      syncMergedNextPage: 'Ctrl+Shift+PageDown',
       toggleLineNumbers: 'Ctrl+Alt+L',
       toggleFind: 'Ctrl+Shift+F'
     }
