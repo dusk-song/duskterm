@@ -435,7 +435,7 @@ fn normalize_tunnel_config(
     }
 
     config.server_alive_interval = if config.server_alive_interval == 0 {
-        30
+        0
     } else {
         config.server_alive_interval.clamp(10, 120)
     };

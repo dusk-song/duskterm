@@ -845,7 +845,7 @@ pub async fn start_tunnel_runtime(
             )
             .await?;
 
-            let mut session = connection.shared_session.lock().await;
+            let session = connection.shared_session.lock().await;
             let allocated_port = session
                 .tcpip_forward(info.listen_host.clone(), info.listen_port as u32)
                 .await

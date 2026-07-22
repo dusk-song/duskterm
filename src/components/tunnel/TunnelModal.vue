@@ -69,7 +69,7 @@ function createEmptyDraft(sessionId = '') {
     listenPort: 15432,
     targetHost: '127.0.0.1',
     targetPort: 5432,
-    serverAliveInterval: 30,
+    serverAliveInterval: 0,
     allowPublicBind: false,
     createdAt: 0,
     updatedAt: 0,
@@ -84,7 +84,7 @@ function applyDraft(nextDraft = createEmptyDraft(selectedSessionId.value)) {
     listenPort: Number(nextDraft.listenPort || 15432),
     targetHost: nextDraft.targetHost || '127.0.0.1',
     targetPort: Number(nextDraft.targetPort || 5432),
-    serverAliveInterval: Number(nextDraft.serverAliveInterval || 30),
+    serverAliveInterval: Number(nextDraft.serverAliveInterval ?? 0),
     allowPublicBind: !!nextDraft.allowPublicBind,
     createdAt: Number(nextDraft.createdAt || 0),
     updatedAt: Number(nextDraft.updatedAt || 0),
@@ -177,7 +177,7 @@ function normalizePayload() {
     listenPort: Number(draft.listenPort),
     targetHost: requiresTarget.value ? String(draft.targetHost || '').trim() : null,
     targetPort: requiresTarget.value ? Number(draft.targetPort) : null,
-    serverAliveInterval: Number(draft.serverAliveInterval || 30),
+    serverAliveInterval: Number(draft.serverAliveInterval ?? 0),
     allowPublicBind: !!draft.allowPublicBind,
     createdAt: Number(draft.createdAt || 0),
     updatedAt: Number(draft.updatedAt || 0),
@@ -196,8 +196,8 @@ function validateDraft() {
     return false;
   }
 
-  if (payload.serverAliveInterval < 10 || payload.serverAliveInterval > 120) {
-    toast.warning('保活间隔必须在 10-120 秒之间。');
+  if (payload.serverAliveInterval !== 0 && (payload.serverAliveInterval < 10 || payload.serverAliveInterval > 120)) {
+    toast.warning('保活间隔必须为 0（禁用）或 10-120 秒。');
     return false;
   }
 

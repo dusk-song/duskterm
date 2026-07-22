@@ -4,6 +4,7 @@ use tauri::PhysicalSize;
 
 mod fileio;
 mod background;
+mod connection_log;
 mod remote_monitor;
 mod session;
 mod sftp;

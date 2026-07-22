@@ -107,7 +107,7 @@ const formState = reactive({
 
   // Connection
   connect_timeout: 10,
-  keep_alive_interval: 30, // 0 to disable
+  keep_alive_interval: 0, // 0 to disable
 
   // Advanced
   local_forward: '', // string "local:remote_ip:remote_port" multiple lines
@@ -294,7 +294,7 @@ function getNewSessionState() {
     font_size: 14,
     font_family: 'Consolas',
     connect_timeout: 10,
-    keep_alive_interval: 30,
+    keep_alive_interval: 0,
     local_forward: '',
     remote_forward: '',
     proxy_type: 'none',

@@ -2,10 +2,9 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use russh::{cipher, client, compression, kex, mac, AlgorithmKind, Preferred};
-use ssh_key::{Algorithm, EcdsaCurve, HashAlg};
+use russh::keys::{Algorithm, EcdsaCurve, HashAlg};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NegotiationProfile {
@@ -14,6 +13,7 @@ pub enum NegotiationProfile {
 }
 
 const MODERN_KEX_ALGOS: &[kex::Name] = &[
+    kex::MLKEM768X25519_SHA256,
     kex::CURVE25519,
     kex::CURVE25519_PRE_RFC_8731,
     kex::ECDH_SHA2_NISTP256,
@@ -77,7 +77,7 @@ const MODERN_MAC_ALGOS: &[mac::Name] = &[
 ];
 
 const MODERN_COMPRESSION_ALGOS: &[compression::Name] = &[compression::NONE];
-const MAX_CLIENT_KEEPALIVE_SECS: u64 = 10;
+const DEFAULT_CLIENT_KEEPALIVE_SECS: u64 = 0;
 
 #[derive(Clone, Default)]
 pub struct NegotiationProfileCache {
@@ -143,19 +143,17 @@ pub fn build_client_config(
         compression: Cow::Borrowed(MODERN_COMPRESSION_ALGOS),
     };
 
-    let interval = effective_keepalive_interval(keep_alive_interval);
-    if interval > 0 {
-        client_config.keepalive_interval = Some(Duration::from_secs(interval));
-    }
+    // russh's config keepalive is driven by receive silence. DuskTerm instead
+    // supervises fixed outbound deadlines from the owning session runtime.
+    let _ = keep_alive_interval;
 
     client_config
 }
 
-fn effective_keepalive_interval(keep_alive_interval: Option<u64>) -> u64 {
+pub(crate) fn effective_keepalive_interval(keep_alive_interval: Option<u64>) -> u64 {
     match keep_alive_interval {
-        Some(0) => 0,
-        Some(value) => value.clamp(1, MAX_CLIENT_KEEPALIVE_SECS),
-        None => MAX_CLIENT_KEEPALIVE_SECS,
+        Some(value) => value,
+        None => DEFAULT_CLIENT_KEEPALIVE_SECS,
     }
 }
 

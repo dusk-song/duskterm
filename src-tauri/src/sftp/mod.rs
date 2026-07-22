@@ -5,10 +5,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use crate::{ssh, ssh_algorithms};
-use async_trait::async_trait;
-use russh::client;
-use russh_keys::{check_known_hosts_path, load_secret_key};
+use crate::{connection_log, ssh, ssh_algorithms};
+use russh::{
+    client,
+    keys::{check_known_hosts_path, HashAlg, PublicKey},
+};
 use russh_sftp::{
     client::{error::Error as SftpClientError, RawSftpSession, SftpSession},
     protocol::{FileAttributes, StatusCode},
@@ -23,6 +24,13 @@ const SFTP_TRANSFER_BUFFER_SIZE: usize = 256 * 1024;
 const SFTP_TRANSFER_CHANNEL_SIZE: usize = 8;
 const SFTP_PROGRESS_EMIT_INTERVAL: Duration = Duration::from_millis(80);
 const SFTP_PROGRESS_EMIT_STEP_BYTES: u64 = 256 * 1024;
+
+pub(crate) fn sftp_client_config() -> russh_sftp::client::Config {
+    let mut config = russh_sftp::client::Config::default();
+    config.request_timeout_secs = 30;
+    config.max_concurrent_writes = 16;
+    config
+}
 const MAX_INLINE_EDITOR_FILE_BYTES: u64 = 8 * 1024 * 1024;
 
 /// 限制 SFTP list_cache 每个 session 最多缓存 40 个目录列表，防止内存泄漏
@@ -119,8 +127,9 @@ pub struct SftpAppState {
 
 pub struct SftpConnectionHandle {
     pub sftp: Arc<SftpSession>,
-    pub session: Option<client::Handle<DummyHandler>>,
-    pub jump_session: Option<client::Handle<DummyHandler>>,
+    pub session: Option<Arc<client::Handle<DummyHandler>>>,
+    pub jump_session: Option<Arc<client::Handle<DummyHandler>>>,
+    pub keepalive: Option<ssh::supervisor::KeepaliveTask>,
     pub reused_from_ssh: bool,
     pub connection_config: SshConfig,
     pub shared_ssh_session: Option<crate::ssh::SharedSshSessionSlot>,
@@ -129,8 +138,9 @@ pub struct SftpConnectionHandle {
 #[allow(dead_code)]
 struct TransferSftpSession {
     sftp: Arc<SftpSession>,
-    owned: Option<client::Handle<DummyHandler>>,
-    jump_owned: Option<client::Handle<DummyHandler>>,
+    owned: Option<Arc<client::Handle<DummyHandler>>>,
+    jump_owned: Option<Arc<client::Handle<DummyHandler>>>,
+    keepalive: Option<ssh::supervisor::KeepaliveTask>,
 }
 
 struct DirectoryPagerState {
@@ -266,13 +276,35 @@ fn extract_jump_host(config: &SshConfig) -> Option<JumpHostConfig> {
     })
 }
 
-#[async_trait]
 impl client::Handler for DummyHandler {
     type Error = russh::Error;
 
+    async fn kex_done(
+        &mut self,
+        _shared_secret: Option<&[u8]>,
+        names: &russh::Names,
+        _session: &mut client::Session,
+    ) -> Result<(), Self::Error> {
+        connection_log::append(
+            &self.session_id,
+            format!(
+                "SFTP SSH algorithms negotiated kex={} host_key={} cipher={} client_mac={} server_mac={} client_compression={:?} server_compression={:?} strict_kex={}",
+                names.kex.as_ref(),
+                names.key,
+                names.cipher.as_ref(),
+                names.client_mac.as_ref(),
+                names.server_mac.as_ref(),
+                names.client_compression,
+                names.server_compression,
+                names.strict_kex(),
+            ),
+        );
+        Ok(())
+    }
+
     async fn check_server_key(
         &mut self,
-        server_public_key: &russh_keys::PublicKey,
+        server_public_key: &PublicKey,
     ) -> Result<bool, Self::Error> {
         match check_known_hosts_path(
             &self.host,
@@ -289,7 +321,7 @@ impl client::Handler for DummyHandler {
                 }
 
                 let fingerprint = server_public_key
-                    .fingerprint(ssh_key::HashAlg::Sha256)
+                    .fingerprint(HashAlg::Sha256)
                     .to_string();
                 let algorithm = server_public_key.algorithm().to_string();
 
@@ -343,7 +375,7 @@ impl client::Handler for DummyHandler {
                 }
 
                 let fingerprint = server_public_key
-                    .fingerprint(ssh_key::HashAlg::Sha256)
+                    .fingerprint(HashAlg::Sha256)
                     .to_string();
                 let algorithm = server_public_key.algorithm().to_string();
 
@@ -492,58 +524,6 @@ where
     }
 }
 
-async fn authenticate_session<H>(
-    session: &mut client::Handle<H>,
-    username: String,
-    private_key_path: Option<String>,
-    password: Option<String>,
-    mut passphrase: Option<String>,
-) -> Result<bool, String>
-where
-    H: client::Handler + Send + 'static,
-    H::Error: std::fmt::Display,
-{
-    if let Some(p) = passphrase.as_ref() {
-        if p.trim().is_empty() {
-            passphrase = None;
-        }
-    }
-
-    let auth_result = if let Some(key_path) =
-        private_key_path.and_then(|p| if p.trim().is_empty() { None } else { Some(p) })
-    {
-        let key_path_buf = PathBuf::from(&key_path);
-        ensure_private_key_permissions(&key_path_buf)?;
-        let key_pair = load_secret_key(key_path, passphrase.as_deref())
-            .map_err(|e| format!("Failed to load key: {}", e))?;
-        let key_alg = key_pair.algorithm();
-        ssh_algorithms::validate_private_key_algorithm(&key_alg)?;
-        session
-            .authenticate_publickey(username, Arc::new(key_pair))
-            .await
-            .map_err(|e| format!("SFTP Auth Error: {}", e))?
-    } else if let Some(password) = password {
-        let mut password = password;
-        if password.trim().is_empty() {
-            return Err("Empty password not allowed".to_string());
-        }
-        let auth = session
-            .authenticate_password(username, password.clone())
-            .await
-            .map_err(|e| format!("SFTP Auth Error: {}", e));
-        password.zeroize();
-        auth?
-    } else {
-        return Err("No auth method".to_string());
-    };
-
-    if let Some(mut p) = passphrase {
-        p.zeroize();
-    }
-
-    Ok(auth_result)
-}
-
 pub async fn connect_sftp_legacy(
     app_handle: AppHandle,
     state: SftpAppState,
@@ -560,6 +540,7 @@ pub async fn connect_sftp_legacy(
                 sftp: Arc::new(sftp),
                 session: None,
                 jump_session: None,
+                keepalive: None,
                 reused_from_ssh: true,
                 connection_config: config,
                 shared_ssh_session: Some(shared_session_slot.clone()),
@@ -603,7 +584,8 @@ pub async fn connect_sftp_legacy(
         )
         .await?;
 
-        let jump_auth_ok = authenticate_session(
+        ssh::auth::authenticate_session(
+            &session_id,
             &mut jump_handle,
             jump.username,
             jump.private_key_path,
@@ -611,10 +593,6 @@ pub async fn connect_sftp_legacy(
             jump.passphrase,
         )
         .await?;
-
-        if !jump_auth_ok {
-            return Err("SFTP jump host authentication failed".to_string());
-        }
 
         Some(jump_handle)
     } else {
@@ -693,7 +671,8 @@ pub async fn connect_sftp_legacy(
         .await?
     };
 
-    let auth_ok = authenticate_session(
+    ssh::auth::authenticate_session(
+        &session_id,
         &mut session,
         config.username.clone(),
         config.private_key_path.clone(),
@@ -701,10 +680,6 @@ pub async fn connect_sftp_legacy(
         config.passphrase.clone(),
     )
     .await?;
-
-    if !auth_ok {
-        return Err("SFTP authentication failed".into());
-    }
 
     let channel = session
         .channel_open_session()
@@ -716,14 +691,23 @@ pub async fn connect_sftp_legacy(
         .await
         .map_err(|e| format!("Failed to request sftp subsystem: {}", e))?;
 
-    let sftp = SftpSession::new(channel.into_stream())
+    let sftp = SftpSession::new_with_config(channel.into_stream(), sftp_client_config())
         .await
         .map_err(|e| format!("Failed to init SFTP session: {}", e))?;
+    let session = Arc::new(session);
+    let jump_session = jump_session.map(Arc::new);
+    let keepalive = ssh::supervisor::spawn_keepalive_task(
+        session_id,
+        ssh_algorithms::effective_keepalive_interval(config.keep_alive_interval),
+        session.clone(),
+        jump_session.clone(),
+    );
 
     Ok(SftpConnectionHandle {
         sftp: Arc::new(sftp),
         session: Some(session),
         jump_session,
+        keepalive,
         reused_from_ssh: false,
         connection_config: config,
         shared_ssh_session: None,
@@ -1057,7 +1041,8 @@ async fn open_dedicated_sftp_session(
         )
         .await?;
 
-        let jump_auth_ok = authenticate_session(
+        ssh::auth::authenticate_session(
+            &transfer_prompt_id,
             &mut jump_handle,
             jump.username,
             jump.private_key_path,
@@ -1065,10 +1050,6 @@ async fn open_dedicated_sftp_session(
             jump.passphrase,
         )
         .await?;
-
-        if !jump_auth_ok {
-            return Err("SFTP jump host authentication failed".to_string());
-        }
 
         Some(jump_handle)
     } else {
@@ -1147,7 +1128,8 @@ async fn open_dedicated_sftp_session(
         .await?
     };
 
-    let auth_ok = authenticate_session(
+    ssh::auth::authenticate_session(
+        &transfer_prompt_id,
         &mut session,
         config.username.clone(),
         config.private_key_path.clone(),
@@ -1155,10 +1137,6 @@ async fn open_dedicated_sftp_session(
         config.passphrase.clone(),
     )
     .await?;
-
-    if !auth_ok {
-        return Err("SFTP authentication failed".into());
-    }
 
     let channel = session
         .channel_open_session()
@@ -1170,14 +1148,23 @@ async fn open_dedicated_sftp_session(
         .await
         .map_err(|e| format!("Failed to request sftp subsystem: {}", e))?;
 
-    let sftp = SftpSession::new(channel.into_stream())
+    let sftp = SftpSession::new_with_config(channel.into_stream(), sftp_client_config())
         .await
         .map_err(|e| format!("Failed to init SFTP session: {}", e))?;
+    let session = Arc::new(session);
+    let jump_session = jump_session.map(Arc::new);
+    let keepalive = ssh::supervisor::spawn_keepalive_task(
+        transfer_prompt_id,
+        ssh_algorithms::effective_keepalive_interval(config.keep_alive_interval),
+        session.clone(),
+        jump_session.clone(),
+    );
 
     Ok(TransferSftpSession {
         sftp: Arc::new(sftp),
         owned: Some(session),
         jump_owned: jump_session,
+        keepalive,
     })
 }
 
@@ -1207,6 +1194,7 @@ async fn open_transfer_sftp_session(
         sftp,
         owned: None,
         jump_owned: None,
+        keepalive: None,
     })
 }
 
@@ -1223,7 +1211,7 @@ async fn open_raw_sftp_subsystem_for_client_session(
         .await
         .map_err(|e| format!("Failed to request shared sftp subsystem: {}", e))?;
 
-    let raw = RawSftpSession::new(channel.into_stream());
+    let raw = RawSftpSession::new_with_config(channel.into_stream(), sftp_client_config());
     raw.init()
         .await
         .map_err(|e| format!("Failed to init shared raw SFTP session: {}", e))?;
@@ -1252,7 +1240,7 @@ async fn open_raw_sftp_subsystem_for_shared_session(
         .await
         .map_err(|e| format!("Failed to request shared sftp subsystem: {}", e))?;
 
-    let raw = RawSftpSession::new(channel.into_stream());
+    let raw = RawSftpSession::new_with_config(channel.into_stream(), sftp_client_config());
     raw.init()
         .await
         .map_err(|e| format!("Failed to init shared raw SFTP session: {}", e))?;
@@ -1316,7 +1304,7 @@ fn invalidate_session_cache(state: &SftpAppState, session_id: &str) {
 fn append_known_host(
     host: &str,
     port: u16,
-    key: &russh_keys::PublicKey,
+    key: &PublicKey,
     path: &PathBuf,
 ) -> Result<(), String> {
     use std::io::Write;
@@ -2909,7 +2897,10 @@ pub async fn sftp_disconnect_legacy(
     handle: Option<SftpConnectionHandle>,
     session_id: String,
 ) -> Result<(), String> {
-    if let Some(handle) = handle {
+    if let Some(mut handle) = handle {
+        if let Some(keepalive) = handle.keepalive.take() {
+            keepalive.stop("SFTP connection disconnecting").await;
+        }
         let _ = handle.sftp.close().await;
         if let Some(session) = handle.session {
             let _ = session
