@@ -87,7 +87,7 @@ const toastToneMap = {
   align-items: center;
   overflow: visible;
   border: 1px solid color-mix(in srgb, var(--app-toast-border) 72%, transparent);
-  border-radius: 999px;
+  border-radius: var(--niri-radius-md, 8px);
   color: var(--app-toast-text);
   background: color-mix(in srgb, var(--app-toast-bg) 76%, transparent);
   box-shadow: none;
@@ -99,7 +99,9 @@ const toastToneMap = {
   transition:
     opacity var(--app-motion-panel) var(--app-motion-ease),
     transform var(--app-motion-panel) var(--app-motion-ease),
-    border-color var(--app-motion-panel) var(--app-motion-ease);
+    border-color var(--app-motion-panel) var(--app-motion-ease),
+    background-color var(--app-motion-panel) var(--app-motion-ease),
+    color var(--app-motion-panel) var(--app-motion-ease);
 }
 
 .toast-card--leaving {
@@ -116,19 +118,27 @@ const toastToneMap = {
 }
 
 .toast-card--success {
-  border-color: color-mix(in srgb, var(--app-status-success) 36%, transparent);
+  color: var(--app-status-success);
+  border-color: var(--app-status-success-border);
+  background: color-mix(in srgb, var(--app-status-success-bg) 82%, var(--app-toast-bg));
 }
 
 .toast-card--error {
-  border-color: color-mix(in srgb, var(--app-risk-danger) 38%, transparent);
+  color: var(--app-risk-danger);
+  border-color: var(--app-risk-danger-border);
+  background: color-mix(in srgb, var(--app-risk-danger-bg) 84%, var(--app-toast-bg));
 }
 
 .toast-card--warning {
-  border-color: color-mix(in srgb, var(--app-risk-warning) 40%, transparent);
+  color: var(--app-risk-warning);
+  border-color: var(--app-risk-warning-border);
+  background: color-mix(in srgb, var(--app-risk-warning-bg) 84%, var(--app-toast-bg));
 }
 
 .toast-card--info {
-  border-color: color-mix(in srgb, var(--app-status-info) 32%, transparent);
+  color: var(--app-status-info);
+  border-color: var(--app-status-info-border);
+  background: color-mix(in srgb, var(--app-status-info-bg) 82%, var(--app-toast-bg));
 }
 
 @media (max-width: 980px) {

@@ -1379,7 +1379,7 @@ const toolbarRightItems = computed(() => toolbarItems.value
 
 .workspace-panel-main {
   min-width: 200px;
-  overflow: auto;
+  overflow: hidden;
 }
 
 .workspace-panel-command-knowledge {

@@ -57,9 +57,11 @@ describe('global background UI surfaces', () => {
     assert.doesNotMatch(app, /\.workspace-panel-main\s*\{[^}]*align-self:\s*stretch/s);
     assert.match(app, /\.recent-sessions-tree-container\s*\{[^}]*border-radius:\s*var\(--niri-radius-lg/s);
     const duskDock = read('../components/app-shell/DuskDock.vue');
-    assert.match(duskDock, /\.dusk-dock\s*\{[^}]*border-radius:\s*8px/s);
+    assert.match(duskDock, /\.dusk-dock\s*\{[^}]*border-radius:\s*var\(--niri-radius-md,\s*8px\)/s);
     assert.match(duskDock, /\.dusk-dock\s*\{[^}]*height:\s*26px[^}]*background:\s*color-mix\(in srgb,\s*var\(--tb-bg,\s*var\(--app-bg-dialog\)\)\s*var\(--tb-surface-opacity,\s*98%\),\s*transparent\)/s);
-    assert.match(duskDock, /\.dusk-dock--compact\s*\{[^}]*border-radius:\s*8px/s);
+    assert.match(duskDock, /\.dusk-dock--compact\s*\{[^}]*border-radius:\s*var\(--niri-radius-md,\s*8px\)/s);
+    assert.match(sessionDock, /\.session-current\s*\{[^}]*width:\s*min\(320px,\s*32vw\)[^}]*gap:\s*4px/s);
+    assert.match(sessionDock, /\.session-center\s*\{[^}]*flex:\s*1 1 auto[^}]*justify-content:\s*center[^}]*gap:\s*7px/s);
     assert.doesNotMatch(monitorDock, /\.monitor-dock\s*\{[^}]*background:/s);
     assert.doesNotMatch(monitorDock, /\.monitor-dock\s*\{[^}]*border-color:/s);
     assert.match(monitorDock, /import\s*\{\s*ArrowDown,\s*ArrowUp,\s*Cpu,\s*HardDrive,\s*MemoryStick\s*\}\s*from\s*'@lucide\/vue'/);
@@ -91,9 +93,9 @@ describe('global background UI surfaces', () => {
     assert.match(sessionDock, /<ChevronLeft\s+:size="13"/);
     assert.match(sessionDock, /<ChevronRight\s+:size="13"/);
     assert.match(sessionDock, /<DuskDock interactive class="session-current" data-tauri-drag-region>/);
-    assert.match(sessionDock, /class="session-state session-drag-region"/);
-    assert.match(sessionDock, /class="session-identity session-drag-region"/);
-    assert.match(sessionDock, /class="session-identity session-drag-region" data-tauri-drag-region/);
+    assert.match(sessionDock, /class="session-center session-drag-region" data-tauri-drag-region/);
+    assert.match(sessionDock, /class="session-state"/);
+    assert.match(sessionDock, /class="session-identity"/);
     assert.match(sessionDock, /const sessionIdentity = computed/);
     assert.match(sessionDock, /\{\{ sessionIdentity \}\}/);
     assert.doesNotMatch(sessionDock, /<DuskDock compact|sessionName|session-endpoint|endpoint/);
@@ -116,8 +118,11 @@ describe('global background UI surfaces', () => {
     assert.match(terminal, /case 'find': openSearch\(\); break/);
     assert.match(terminal, /openSearch\(\);/);
     assert.match(terminal, /--terminal-surface-bg/);
-    assert.match(terminal, /\.terminal-container\s*\{[^}]*padding:\s*6px 8px/s);
+    assert.match(terminal, /\.terminal-container\s*\{[^}]*padding:\s*0/s);
     assert.match(terminal, /\.terminal-container\s*\{[^}]*box-sizing:\s*border-box/s);
+    assert.match(terminal, /\.terminal-container\s+:deep\(\.xterm\)\s*\{[^}]*padding:\s*6px 8px/s);
+    assert.match(scrollbar, /\.terminal-container \.xterm-viewport\s*\{[^}]*overflow-y:\s*hidden !important/s);
+    assert.match(scrollbar, /\.terminal-container \.xterm-viewport::-webkit-scrollbar\s*\{[^}]*display:\s*none !important/s);
     assert.match(toastContainer, /class="toast-viewport"/);
     assert.doesNotMatch(toastContainer, /<Teleport to="body">|position:\s*fixed|left:\s*clamp/);
     assert.match(toastContainer, /\.toast-viewport\s*\{[^}]*position:\s*relative[^}]*flex-direction:\s*row-reverse/s);
@@ -126,6 +131,7 @@ describe('global background UI surfaces', () => {
     assert.match(toastContainer, /new ResizeObserver\(scheduleOverflowTrim\)/);
     assert.doesNotMatch(toastContainer, /toast-icon|component :is|data-slot="toast-rail"|backdrop-filter/);
     assert.match(toastContainer, /\.toast-card\s*\{[^}]*width:\s*max-content[^}]*height:\s*19px[^}]*font-size:\s*12px/s);
+    assert.match(toastContainer, /\.toast-card\s*\{[^}]*border-radius:\s*var\(--niri-radius-md,\s*8px\)/s);
     assert.match(toastContainer, /\.toast-message\s*\{[^}]*overflow:\s*visible[^}]*text-overflow:\s*clip/s);
     assert.doesNotMatch(toastContainer, /text-overflow:\s*ellipsis|max-width:\s*min\(260px,\s*28vw\)|max-width:\s*180px/);
     assert.match(toastComposable, /const idToTimer = new Map\(\)/);

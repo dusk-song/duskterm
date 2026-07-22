@@ -16,7 +16,7 @@ defineProps({ compact: Boolean, interactive: Boolean });
   height: 26px;
   padding: 0 8px;
   border: 1px solid color-mix(in srgb, var(--app-border-light) 42%, transparent);
-  border-radius: 8px;
+  border-radius: var(--niri-radius-md, 8px);
   color: var(--tb-text, var(--app-text));
   background: color-mix(in srgb, var(--tb-bg, var(--app-bg-dialog)) var(--tb-surface-opacity, 98%), transparent);
   box-shadow: 0 2px 10px color-mix(in srgb, var(--app-workspace-gap, #000) 30%, transparent);
@@ -32,6 +32,6 @@ defineProps({ compact: Boolean, interactive: Boolean });
 .dusk-dock--compact {
   height: 34px;
   padding: 0 9px;
-  border-radius: 8px;
+  border-radius: var(--niri-radius-md, 8px);
 }
 </style>

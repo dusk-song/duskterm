@@ -42,9 +42,10 @@ const switchSession = (direction) => {
         @click.stop="switchSession(-1)">
         <ChevronLeft :size="13" />
       </button>
-      <span class="session-state session-drag-region" :class="active ? stateClass(active) : null"
-        data-tauri-drag-region />
-      <span class="session-identity session-drag-region" data-tauri-drag-region>{{ sessionIdentity }}</span>
+      <span class="session-center session-drag-region" data-tauri-drag-region>
+        <span class="session-state" :class="active ? stateClass(active) : null" />
+        <span class="session-identity">{{ sessionIdentity }}</span>
+      </span>
       <button class="session-nav session-nav--next" :disabled="!canSwitchSession" title="下一个会话"
         @click.stop="switchSession(1)">
         <ChevronRight :size="13" />
@@ -55,7 +56,15 @@ const switchSession = (direction) => {
 
 <style scoped>
 .session-dock-wrap { display: flex; align-items: center; min-width: 0; pointer-events: none; }
-.session-current { max-width: min(360px, 34vw); gap: 6px; font-size: 12px; font-weight: 600; white-space: nowrap; pointer-events: auto; }
+.session-current {
+  width: min(320px, 32vw);
+  max-width: min(320px, 32vw);
+  gap: 4px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  pointer-events: auto;
+}
 .session-nav {
   display: inline-flex;
   width: 20px;
@@ -76,6 +85,15 @@ const switchSession = (direction) => {
 }
 .session-nav:disabled { opacity: 0.32; }
 .session-drag-region { cursor: default; }
+.session-center {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 0 6px;
+}
 .session-state {
   width: 6px;
   height: 6px;
@@ -89,6 +107,7 @@ const switchSession = (direction) => {
   min-width: 0;
   overflow: hidden;
   color: var(--app-text);
+  text-align: center;
   text-overflow: ellipsis;
 }
 </style>

@@ -42,7 +42,7 @@ html.dark {
   background-color: var(--scrollbar-thumb-hover) !important;
 }
 
-/* Remove the up/down and left/right arrow buttons on WebKit scrollbars */
+/* Remove every native arrow-button variant used by Chromium/WebView2. */
 
 /* Corner (where two scrollbars meet) should be transparent */
 *::-webkit-scrollbar-corner {
@@ -76,26 +76,45 @@ html.dark {
   transform: none;
 }
 
-*::-webkit-scrollbar-button {
+*::-webkit-scrollbar-button,
+*::-webkit-scrollbar-button:single-button,
+*::-webkit-scrollbar-button:double-button,
+*::-webkit-scrollbar-button:vertical,
+*::-webkit-scrollbar-button:horizontal,
+*::-webkit-scrollbar-button:increment,
+*::-webkit-scrollbar-button:decrement,
+*::-webkit-scrollbar-button:start,
+*::-webkit-scrollbar-button:end {
   -webkit-appearance: none !important;
+  appearance: none !important;
   width: 0 !important;
   height: 0 !important;
   min-width: 0 !important;
   min-height: 0 !important;
   display: none !important;
   background: transparent !important;
+  background-image: none !important;
   border: 0 !important;
 }
 
 *::-webkit-scrollbar-button:vertical:start:decrement,
 *::-webkit-scrollbar-button:vertical:end:increment,
 *::-webkit-scrollbar-button:horizontal:start:decrement,
-*::-webkit-scrollbar-button:horizontal:end:increment {
+*::-webkit-scrollbar-button:horizontal:end:increment,
+*::-webkit-scrollbar-button:vertical:start:increment,
+*::-webkit-scrollbar-button:vertical:end:decrement,
+*::-webkit-scrollbar-button:horizontal:start:increment,
+*::-webkit-scrollbar-button:horizontal:end:decrement {
   -webkit-appearance: none !important;
+  appearance: none !important;
   width: 0 !important;
   height: 0 !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
   display: none !important;
   background: transparent !important;
+  background-image: none !important;
+  border: 0 !important;
 }
 
 /* xterm owns nested native and custom scroll surfaces; keep them inside the terminal. */
@@ -105,42 +124,23 @@ html.dark {
 }
 
 .terminal-container .xterm-viewport {
-  width: calc(100% - 2px) !important;
-  scrollbar-gutter: stable;
-  scrollbar-width: thin;
+  width: 100% !important;
+  scrollbar-gutter: auto;
+  scrollbar-width: none !important;
   overflow-x: hidden !important;
+  overflow-y: hidden !important;
 }
 
 .terminal-container .xterm-viewport::-webkit-scrollbar {
-  width: var(--terminal-scrollbar-size) !important;
-  height: var(--terminal-scrollbar-size) !important;
-}
-
-.terminal-container .xterm-viewport::-webkit-scrollbar-track,
-.terminal-container .xterm-viewport::-webkit-scrollbar-corner {
-  background: transparent !important;
-}
-
-.terminal-container .xterm-viewport::-webkit-scrollbar-thumb {
-  min-height: 24px;
-  border: 1px solid transparent !important;
-  border-radius: 999px !important;
-  background-clip: padding-box !important;
-}
-
-.terminal-container .xterm-viewport::-webkit-scrollbar-button,
-.terminal-container .xterm-viewport::-webkit-scrollbar-button:single-button,
-.terminal-container .xterm-screen::-webkit-scrollbar-button,
-.terminal-container .xterm-screen::-webkit-scrollbar-button:single-button {
-  -webkit-appearance: none !important;
   width: 0 !important;
   height: 0 !important;
   display: none !important;
-  background: transparent !important;
 }
 
 .terminal-container .xterm .xterm-scrollable-element {
   overflow: hidden !important;
+  max-width: 100% !important;
+  max-height: 100% !important;
 }
 
 .terminal-container .xterm .xterm-scrollable-element > .scrollbar {

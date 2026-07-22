@@ -1,10 +1,7 @@
 <script setup>
-import { X } from '@lucide/vue';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
-import IconButton from '@/components/common/IconButton.vue';
 import { computeSplitLayout } from '@/utils/splitTree';
 import Terminal from './Terminal.vue';
-import TerminalTitleBar from './TerminalTitleBar.vue';
 
 const props = defineProps({
   panels: { type: Array, required: true },
@@ -20,7 +17,6 @@ const emit = defineEmits(['activate', 'close-panel', 'tab-drop', 'tab-context'])
 
 const rootRef = ref(null);
 const hasPanels = computed(() => props.panels.length > 0);
-const activePanel = computed(() => props.panels.find((panel) => panel.id === props.activePanelId) || null);
 
 const scrollIndex = ref(0);
 const isTransitioning = ref(false);
@@ -152,15 +148,6 @@ const dividerStyle = (divider) => divider.direction === 'vertical'
 
 <template>
   <div ref="rootRef" class="terminal-panel-manager">
-    <div v-if="hasPanels && activePanel" class="session-name-bar">
-      <TerminalTitleBar :session-id="activePanel.id" :session-name="activePanel.name || ''">
-        <template #actions>
-          <IconButton :icon="X" size="26px" aria-label="关闭会话" class="session-close-btn"
-            :action="() => emit('close-panel', activePanel.id)" />
-        </template>
-      </TerminalTitleBar>
-    </div>
-
     <div v-if="hasPanels" class="panel-scroll-track">
       <div class="panel-scroll-strip" :style="{ transform: `translateX(-${scrollIndex * 100}%)` }"
         :class="{ transitioning: isTransitioning }" @transitionend="onTransitionEnd">
@@ -187,30 +174,10 @@ const dividerStyle = (divider) => divider.direction === 'vertical'
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
+  box-sizing: border-box;
+  border: var(--niri-border-width, 1px) solid var(--app-panel-border);
   border-radius: var(--niri-radius-lg, 14px);
   background: var(--terminal-surface-bg, var(--app-bg-dialog));
-}
-
-.session-name-bar {
-  height: 28px;
-  display: flex;
-  align-items: center;
-  flex-shrink: 0;
-  background: color-mix(in srgb, var(--terminal-surface-bg, var(--app-bg-dialog)) 88%, transparent);
-  border-bottom: 1px solid color-mix(in srgb, var(--app-border-shadow, rgba(255,255,255,0.08)) 62%, transparent);
-  padding: 0 8px;
-}
-
-.session-close-btn {
-  flex: 0 0 auto;
-  z-index: 2;
-  --icon-btn-size: 26px;
-  --icon-btn-color: var(--app-terminal-close-color);
-  --icon-btn-hover-color: var(--app-terminal-close-hover-color);
-  --icon-btn-hover-bg: var(--app-terminal-close-hover-bg);
-  background: transparent;
-  opacity: 1;
-  box-shadow: none;
 }
 
 .panel-scroll-track {

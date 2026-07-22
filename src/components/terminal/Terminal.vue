@@ -2857,6 +2857,7 @@ onUnmounted(() => {
   box-sizing: border-box;
   background-color: var(--terminal-surface-bg, var(--app-bg-dialog));
   position: relative;
+  overflow: hidden;
   border-radius: 0;
   --terminal-cursor-color: var(--terminal-theme-fg, #d4d4d4);
 }
@@ -2896,6 +2897,7 @@ onUnmounted(() => {
   flex: 1 !important;
   min-width: 0;
   min-height: 0;
+  overflow: hidden;
 }
 
 .terminal-container {
@@ -2904,7 +2906,7 @@ onUnmounted(() => {
   min-width: 0;
   min-height: 0;
   box-sizing: border-box;
-  padding: 6px 8px;
+  padding: 0;
   overflow: hidden;
   display: flex;
   background: transparent;
@@ -2916,6 +2918,9 @@ onUnmounted(() => {
   height: 100% !important;
   width: 100% !important;
   min-height: 0 !important;
+  box-sizing: border-box !important;
+  padding: 6px 8px;
+  overflow: hidden !important;
   font-family: var(--terminal-font-family, var(--font-mono)) !important;
   font-variant-ligatures: none;
   font-feature-settings: "liga" 0, "calt" 0;
@@ -2925,7 +2930,6 @@ onUnmounted(() => {
   background: transparent !important;
 }
 
-.terminal-container :deep(.xterm),
 .terminal-container :deep(.xterm *) {
   box-sizing: content-box;
 }
