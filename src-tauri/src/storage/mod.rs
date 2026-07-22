@@ -511,6 +511,16 @@ pub fn load_sessions(
 }
 
 #[tauri::command]
+pub fn clear_recent_sessions(state: tauri::State<'_, SharedStorageState>) -> Result<(), String> {
+    let state = state.lock().unwrap();
+    let mut data = load_storage_data(&state)?;
+    for session in &mut data.sessions {
+        session.last_connected = None;
+    }
+    save_storage_data(&state, &data)
+}
+
+#[tauri::command]
 pub fn save_session(
     state: tauri::State<'_, SharedStorageState>,
     mut session: SessionConfig,

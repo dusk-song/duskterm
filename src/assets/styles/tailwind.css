@@ -62,7 +62,7 @@
     --app-text-muted: hsl(var(--muted-foreground));
     --app-text-title: hsl(var(--foreground));
 
-    --app-font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    --app-font-family: 'Consolas', 'Dusk Noto Sans SC', 'Microsoft YaHei', monospace;
     --app-font-title-size: 16px;
     --app-font-body-size: 13px;
     --app-font-caption-size: 12px;
@@ -137,6 +137,7 @@
 
     /* Titlebar */
     --tb-bg: hsl(36 24% 89%);
+    --tb-surface-opacity: 97%;
     --tb-dropdown-bg: hsl(var(--card));
     --tb-dropdown-border: hsl(var(--border));
     --tb-entry-hover: hsl(var(--foreground) / 0.07);
@@ -184,21 +185,21 @@
   }
 
   html.dark {
-    --background: 240 4% 9%;
+    --background: 0 0% 5%;
     --foreground: 38 18% 87%;
-    --card: 240 3% 15%;
+    --card: 0 0% 10%;
     --card-foreground: 38 18% 87%;
-    --popover: 240 3% 13%;
+    --popover: 0 0% 9%;
     --popover-foreground: 38 18% 87%;
 
     --primary: 34 59% 47%;
     --primary-foreground: 30 34% 9%;
 
-    --secondary: 240 3% 17%;
+    --secondary: 0 0% 12%;
     --secondary-foreground: 38 18% 87%;
-    --muted: 240 3% 16%;
+    --muted: 0 0% 11%;
     --muted-foreground: 34 11% 63%;
-    --accent: 240 3% 18%;
+    --accent: 0 0% 13%;
     --accent-foreground: 38 18% 87%;
 
     --destructive: 5 49% 63%;
@@ -217,7 +218,7 @@
     --color-success: #b8a06a;
     --color-warning-foreground: #111113;
 
-    --app-bg-dialog: #242426;
+    --app-bg-dialog: #191919;
     --app-terminal-bg: #111113;
     --app-text-secondary: hsl(var(--muted-foreground));
     --app-border-light: rgba(228, 224, 216, 0.05);
@@ -231,7 +232,7 @@
     --app-control-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 1px 1px rgba(0, 0, 0, 0.28);
     --app-control-inset-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.24);
 
-    --app-input-bg: #171719;
+    --app-input-bg: #111111;
     --app-input-border: rgba(228, 224, 216, 0.12);
 
     --app-focus-ring: rgba(192, 132, 47, 0.42);
@@ -239,15 +240,15 @@
     --app-focus-bg: rgba(192, 132, 47, 0.12);
     --app-focus-shadow: inset 0 0 0 1px var(--app-focus-ring);
 
-    --app-workspace-bg: #171719;
+    --app-workspace-bg: #0d0d0d;
     --app-workspace-gap: rgba(228, 224, 216, 0.055);
-    --app-panel-bg: #242426;
+    --app-panel-bg: #191919;
     --app-panel-border: rgba(228, 224, 216, 0.1);
     --app-panel-shadow: var(--niri-shadow-panel);
 
     --app-tab-bg-active: #2b2926;
     --app-tab-bg-inactive: rgba(228, 224, 216, 0.055);
-    --app-sidebar-bg: #242426;
+    --app-sidebar-bg: #191919;
     --app-sidebar-border: rgba(228, 224, 216, 0.09);
 
     --app-selection-bg: rgba(192, 132, 47, 0.18);
@@ -267,7 +268,7 @@
     --app-risk-danger-bg: rgba(209, 122, 114, 0.16);
     --app-risk-danger-border: rgba(209, 122, 114, 0.34);
     --app-risk-danger-glow: 0 0 0 4px rgba(209, 122, 114, 0.08);
-    --app-toast-bg: #242426;
+    --app-toast-bg: #191919;
     --app-toast-border: rgba(228, 224, 216, 0.12);
     --app-toast-text: #e4e0d8;
     --app-toast-shadow: 0 18px 46px rgba(0, 0, 0, 0.34), var(--app-surface-highlight);
@@ -276,8 +277,9 @@
     --app-terminal-close-bg: rgba(228, 224, 216, 0.075);
     --app-terminal-close-hover-bg: rgba(209, 122, 114, 0.24);
 
-    --tb-bg: #202023;
-    --tb-dropdown-bg: #242426;
+    --tb-bg: #111111;
+    --tb-surface-opacity: 98%;
+    --tb-dropdown-bg: #191919;
     --tb-dropdown-border: rgba(228, 224, 216, 0.09);
     --tb-divider: rgba(228, 224, 216, 0.09);
     --tb-entry-hover: rgba(228, 224, 216, 0.08);
@@ -286,9 +288,9 @@
     --tb-icon-filter: invert(1);
     --settings-icon-filter: invert(1);
 
-    --mac-bg-primary: #242426;
-    --mac-bg-secondary: #171719;
-    --mac-bg-tertiary: #202023;
+    --mac-bg-primary: #191919;
+    --mac-bg-secondary: #0d0d0d;
+    --mac-bg-tertiary: #141414;
     --mac-border: rgba(228, 224, 216, 0.09);
     --mac-border-light: rgba(228, 224, 216, 0.05);
     --mac-text-primary: #e4e0d8;

@@ -1,5 +1,6 @@
 use image::codecs::jpeg::JpegEncoder;
 use image::imageops::FilterType;
+use image::ImageReader;
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::fs::File;
@@ -47,7 +48,11 @@ fn validate_source(path: &Path) -> Result<(u32, u32), String> {
     if metadata.len() > MAX_SOURCE_BYTES {
         return Err("Background image file cannot exceed 128 MB".to_string());
     }
-    let dimensions = image::image_dimensions(path)
+    let dimensions = ImageReader::open(path)
+        .map_err(|error| format!("Failed to open background image: {error}"))?
+        .with_guessed_format()
+        .map_err(|error| format!("Failed to detect background image format: {error}"))?
+        .into_dimensions()
         .map_err(|error| format!("Failed to read background image dimensions: {error}"))?;
     let pixels = dimensions.0 as u64 * dimensions.1 as u64;
     if dimensions.0 == 0 || dimensions.1 == 0 || pixels > MAX_SOURCE_PIXELS {
@@ -83,8 +88,12 @@ fn encode_cache(
     target_height: u32,
 ) -> Result<(u32, u32), String> {
     let (source_width, source_height) = validate_source(source)?;
-    let image =
-        image::open(source).map_err(|error| format!("Failed to decode background image: {error}"))?;
+    let image = ImageReader::open(source)
+        .map_err(|error| format!("Failed to open background image: {error}"))?
+        .with_guessed_format()
+        .map_err(|error| format!("Failed to detect background image format: {error}"))?
+        .decode()
+        .map_err(|error| format!("Failed to decode background image: {error}"))?;
     let (width, height) =
         target_dimensions(source_width, source_height, target_width, target_height);
     let output = if width != source_width || height != source_height {
@@ -92,8 +101,8 @@ fn encode_cache(
     } else {
         image
     };
-    let mut file =
-        File::create(target).map_err(|error| format!("Failed to create background cache: {error}"))?;
+    let mut file = File::create(target)
+        .map_err(|error| format!("Failed to create background cache: {error}"))?;
     let mut encoder = JpegEncoder::new_with_quality(&mut file, JPEG_QUALITY);
     let rgb = output.to_rgb8();
     encoder
@@ -224,7 +233,10 @@ pub async fn import_background_image(
                 (
                     width,
                     height,
-                    destination.join("optimized.jpg").to_string_lossy().into_owned(),
+                    destination
+                        .join("optimized.jpg")
+                        .to_string_lossy()
+                        .into_owned(),
                 )
             };
             let asset = BackgroundAsset {
@@ -290,7 +302,10 @@ pub fn delete_background_image(resource_id: String) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{should_reuse_original, target_dimensions};
+    use super::{should_reuse_original, target_dimensions, validate_source};
+    use image::{DynamicImage, ImageFormat};
+    use std::fs;
+    use uuid::Uuid;
 
     #[test]
     fn does_not_upscale_small_images() {
@@ -310,5 +325,18 @@ mod tests {
     #[test]
     fn does_not_reuse_oversized_images() {
         assert!(!should_reuse_original(8000, 4000, 3840, 2160));
+    }
+
+    #[test]
+    fn detects_dimensions_from_content_when_extension_is_inaccurate() {
+        let path =
+            std::env::temp_dir().join(format!("duskterm-background-format-{}.jpg", Uuid::new_v4()));
+        let mut file = fs::File::create(&path).expect("create temporary image");
+        DynamicImage::new_rgba8(7, 5)
+            .write_to(&mut file, ImageFormat::Png)
+            .expect("write PNG content");
+
+        assert_eq!(validate_source(&path).expect("read dimensions"), (7, 5));
+        let _ = fs::remove_file(path);
     }
 }

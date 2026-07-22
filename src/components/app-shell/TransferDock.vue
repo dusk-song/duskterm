@@ -4,11 +4,15 @@ import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { invokeCommand } from '@/utils/ipc';
 import DuskDock from './DuskDock.vue';
 
+defineProps({ embedded: Boolean });
+
 const status = ref({ active: 0, total: 0, lastName: '', items: [] });
 const open = ref(false);
 const rootRef = ref(null);
 const popupStyle = ref({});
 let popupPositionFrame = null;
+let statusUpdateFrame = null;
+let pendingStatusDetail = null;
 const transferCount = computed(() => status.value.active || status.value.total || 0);
 
 const formatSize = (bytes) => {
@@ -42,15 +46,10 @@ const schedulePopupPosition = () => {
     updatePopupPosition();
   });
 };
-const toggleOpen = async () => {
+const toggleOpen = () => {
   open.value = !open.value;
-  if (open.value) {
-    await nextTick();
-    updatePopupPosition();
-  }
 };
-const onStatus = (event) => {
-  const detail = event.detail || {};
+const applyStatus = (detail) => {
   if (Number(detail.active || 0) > 0 && status.value.active === 0) open.value = true;
   status.value = {
     active: Number(detail.active || 0),
@@ -58,6 +57,16 @@ const onStatus = (event) => {
     lastName: detail.lastName || '',
     items: Array.isArray(detail.items) ? detail.items : [],
   };
+};
+const onStatus = (event) => {
+  pendingStatusDetail = event.detail || {};
+  if (statusUpdateFrame) return;
+  statusUpdateFrame = requestAnimationFrame(() => {
+    statusUpdateFrame = null;
+    const detail = pendingStatusDetail;
+    pendingStatusDetail = null;
+    applyStatus(detail || {});
+  });
 };
 const onOutside = (event) => {
   if (open.value && !event.composedPath().some((element) => element?.classList?.contains('transfer-dock-root') || element?.classList?.contains('transfer-popup'))) open.value = false;
@@ -83,12 +92,18 @@ onUnmounted(() => {
   window.removeEventListener('resize', schedulePopupPosition);
   window.removeEventListener('scroll', schedulePopupPosition, true);
   if (popupPositionFrame) cancelAnimationFrame(popupPositionFrame);
+  if (statusUpdateFrame) cancelAnimationFrame(statusUpdateFrame);
 });
 </script>
 
 <template>
   <div ref="rootRef" class="transfer-dock-root" @dblclick.stop>
-    <DuskDock class="transfer-dock" :class="{ active: open }" interactive @click="toggleOpen">
+    <button v-if="embedded" type="button" class="transfer-dock transfer-dock--embedded" :class="{ active: open }"
+      title="传输列表" @pointerdown.stop @click.stop="toggleOpen">
+      <ListChecks :size="14" />
+      <span v-if="transferCount" class="transfer-badge" :class="{ busy: status.active }">{{ transferCount }}</span>
+    </button>
+    <DuskDock v-else class="transfer-dock" :class="{ active: open }" interactive @click.stop="toggleOpen">
       <ListChecks :size="14" />
       <span v-if="transferCount" class="transfer-badge" :class="{ busy: status.active }">{{ transferCount }}</span>
     </DuskDock>
@@ -119,6 +134,24 @@ onUnmounted(() => {
 .transfer-dock-root { position: relative; pointer-events: auto; }
 .transfer-dock { gap: 6px; padding: 0 9px; font-size: 11px; cursor: pointer; white-space: nowrap; }
 .transfer-dock.active { border-color: color-mix(in srgb, var(--color-primary) 65%, transparent); }
+.transfer-dock--embedded {
+  display: inline-flex;
+  min-width: 29px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 999px;
+  color: var(--tb-text, var(--app-text));
+  background: transparent;
+  opacity: .78;
+}
+.transfer-dock--embedded:hover,
+.transfer-dock--embedded.active {
+  background: var(--tb-hover-bg, color-mix(in srgb, var(--app-text) 8%, transparent));
+  opacity: 1;
+}
 .transfer-badge {
   display: inline-flex;
   min-width: 16px;

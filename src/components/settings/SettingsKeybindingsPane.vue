@@ -83,14 +83,17 @@ defineProps({
 
 .kb-table {
   @apply border border-[hsl(var(--border))] rounded-[var(--radius-md)] overflow-hidden;
+  border-color: color-mix(in srgb, hsl(var(--border)) 55%, transparent);
 }
 
 .kb-header {
   @apply flex items-center gap-2 px-2.5 py-[5px] text-[11px] font-semibold text-[hsl(var(--muted-foreground))] bg-[hsl(var(--secondary))] border-b border-[hsl(var(--border))] select-none;
+  border-bottom-color: color-mix(in srgb, hsl(var(--border)) 34%, transparent);
 }
 
 .kb-row {
-  @apply flex items-center gap-2 px-2.5 py-1 text-xs border-b border-[hsl(var(--border)/0.5)] transition-colors duration-100;
+  @apply flex items-center gap-2 px-2.5 py-1 text-xs border-b transition-colors duration-100;
+  border-bottom-color: color-mix(in srgb, hsl(var(--border)) 18%, transparent);
 }
 
 .kb-row:last-child {

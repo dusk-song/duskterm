@@ -44,18 +44,11 @@ html.dark .tiled-panel {
   box-shadow: var(--app-panel-shadow);
 }
 
-.tiled-panel.is-padded .tiled-panel__body {
-  padding: 12px;
-}
-
-.tiled-panel.is-dense .tiled-panel__body {
-  padding: 8px;
-}
-
 .tiled-panel__body {
   flex: 1 1 auto;
   min-width: 0;
   min-height: 0;
+  padding: 0;
   overflow: hidden;
 }
 </style>

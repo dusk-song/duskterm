@@ -6,7 +6,6 @@ import { executeMenuAction } from '@/composables/useMenu';
 import { useTheme } from '@/composables/useTheme';
 import { isTauriRuntime } from '@/utils/ipc';
 import { resolveTitlebarVisibility } from '@/utils/titlebarLayout';
-import ToastContainer from '@/components/ui/toast/ToastContainer.vue';
 import DuskDock from './DuskDock.vue';
 import MonitorDock from './MonitorDock.vue';
 import SessionDock from './SessionDock.vue';
@@ -84,7 +83,7 @@ async function initWindow() {
   unlistenResize = await win.onResized(syncMaximized);
 }
 const winMax = async () => { await win?.toggleMaximize(); syncMaximized(); };
-const onDoubleClick = (event) => { if (!event.target.closest('button,.tb-menu-item,.monitor-dock,.transfer-dock-root')) winMax(); };
+const onDoubleClick = (event) => { if (!event.target.closest('button')) winMax(); };
 const shortcuts = {};
 menus.forEach((menu) => menu.items.forEach((item) => { if (item.key && item.shortcut) shortcuts[item.shortcut.replace(/\s+/g, '').toLowerCase()] = item.key; }));
 function onKeydown(event) {
@@ -126,23 +125,22 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <header ref="titlebarRef" data-tauri-drag-region class="dusk-titlebar" @dblclick="onDoubleClick">
-    <div class="titlebar-drag-layer" data-tauri-drag-region aria-hidden="true" />
+  <header ref="titlebarRef" class="dusk-titlebar">
     <div class="titlebar-left">
       <DuskDock class="menu-dock" interactive>
-        <img src="/tauri.svg" class="app-icon" alt="DuskTerm" />
+        <img src="/tauri.svg" class="app-icon" alt="DuskTerm" draggable="false" data-tauri-drag-region
+          @dblclick="onDoubleClick" />
         <button v-for="menu in visibleMenus" :key="menu.key" class="tb-menu-item" :class="{ open: openKey === menu.key }"
           @click.stop="openMenu(menu.key, $event)" @mouseenter="hoverMenu(menu.key, $event)">{{ menu.label }}</button>
       </DuskDock>
     </div>
     <div class="titlebar-center">
-      <ToastContainer class="titlebar-toast" />
-      <SessionDock />
+      <SessionDock @dblclick="onDoubleClick" />
     </div>
     <div class="titlebar-right">
       <MonitorDock v-if="visibility.monitor" />
-      <TransferDock v-show="visibility.transfer" />
-      <DuskDock class="window-dock" interactive>
+      <DuskDock class="utility-dock" interactive>
+        <TransferDock v-show="visibility.transfer" embedded />
         <button class="tb-btn" @click="toggleTheme" :title="isDark ? '切换亮色主题' : '切换暗色主题'"><Sun v-if="isDark" :size="15" /><Moon v-else :size="15" /></button>
         <button class="tb-btn" @click="win?.minimize()" title="最小化"><Minus :size="13" /></button>
         <button class="tb-btn" @click="winMax" :title="isMaximized ? '还原' : '最大化'"><Copy v-if="isMaximized" :size="12" /><Square v-else :size="12" /></button>
@@ -161,21 +159,19 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.dusk-titlebar { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; height: 62px; padding: 0 7px; box-sizing: border-box; flex: 0 0 auto; background: transparent; user-select: none; z-index: var(--z-chrome); }
-.titlebar-drag-layer { position: absolute; inset: 0; z-index: 0; }
-.titlebar-left, .titlebar-center, .titlebar-right { transform: translateY(-10px); }
+.dusk-titlebar { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; height: 46px; padding: 0 5px; box-sizing: border-box; flex: 0 0 auto; background: transparent; user-select: none; z-index: var(--z-chrome); }
 .titlebar-left, .titlebar-right { position: relative; z-index: 1; display: flex; align-items: center; min-width: 0; gap: 6px; }
 .titlebar-left { justify-content: flex-start; }
 .titlebar-right { justify-content: flex-end; }
-.titlebar-center { position: relative; z-index: 1; display: flex; align-items: center; justify-self: center; pointer-events: none; min-width: 0; gap: 8px; }
-.titlebar-toast { flex: 0 1 auto; }
+.titlebar-center { position: relative; z-index: 1; display: flex; align-items: center; justify-self: center; pointer-events: none; min-width: 0; }
 .menu-dock { padding-left: 8px; }
-.app-icon { width: 17px; height: 17px; margin-right: 4px; pointer-events: none; }
+.app-icon { width: 17px; height: 17px; margin-right: 4px; }
 .tb-menu-item, .tb-btn { height: 24px; border: 0; border-radius: 999px; color: var(--tb-text, var(--app-text)); background: transparent; cursor: default; }
 .tb-menu-item { padding: 0 7px; font-size: 12px; }
 .tb-btn { display: inline-flex; width: 29px; align-items: center; justify-content: center; padding: 0; opacity: .78; }
 .tb-menu-item:hover, .tb-menu-item.open, .tb-btn:hover { background: var(--tb-hover-bg, color-mix(in srgb, var(--app-text) 8%, transparent)); opacity: 1; }
 .tb-btn.close:hover { color: #fff; background: var(--tb-close-hover, var(--color-danger)); }
+.utility-dock,
 .window-dock { padding: 0 4px; }
 </style>
 

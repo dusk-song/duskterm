@@ -12,6 +12,7 @@ import SelectContent from '@/components/ui/select/SelectContent.vue';
 import SelectItem from '@/components/ui/select/SelectItem.vue';
 import SelectTrigger from '@/components/ui/select/SelectTrigger.vue';
 import SelectValue from '@/components/ui/select/SelectValue.vue';
+import EditableSelect from '@/components/ui/select/EditableSelect.vue';
 import Textarea from '@/components/ui/textarea/Textarea.vue';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from '@/composables/useToast';
@@ -21,6 +22,7 @@ import {
   Eye,
   FolderOpen,
   Info,
+  RefreshCw,
   Server,
   Settings,
   Zap
@@ -48,6 +50,9 @@ const isTestingConnection = ref(false);
 const activeProtocol = ref('ssh');
 const activeConfigTab = ref('basic');
 const serialPortOptions = ref([]);
+const serialPathMode = ref('auto');
+const serialPortsLoading = ref(false);
+let serialPortRequestId = 0;
 
 const protocolOptions = [
   { key: 'ssh', label: 'SSH', desc: '标准终端连接' },
@@ -123,7 +128,7 @@ const formState = reactive({
   login_script: '', // multiline string
   serial_path: '',
   baud_rate: 9600,
-  data_bits: 8,
+  data_bits: '8',
   stop_bits: '1',
   parity: 'none',
   flow_control: 'none'
@@ -204,8 +209,27 @@ const computedRules = computed(() => {
 
 const formRef = ref();
 
+const normalizeSerialFormFields = () => {
+  formState.data_bits = String(formState.data_bits || '8');
+  formState.stop_bits = String(formState.stop_bits || '1');
+  formState.parity = String(formState.parity || 'none');
+  formState.flow_control = String(formState.flow_control || 'none');
+};
+
+const serialPortSelectOptions = computed(() => {
+  return serialPortOptions.value.map((item) => ({
+    value: item.value,
+    label: item.label || item.value
+  }));
+});
+
 // --- Lifecycle ---
 watch(() => props.visible, (val) => {
+  if (!val) {
+    serialPortRequestId += 1;
+    serialPortsLoading.value = false;
+    return;
+  }
   if (val) {
     activeConfigTab.value = 'basic';
     if (props.sessionData) {
@@ -218,11 +242,17 @@ watch(() => props.visible, (val) => {
       data.jump_password = '';
       data.jump_passphrase = '';
       Object.assign(formState, defaultState, data);
+      normalizeSerialFormFields();
       activeProtocol.value = formState.protocol || 'ssh';
+      serialPathMode.value = serialPortOptions.value.some((item) => item.value === formState.serial_path)
+        ? 'detected'
+        : 'custom';
     } else {
       // Create Mode
       Object.assign(formState, getNewSessionState());
+      normalizeSerialFormFields();
       activeProtocol.value = 'ssh';
+      serialPathMode.value = 'auto';
     }
 
     if (activeProtocol.value === 'serial') {
@@ -238,8 +268,10 @@ watch(activeProtocol, (value) => {
     formState.host = '';
     formState.port = 0;
     formState.username = '';
-  } else if (!formState.port) {
-    formState.port = value === 'telnet' ? 23 : 22;
+  } else {
+    serialPortRequestId += 1;
+    serialPortsLoading.value = false;
+    if (!formState.port) formState.port = value === 'telnet' ? 23 : 22;
   }
 });
 
@@ -281,7 +313,7 @@ function getNewSessionState() {
     login_script: '',
     serial_path: '',
     baud_rate: 9600,
-    data_bits: 8,
+    data_bits: '8',
     stop_bits: '1',
     parity: 'none',
     flow_control: 'none'
@@ -289,14 +321,30 @@ function getNewSessionState() {
 }
 
 const loadSerialPortOptions = async () => {
+  const requestId = ++serialPortRequestId;
+  serialPortsLoading.value = true;
   try {
     const ports = await invokeCommand('list_serial_ports');
+    if (requestId !== serialPortRequestId) return;
     serialPortOptions.value = Array.isArray(ports)
       ? ports.map((item) => ({ value: item.path, label: item.label || item.path }))
       : [];
+    if (activeProtocol.value === 'serial' && serialPathMode.value === 'auto') {
+      formState.serial_path = serialPortOptions.value[0]?.value || '';
+    } else if (
+      activeProtocol.value === 'serial'
+      && isEditMode.value
+      && serialPathMode.value === 'custom'
+      && serialPortOptions.value.some((item) => item.value === formState.serial_path)
+    ) {
+      serialPathMode.value = 'detected';
+    }
   } catch (error) {
+    if (requestId !== serialPortRequestId) return;
     console.error('Load serial ports failed:', error);
     serialPortOptions.value = [];
+  } finally {
+    if (requestId === serialPortRequestId) serialPortsLoading.value = false;
   }
 };
 
@@ -579,8 +627,16 @@ const groupOptions = computed(() => {
                 <template v-if="isSerialProtocol">
                   <div class="form-item mb-2" name="serial_path"><label
                       class="text-sm text-muted-foreground mb-1">串口设备</label>
-                    <Input size="sm" class="w-[280px] flex-none" v-model="formState.serial_path"
-                      placeholder="例如: COM3 / /dev/ttyUSB0 / /dev/ttyS0" />
+                    <div class="serial-port-row">
+                      <EditableSelect v-model="formState.serial_path" v-model:mode="serialPathMode"
+                        :options="serialPortSelectOptions" class="w-[244px] flex-none"
+                        placeholder="COM3 / /dev/ttyUSB0" automatic-label="自动检测" custom-label="自定义"
+                        aria-label="串口设备" />
+                      <Button type="button" variant="ghost" size="sm" class="serial-refresh-button"
+                        :disabled="serialPortsLoading" title="刷新串口列表" @click="loadSerialPortOptions">
+                        <RefreshCw :size="14" :class="{ 'is-loading': serialPortsLoading }" />
+                      </Button>
+                    </div>
                   </div>
                   <div class="form-item mb-2" name="baud_rate"><label
                       class="text-sm text-muted-foreground mb-1">波特率</label>
@@ -979,6 +1035,32 @@ const groupOptions = computed(() => {
 
 .session-textarea {
   @apply resize-y min-h-[100px] w-full;
+}
+
+.serial-port-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.serial-refresh-button {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+}
+
+.serial-refresh-button .is-loading {
+  animation: serial-refresh-spin 700ms linear infinite;
+}
+
+@keyframes serial-refresh-spin {
+  to { transform: rotate(360deg); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .serial-refresh-button .is-loading {
+    animation: none;
+  }
 }
 
 /* ── 辅助文字 ── */

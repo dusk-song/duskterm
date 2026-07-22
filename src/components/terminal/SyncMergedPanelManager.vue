@@ -207,13 +207,13 @@ const onPaneKeydown = (event, paneIndex, sessionId) => {
 }
 
 .sync-merged-pane.active {
-  outline: 1px solid var(--app-selection-bg);
-  outline-offset: -1px;
+  outline: none;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--app-bg-dialog) 82%, var(--app-text) 18%);
 }
 
 .sync-merged-pane:focus-visible {
-  outline: 1px solid var(--app-selection-bg);
-  outline-offset: -1px;
+  outline: none;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--app-bg-dialog) 82%, var(--app-text) 18%);
 }
 
 .sync-merged-pane-title {

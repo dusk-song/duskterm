@@ -281,20 +281,17 @@ onUnmounted(() => {
 
 <template>
   <aside class="command-knowledge-panel" aria-label="命令知识库">
-    <header class="knowledge-header">
-      <div class="knowledge-title">
-        <span>命令知识库</span>
-      </div>
+    <div class="knowledge-toolbar">
+      <Input v-model="searchText" placeholder="搜索标题、命令、触发词、标签、说明" />
       <div class="knowledge-actions">
         <IconButton :icon="Upload" size="sm" aria-label="导入" :action="importKnowledge" />
         <IconButton :icon="Download" size="sm" aria-label="导出" :action="exportKnowledge" />
         <IconButton :icon="Plus" size="sm" aria-label="新增" :action="openCreateDialog" />
         <IconButton :icon="X" size="sm" aria-label="关闭" :action="() => emit('close')" />
       </div>
-    </header>
+    </div>
 
     <div class="knowledge-search">
-      <Input v-model="searchText" placeholder="搜索标题、命令、触发词、标签、说明" />
       <div v-if="availableTags.length" class="knowledge-tag-filters" aria-label="标签筛选">
         <button v-for="tag in availableTags" :key="tag" type="button" class="knowledge-tag-chip"
           :class="{ active: isTagFilterActive(tag) }" :style="getTagStyle(tag)" @click="applyTagFilter(tag)">
@@ -356,12 +353,14 @@ onUnmounted(() => {
   height: 100%;
   min-width: 0;
   min-height: 0;
+  box-sizing: border-box;
+  padding: 6px;
   overflow: hidden;
   color: var(--app-text);
   background: transparent;
 }
 
-.knowledge-header,
+.knowledge-toolbar,
 .knowledge-actions,
 .detail-title-line,
 .detail-meta,
@@ -370,18 +369,16 @@ onUnmounted(() => {
   align-items: center;
 }
 
-.knowledge-header {
-  justify-content: space-between;
-  gap: 8px;
-  padding: 2px 2px 0;
+.knowledge-toolbar {
+  gap: 6px;
+  min-width: 0;
+  padding: 0;
 }
 
-.knowledge-title {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  min-width: 0;
-  font-weight: 650;
+.knowledge-toolbar :deep(input) {
+  min-width: 120px;
+  height: 30px;
+  flex: 1 1 140px;
 }
 
 .knowledge-actions,
@@ -487,7 +484,7 @@ onUnmounted(() => {
   padding: 1px 5px;
   border: 1px solid var(--app-border-light);
   border-radius: 4px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   color: var(--app-text-muted);
 }
@@ -498,7 +495,7 @@ onUnmounted(() => {
 }
 
 .knowledge-row-command {
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   color: var(--app-text-muted);
 }
@@ -577,7 +574,7 @@ onUnmounted(() => {
   background: color-mix(in srgb, var(--app-input-bg) 80%, transparent);
   border: 1px solid var(--app-border-light);
   color: var(--app-text);
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
   white-space: pre-wrap;
   word-break: break-word;

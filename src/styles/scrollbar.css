@@ -7,8 +7,10 @@
 :root {
   --scrollbar-thumb-default: rgba(0, 0, 0, 0.4);
   --scrollbar-thumb-hover: rgba(0, 0, 0, 0.6);
-  --scrollbar-thumb-radius: 4px;
-  --scrollbar-size: 8px;
+  --scrollbar-thumb-radius: 999px;
+  --scrollbar-size: 7px;
+  --terminal-scrollbar-size: 7px;
+  --terminal-scrollbar-slider-size: 5px;
 }
 
 html.dark {
@@ -75,7 +77,110 @@ html.dark {
 }
 
 *::-webkit-scrollbar-button {
+  -webkit-appearance: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
   display: none !important;
+  background: transparent !important;
+  border: 0 !important;
+}
+
+*::-webkit-scrollbar-button:vertical:start:decrement,
+*::-webkit-scrollbar-button:vertical:end:increment,
+*::-webkit-scrollbar-button:horizontal:start:decrement,
+*::-webkit-scrollbar-button:horizontal:end:increment {
+  -webkit-appearance: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  display: none !important;
+  background: transparent !important;
+}
+
+/* xterm owns nested native and custom scroll surfaces; keep them inside the terminal. */
+.terminal-container .xterm,
+.terminal-container .xterm-screen {
+  overflow: hidden !important;
+}
+
+.terminal-container .xterm-viewport {
+  width: calc(100% - 2px) !important;
+  scrollbar-gutter: stable;
+  scrollbar-width: thin;
+  overflow-x: hidden !important;
+}
+
+.terminal-container .xterm-viewport::-webkit-scrollbar {
+  width: var(--terminal-scrollbar-size) !important;
+  height: var(--terminal-scrollbar-size) !important;
+}
+
+.terminal-container .xterm-viewport::-webkit-scrollbar-track,
+.terminal-container .xterm-viewport::-webkit-scrollbar-corner {
+  background: transparent !important;
+}
+
+.terminal-container .xterm-viewport::-webkit-scrollbar-thumb {
+  min-height: 24px;
+  border: 1px solid transparent !important;
+  border-radius: 999px !important;
+  background-clip: padding-box !important;
+}
+
+.terminal-container .xterm-viewport::-webkit-scrollbar-button,
+.terminal-container .xterm-viewport::-webkit-scrollbar-button:single-button,
+.terminal-container .xterm-screen::-webkit-scrollbar-button,
+.terminal-container .xterm-screen::-webkit-scrollbar-button:single-button {
+  -webkit-appearance: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  display: none !important;
+  background: transparent !important;
+}
+
+.terminal-container .xterm .xterm-scrollable-element {
+  overflow: hidden !important;
+}
+
+.terminal-container .xterm .xterm-scrollable-element > .scrollbar {
+  background: transparent !important;
+  border-radius: 999px !important;
+  overflow: hidden !important;
+}
+
+.terminal-container .xterm .xterm-scrollable-element > .scrollbar.vertical {
+  width: var(--terminal-scrollbar-size) !important;
+  right: 1px !important;
+}
+
+.terminal-container .xterm .xterm-scrollable-element > .scrollbar.horizontal {
+  height: var(--terminal-scrollbar-size) !important;
+  bottom: 1px !important;
+}
+
+.terminal-container .xterm .xterm-scrollable-element > .scrollbar > .scra {
+  display: none !important;
+}
+
+.terminal-container .xterm .xterm-scrollable-element > .scrollbar > .slider {
+  border-radius: 999px !important;
+  background: var(--scrollbar-thumb-default) !important;
+}
+
+.terminal-container .xterm .xterm-scrollable-element > .scrollbar.vertical > .slider {
+  left: 1px !important;
+  width: var(--terminal-scrollbar-slider-size) !important;
+}
+
+.terminal-container .xterm .xterm-scrollable-element > .scrollbar.horizontal > .slider {
+  top: 1px !important;
+  height: var(--terminal-scrollbar-slider-size) !important;
+}
+
+.terminal-container .xterm .xterm-scrollable-element > .scrollbar > .slider:hover,
+.terminal-container .xterm .xterm-scrollable-element > .scrollbar > .slider.active {
+  background: var(--scrollbar-thumb-hover) !important;
 }
 
 

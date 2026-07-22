@@ -246,14 +246,6 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="settings-section idea-panel">
-      <div class="settings-section-title">内容显示</div>
-      <div class="setting-row">
-        <div class="setting-label">显示贪吃蛇游戏</div>
-        <Switch v-model="mainUiSettings.showSnakeGame" />
-      </div>
-    </div>
-
-    <div class="settings-section idea-panel">
       <div class="settings-section-title-wrap">
         <div class="settings-section-title">小狗桌宠</div>
         <Tooltip>

@@ -54,7 +54,6 @@ const PREFERENCE_DEFINITIONS = {
   mainUi: {
     storageKey: 'main-ui-settings-v1',
     defaults: {
-      showSnakeGame: false,
       background: defaultBackgroundSettings,
       desktopPet: defaultDesktopPetSettings
     }

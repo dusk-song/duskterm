@@ -624,6 +624,17 @@ const handleImportSessions = async () => {
   overflow-y: auto;
   overflow-x: hidden;
   background: transparent;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb-default) transparent;
+}
+
+.session-tree-viewport::-webkit-scrollbar-button,
+.session-tree-viewport::-webkit-scrollbar-button:single-button {
+  -webkit-appearance: none !important;
+  width: 0 !important;
+  height: 0 !important;
+  display: none !important;
+  background: transparent !important;
 }
 
 .tree-row {
@@ -737,7 +748,7 @@ html.dark .tree-row:hover {
   border-radius: 3px;
   color: var(--app-text);
   transition: none;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif !important;
+  font-family: var(--app-font-family) !important;
 }
 
 /* Hover — brand color highlight */

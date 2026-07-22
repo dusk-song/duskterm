@@ -1,3 +1,22 @@
+@font-face {
+  font-family: 'Dusk Noto Sans SC';
+  src: url('/fonts/NotoSansSC-Medium.ttf') format('truetype');
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+  unicode-range:
+    U+2E80-2EFF,
+    U+2F00-2FDF,
+    U+3000-303F,
+    U+31C0-31EF,
+    U+3400-4DBF,
+    U+4E00-9FFF,
+    U+F900-FAFF,
+    U+FE10-FE1F,
+    U+FE30-FE4F,
+    U+FF00-FFEF;
+}
+
 /* ================================================================
    DuskTerm — Non-color tokens & global utilities
    All color tokens are in src/assets/styles/tailwind.css
@@ -5,8 +24,8 @@
 
 :root {
   /* ===== Typography ===== */
-  --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif;
-  --font-mono: 'Cascadia Mono', 'SF Mono', 'Consolas', 'Microsoft YaHei', monospace;
+  --font-sans: 'Consolas', 'Dusk Noto Sans SC', 'Microsoft YaHei', monospace;
+  --font-mono: 'Consolas', 'Dusk Noto Sans SC', 'Cascadia Mono', 'SF Mono', 'Microsoft YaHei Mono', monospace;
   --font-size-base: 0.8125rem;
   /* 13px */
   --font-size-sm: 0.75rem;

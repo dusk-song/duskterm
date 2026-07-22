@@ -104,7 +104,8 @@ const handleWheel = (event) => {
   }
 };
 
-const onTransitionEnd = () => {
+const onTransitionEnd = (event) => {
+  if (event.target !== event.currentTarget || event.propertyName !== 'transform') return;
   isTransitioning.value = false;
 };
 
@@ -126,7 +127,24 @@ onUnmounted(() => {
 });
 
 const panelLayout = (panelId) => computeSplitLayout(props.resolveTree(panelId));
-const leafStyle = (leaf) => ({ left: `${leaf.x}%`, top: `${leaf.y}%`, width: `${leaf.width}%`, height: `${leaf.height}%` });
+const SPLIT_PANEL_GAP = 8;
+const SPLIT_EDGE_EPSILON = 0.001;
+const leafStyle = (leaf) => {
+  const halfGap = SPLIT_PANEL_GAP / 2;
+  const right = leaf.x + leaf.width;
+  const bottom = leaf.y + leaf.height;
+  const insetLeft = leaf.x > SPLIT_EDGE_EPSILON ? halfGap : 0;
+  const insetTop = leaf.y > SPLIT_EDGE_EPSILON ? halfGap : 0;
+  const insetRight = right < 100 - SPLIT_EDGE_EPSILON ? halfGap : 0;
+  const insetBottom = bottom < 100 - SPLIT_EDGE_EPSILON ? halfGap : 0;
+
+  return {
+    left: `calc(${leaf.x}% + ${insetLeft}px)`,
+    top: `calc(${leaf.y}% + ${insetTop}px)`,
+    width: `calc(${leaf.width}% - ${insetLeft + insetRight}px)`,
+    height: `calc(${leaf.height}% - ${insetTop + insetBottom}px)`
+  };
+};
 const dividerStyle = (divider) => divider.direction === 'vertical'
   ? { left: `${divider.x}%`, top: `${divider.y}%`, height: `${divider.height}%` }
   : { left: `${divider.x}%`, top: `${divider.y}%`, width: `${divider.width}%` };
@@ -270,5 +288,12 @@ const dividerStyle = (divider) => divider.direction === 'vertical'
     var(--app-bg-dialog) 82%,
     var(--app-text) 18%
   );
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .panel-scroll-strip.transitioning {
+    transition-duration: 1ms;
+  }
+
 }
 </style>

@@ -341,7 +341,7 @@ onMounted(async () => {
     theme: aceTheme(),
     readOnly: props.readonly,
     fontSize: 14,
-    fontFamily: "'Cascadia Code', 'Fira Code', 'Consolas', monospace",
+    fontFamily: "'Consolas', 'Dusk Noto Sans SC', 'Cascadia Code', 'Fira Code', monospace",
     tabSize: 2,
     useSoftTabs: true,
     wrap: false,
@@ -554,7 +554,7 @@ watch(() => props.largeFile, async () => {
       color-mix(in srgb, var(--app-bg-dialog, #18181a) 94%, var(--app-text, #e4dfd8)),
       color-mix(in srgb, var(--app-bg-dialog, #18181a) 98%, var(--app-text, #e4dfd8)));
   color: var(--app-text, #e4dfd8);
-  font-family: var(--app-font-family, 'Mona Sans', 'Segoe UI', sans-serif);
+  font-family: var(--app-font-family);
   overflow-x: auto;
   overflow-y: hidden;
 }
@@ -604,7 +604,7 @@ watch(() => props.largeFile, async () => {
   background: transparent;
   color: var(--app-text, #e4dfd8);
   font-size: 12px;
-  font-family: var(--app-font-family, 'Mona Sans', 'Segoe UI', sans-serif);
+  font-family: var(--app-font-family);
 }
 
 .sftp-editor-dialog .find-input::placeholder {
@@ -630,7 +630,7 @@ watch(() => props.largeFile, async () => {
   background: transparent;
   color: var(--app-text-muted, #aba296);
   font-size: 12px;
-  font-family: var(--app-font-family, 'Mona Sans', 'Segoe UI', sans-serif);
+  font-family: var(--app-font-family);
   line-height: 1;
   cursor: pointer;
 }

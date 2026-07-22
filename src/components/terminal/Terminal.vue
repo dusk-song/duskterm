@@ -87,6 +87,9 @@ const commandHistory = ref([]); // [{ cmd: string, count: number }]
 const HISTORY_MAX = 200;
 const HISTORY_MIN_LEN = 5;
 const HISTORY_STORAGE_KEY = 'cmd-history-v1';
+const SERIAL_RECEIVE_VISIBLE_KEY_PREFIX = 'serial-receive-visible-v1:';
+const SERIAL_CAPTURE_MAX_CHARS = 5 * 1024 * 1024;
+const SERIAL_SAVE_IPC_CHUNK_BYTES = 128 * 1024;
 const knowledgeSensitiveRules = computed(() => commandKnowledgeStore.sensitiveRules || []);
 
 const loadCommandHistory = () => {
@@ -112,10 +115,99 @@ const syncBadgeState = ref({
   broadcastEnabled: false,
 });
 const nonPrimaryInputWarnAt = ref(0);
+const serialReceiveVisible = ref(true);
+const serialRawReceiveChunks = ref([]);
+const serialIoLogChunks = ref([]);
+let serialRawReceiveBytes = 0;
+let serialIoLogChars = 0;
+const serialTextEncoder = new TextEncoder();
 
-const sessionName = computed(() => {
-  return sshStore.sessions.find(s => s.id === props.sessionId)?.name || 'Unknown';
-});
+const currentSession = computed(() => sshStore.sessions.find(s => s.id === props.sessionId) || null);
+const sessionName = computed(() => currentSession.value?.name || 'Unknown');
+const isSerialSession = computed(() => String(currentSession.value?.config?.protocol || '').toLowerCase() === 'serial');
+
+const serialPreferenceKey = () => {
+  const config = currentSession.value?.config || {};
+  const stableKey = config.id || config.serial_path || props.sessionId;
+  return `${SERIAL_RECEIVE_VISIBLE_KEY_PREFIX}${stableKey}`;
+};
+
+const loadSerialReceivePreference = () => {
+  if (!isSerialSession.value) return;
+  try {
+    serialReceiveVisible.value = localStorage.getItem(serialPreferenceKey()) !== '0';
+  } catch {
+    serialReceiveVisible.value = true;
+  }
+};
+
+const persistSerialReceivePreference = () => {
+  if (!isSerialSession.value) return;
+  try {
+    localStorage.setItem(serialPreferenceKey(), serialReceiveVisible.value ? '1' : '0');
+  } catch { /* ignore */ }
+};
+
+const appendLimitedSerialText = (chunksRef, text, sizeGetter, sizeSetter) => {
+  if (!text) return;
+  chunksRef.value.push(text);
+  sizeSetter(sizeGetter() + text.length);
+  while (sizeGetter() > SERIAL_CAPTURE_MAX_CHARS && chunksRef.value.length > 1) {
+    const removed = chunksRef.value.shift() || '';
+    sizeSetter(Math.max(0, sizeGetter() - removed.length));
+  }
+};
+
+const appendLimitedSerialBytes = (chunksRef, bytes) => {
+  if (!bytes?.length) return;
+  const chunk = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  chunksRef.value.push(chunk);
+  serialRawReceiveBytes += chunk.length;
+  while (serialRawReceiveBytes > SERIAL_CAPTURE_MAX_CHARS && chunksRef.value.length > 1) {
+    const removed = chunksRef.value.shift();
+    serialRawReceiveBytes = Math.max(0, serialRawReceiveBytes - (removed?.length || 0));
+  }
+};
+
+const padSerialTime = (value, width = 2) => String(value).padStart(width, '0');
+
+const formatSerialLogTimestamp = (date = new Date()) => (
+  `${date.getFullYear()}-${padSerialTime(date.getMonth() + 1)}-${padSerialTime(date.getDate())} `
+  + `${padSerialTime(date.getHours())}:${padSerialTime(date.getMinutes())}:${padSerialTime(date.getSeconds())}.`
+  + `${padSerialTime(date.getMilliseconds(), 3)}`
+);
+
+const appendSerialReceiveRaw = (bytes) => {
+  appendLimitedSerialBytes(serialRawReceiveChunks, bytes);
+};
+
+const appendSerialIoLog = (direction, text, byteLength) => {
+  const marker = direction === 'SEND' ? '>>>' : '<<<';
+  const entry = `[${formatSerialLogTimestamp()}]# ${direction} ASCII/${byteLength} ${marker}\n${text}\n\n`;
+  appendLimitedSerialText(
+    serialIoLogChunks,
+    entry,
+    () => serialIoLogChars,
+    (value) => { serialIoLogChars = value; }
+  );
+};
+
+const recordSerialReceive = (text, byteLength, rawBytes = null) => {
+  if (!isSerialSession.value || !text) return;
+  appendSerialReceiveRaw(rawBytes || serialTextEncoder.encode(text));
+  appendSerialIoLog('RECV', text, byteLength);
+};
+
+const recordSerialSend = (text, byteLength = serialTextEncoder.encode(text).length) => {
+  if (!isSerialSession.value || !text) return;
+  appendSerialIoLog('SEND', text, byteLength);
+};
+
+const toggleSerialReceiveVisible = () => {
+  serialReceiveVisible.value = !serialReceiveVisible.value;
+  persistSerialReceivePreference();
+  toast.info(serialReceiveVisible.value ? '串口接收数据显示已开启' : '串口接收数据显示已隐藏');
+};
 
 const openSecurityModal = (matched, data) => {
   blockedCommandContent.value = matched.content;
@@ -127,7 +219,7 @@ const openSecurityModal = (matched, data) => {
 };
 
 function sendData(data) {
-  const session = sshStore.sessions.find(s => s.id === props.sessionId);
+  const session = currentSession.value;
   if (session && (session.status === 'connected' || session.status === 'connecting')) {
     const command = session.isSplitChild ? 'write_ssh_shell_channel' : 'write_ssh';
     const payload = session.isSplitChild
@@ -158,14 +250,17 @@ async function reconnectAfterDisconnect() {
   reconnectingAfterDisconnect.value = true;
   try {
     term?.write('\r\n\x1b[36m正在重连，请稍候...\x1b[0m\r\n');
+    markSearchBufferChanged();
     const ok = await sshStore.reconnectSession(props.sessionId);
     if (ok) {
       term?.write('\r\n\x1b[32m已重新连接。\x1b[0m\r\n');
+      markSearchBufferChanged();
       currentInputBuffer.value = '';
       closeQuickHint();
       reconnectPromptShown.value = false;
     } else {
       term?.write('\r\n\x1b[31m重连失败，请稍后再试。\x1b[0m\r\n');
+      markSearchBufferChanged();
     }
   } finally {
     reconnectingAfterDisconnect.value = false;
@@ -308,6 +403,7 @@ let unlistenConnected = null;
 let unlistenClosed = null;
 let unlistenError = null;
 let unlistenTerminalTransferRequest = null;
+let unlistenSerialDataSent = null;
 let resizeObserver = null;
 let textDecoder = new TextDecoder('utf-8'); // Default
 let quickCommandHandler = null;
@@ -329,6 +425,7 @@ let lastSentCols = 0;
 let lastSentRows = 0;
 const DRAG_FIT_MIN_INTERVAL = 30;
 const SEARCH_AUTO_REFRESH_DEBOUNCE_MS = 200;
+const SEARCH_SELECTION_MAX_LENGTH = 512;
 const PHYSICAL_LINE_CHECKPOINT_STEP = 128;
 const PHYSICAL_LINE_CHECKPOINT_STEP_MEDIUM = 256;
 const PHYSICAL_LINE_CHECKPOINT_STEP_LARGE = 512;
@@ -338,13 +435,16 @@ const PHYSICAL_LINE_THRESHOLD_LARGE = 100000;
 const PHYSICAL_LINE_THRESHOLD_HUGE = 200000;
 const TERMINAL_IMMEDIATE_WRITE_MAX_CHARS = 4096;
 const terminalThemeSettings = ref(loadTerminalThemeSettings());
-const CJK_MONO_FALLBACK_FONTS = '"Sarasa Mono SC", "Noto Sans Mono CJK SC", "Microsoft YaHei Mono", "SimSun", monospace';
+const CJK_MONO_FALLBACK_FONTS = '"Dusk Noto Sans SC", "Sarasa Mono SC", "Noto Sans Mono CJK SC", "Microsoft YaHei Mono", "SimSun", monospace';
 const TERMINAL_DEFAULT_FONT = '"Consolas"';
 const TERMINAL_FONT_FALLBACKS = '"Cascadia Mono", "Courier New", ' + CJK_MONO_FALLBACK_FONTS;
 let metricsDirty = false;
 let metricsRafId = null;
 let lastLineMetrics = null;
 let lastLineNumberRowsSignature = '';
+let searchBufferVersion = 0;
+let searchCountCacheSignature = '';
+let searchCountCacheValue = 0;
 
 const focusTerminalSurface = () => {
   if (!term) return;
@@ -554,6 +654,66 @@ const recordCommandHistory = (command) => {
   hist.push({ cmd: text, count: 1 });
   while (hist.length > HISTORY_MAX) hist.shift();
   persistCommandHistory();
+};
+
+const getCursorLogicalLineText = () => {
+  const buffer = term?.buffer?.active;
+  if (!buffer) return '';
+
+  const cursorVisualIndex = Math.max(0, Number(buffer.baseY || 0) + Number(buffer.cursorY || 0));
+  let startIndex = cursorVisualIndex;
+  while (startIndex > 0 && buffer.getLine(startIndex)?.isWrapped) {
+    startIndex -= 1;
+  }
+
+  const parts = [];
+  for (let index = startIndex; index <= cursorVisualIndex; index += 1) {
+    const line = buffer.getLine(index);
+    if (!line) continue;
+    const text = line.translateToString(false);
+    if (index === cursorVisualIndex) {
+      parts.push(text.slice(0, Math.max(0, Number(buffer.cursorX || 0))));
+    } else {
+      parts.push(text);
+    }
+  }
+
+  return parts.join('').replace(/\u00a0/g, ' ').trimEnd();
+};
+
+const stripPromptFromCommandLine = (line, fallbackInput = '') => {
+  const text = String(line || '').trimEnd();
+  const fallback = String(fallbackInput || '').trim();
+  if (!text) return '';
+
+  if (fallback) {
+    const fallbackIndex = text.lastIndexOf(fallback);
+    if (fallbackIndex >= 0) {
+      return text.slice(fallbackIndex).trim();
+    }
+  }
+
+  const promptPatterns = [
+    /^\s*PS\s+[^>]+>\s*(.+)$/s,
+    /^\s*[A-Za-z]:\\[^>]*>\s*(.+)$/s,
+    /^\s*[\w.-]+@[\w.-]+(?::[^#$%]*)?[#$%]\s*(.+)$/s,
+    /^\s*(?:~|\/|[^\s]+\/)[^#$%]*[#$%]\s*(.+)$/s,
+    /^\s*[#$%]\s*(.+)$/s
+  ];
+
+  for (const pattern of promptPatterns) {
+    const match = text.match(pattern);
+    if (match?.[1]) return match[1].trim();
+  }
+
+  return fallback;
+};
+
+const getSubmittedCommandText = () => {
+  const fallback = currentInputBuffer.value;
+  const commandFromTerminal = stripPromptFromCommandLine(getCursorLogicalLineText(), fallback);
+  if (commandFromTerminal) return commandFromTerminal;
+  return String(fallback || '').trim();
 };
 
 const closeQuickHint = () => {
@@ -857,6 +1017,7 @@ function handleSelectAll() {
 function handleClear() {
   if (!term) return;
   term.write('\x1b[2J\x1b[H');
+  markSearchBufferChanged();
   term.scrollToBottom();
   resetPhysicalLineCache();
   scheduleLineMetrics();
@@ -866,6 +1027,7 @@ function clearScrollback() {
   if (!term) return;
   term.write('\x1b[3J\x1b[2J\x1b[H');
   term.clear();
+  markSearchBufferChanged();
   term.scrollToBottom();
   resetPhysicalLineCache();
   scheduleLineMetrics();
@@ -873,13 +1035,14 @@ function clearScrollback() {
   sendData('\r');
 }
 
-function buildLogFilename() {
+function buildLogFilename(suffix = '', extension = 'log') {
   const now = new Date();
   const pad = (n) => String(n).padStart(2, '0');
   const timestamp = `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
   const rawName = sessionName.value || 'terminal';
   const safeName = rawName.replace(/[\\/:*?"<>|\s]+/g, '_');
-  return `${safeName}_${timestamp}.log`;
+  const suffixPart = suffix ? `_${suffix}` : '';
+  return `${safeName}${suffixPart}_${timestamp}.${extension}`;
 }
 
 async function saveTerminalOutput() {
@@ -900,6 +1063,72 @@ async function saveTerminalOutput() {
   try {
     await invokeCommand('save_text_file', { path, content });
     toast.success('终端输出已保存');
+  } catch (e) {
+    toast.error(`保存失败: ${e}`);
+  }
+}
+
+async function saveSerialReceiveData() {
+  if (!isSerialSession.value) return;
+  if (!serialRawReceiveBytes || serialRawReceiveChunks.value.length === 0) {
+    toast.info('暂无串口接收数据');
+    return;
+  }
+  const captureChunks = serialRawReceiveChunks.value.slice();
+  const captureByteLength = captureChunks.reduce((total, chunk) => total + chunk.length, 0);
+  const path = await save({
+    title: '保存串口接收数据',
+    defaultPath: buildLogFilename('recv-data', 'dat')
+  });
+  if (!path) return;
+  try {
+    const buffer = new Uint8Array(Math.min(SERIAL_SAVE_IPC_CHUNK_BYTES, captureByteLength));
+    let bufferLength = 0;
+    let isFirstChunk = true;
+
+    const flushBuffer = async () => {
+      if (bufferLength === 0) return;
+      const command = isFirstChunk ? 'save_binary_file' : 'append_binary_file';
+      const content = Array.from(buffer.subarray(0, bufferLength));
+      await invokeCommand(command, { path, content });
+      isFirstChunk = false;
+      bufferLength = 0;
+    };
+
+    for (const sourceChunk of captureChunks) {
+      let sourceOffset = 0;
+      while (sourceOffset < sourceChunk.length) {
+        const copyLength = Math.min(buffer.length - bufferLength, sourceChunk.length - sourceOffset);
+        buffer.set(sourceChunk.subarray(sourceOffset, sourceOffset + copyLength), bufferLength);
+        bufferLength += copyLength;
+        sourceOffset += copyLength;
+        if (bufferLength === buffer.length) {
+          await flushBuffer();
+        }
+      }
+    }
+    await flushBuffer();
+    toast.success('串口接收数据已保存');
+  } catch (e) {
+    toast.error(`保存失败: ${e}`);
+  }
+}
+
+async function saveSerialIoLog() {
+  if (!isSerialSession.value) return;
+  const content = serialIoLogChunks.value.join('');
+  if (!content) {
+    toast.info('暂无串口收发日志');
+    return;
+  }
+  const path = await save({
+    title: '保存串口收发日志',
+    defaultPath: buildLogFilename('io-log', 'log')
+  });
+  if (!path) return;
+  try {
+    await invokeCommand('save_text_file', { path, content });
+    toast.success('串口收发日志已保存');
   } catch (e) {
     toast.error(`保存失败: ${e}`);
   }
@@ -936,6 +1165,39 @@ const resetSearchStats = () => {
   searchCurrentMatch.value = 0;
 };
 
+const markSearchBufferChanged = () => {
+  searchBufferVersion += 1;
+  searchCountCacheSignature = '';
+  scheduleSearchAutoRefresh();
+};
+
+const normalizeSearchSelection = (selection) => {
+  const text = String(selection || '')
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .join(' ')
+    .trim();
+  if (!text) return '';
+  return text.slice(0, SEARCH_SELECTION_MAX_LENGTH);
+};
+
+const getSearchTextFromSelection = () => {
+  if (term?.hasSelection && !term.hasSelection()) return '';
+  return normalizeSearchSelection(term?.getSelection?.());
+};
+
+const seedSearchTextFromSelection = () => {
+  const selectedText = getSearchTextFromSelection();
+  if (!selectedText) return false;
+  if (searchText.value !== selectedText) {
+    searchText.value = selectedText;
+    resetSearchStats();
+  }
+  return true;
+};
+
 const buildSearchRegex = () => {
   if (!hasValidSearchKeyword()) return null;
   const source = searchOptions.value.regex
@@ -957,6 +1219,20 @@ const countSearchMatches = () => {
   if (!regex) return 0;
 
   const buffer = term.buffer.active;
+  const signature = [
+    searchBufferVersion,
+    buffer.length,
+    buffer.baseY,
+    searchText.value,
+    searchOptions.value.matchCase ? 1 : 0,
+    searchOptions.value.regex ? 1 : 0,
+    searchOptions.value.wholeWord ? 1 : 0
+  ].join('|');
+
+  if (signature === searchCountCacheSignature) {
+    return searchCountCacheValue;
+  }
+
   let count = 0;
 
   for (let index = 0; index < buffer.length; index += 1) {
@@ -972,6 +1248,8 @@ const countSearchMatches = () => {
     }
   }
 
+  searchCountCacheSignature = signature;
+  searchCountCacheValue = count;
   return count;
 };
 
@@ -1358,6 +1636,7 @@ const flushTerminalOutput = () => {
   const merged = pendingOutputChunks.join('');
   pendingOutputChunks = [];
   term.write(merged);
+  markSearchBufferChanged();
   scheduleLineMetrics();
 };
 
@@ -1365,6 +1644,7 @@ const enqueueTerminalOutput = (chunk) => {
   if (!chunk) return;
   if (!writeFlushRafId && pendingOutputChunks.length === 0 && chunk.length <= TERMINAL_IMMEDIATE_WRITE_MAX_CHARS) {
     term?.write(chunk);
+    markSearchBufferChanged();
     scheduleLineMetrics();
     return;
   }
@@ -1373,31 +1653,32 @@ const enqueueTerminalOutput = (chunk) => {
   writeFlushRafId = requestAnimationFrame(flushTerminalOutput);
 };
 
-function toggleSearch() {
-  searchVisible.value = !searchVisible.value;
-  if (searchVisible.value) {
-    setTimeout(() => searchInput.value?.focus(), 50);
-    // Trigger initial search if text exists
-    if (hasValidSearchKeyword()) performSearch();
-    else resetSearchStats();
-  } else {
-    cancelSearchAutoRefresh();
-    term?.focus();
-    searchAddon?.clearDecorations();
-    resetSearchStats();
+function focusSearchInputSoon({ selectText = false } = {}) {
+  nextTick(() => {
+    requestAnimationFrame(() => {
+      searchInput.value?.focus();
+      if (selectText) searchInput.value?.select?.();
+    });
+  });
+}
+
+function openSearch({ seedFromSelection = true } = {}) {
+  const wasVisible = searchVisible.value;
+  const seeded = seedFromSelection ? seedSearchTextFromSelection() : false;
+  searchVisible.value = true;
+  searchInputFocused.value = true;
+  focusSearchInputSoon({ selectText: seeded });
+  if (hasValidSearchKeyword()) performSearch();
+  else resetSearchStats();
+  if (!wasVisible) {
+    setTimeout(() => handleResize(), 100);
   }
-  // Need to refit terminal because search bar takes space
-  setTimeout(() => handleResize(), 100);
 }
 
 function openSearchFromMenu(event) {
   const targetSessionId = event?.detail?.sessionId;
   if (targetSessionId && targetSessionId !== props.sessionId) return;
-  if (!searchVisible.value) {
-    toggleSearch();
-    return;
-  }
-  setTimeout(() => searchInput.value?.focus(), 50);
+  openSearch();
 }
 
 function closeSearch() {
@@ -1437,7 +1718,7 @@ function toggleSearchOption(optionKey) {
 }
 
 function performSearch() {
-  if (!searchAddon || !hasValidSearchKeyword()) {
+  if (!searchAddon || !hasValidSearchKeyword() || !buildSearchRegex()) {
     searchAddon?.clearDecorations();
     resetSearchStats();
     return;
@@ -1449,7 +1730,7 @@ function performSearch() {
 }
 
 function findNext() {
-  if (!searchAddon || !hasValidSearchKeyword()) return;
+  if (!searchAddon || !hasValidSearchKeyword() || !buildSearchRegex()) return;
   updateSearchStats();
   const found = searchAddon.findNext(searchText.value, getSearchFindOptions(false));
   if (found && searchMatchCount.value > 0) {
@@ -1458,7 +1739,7 @@ function findNext() {
 }
 
 function findPrev() {
-  if (!searchAddon || !hasValidSearchKeyword()) return;
+  if (!searchAddon || !hasValidSearchKeyword() || !buildSearchRegex()) return;
   updateSearchStats();
   const found = searchAddon.findPrevious(searchText.value, getSearchFindOptions(false));
   if (found && searchMatchCount.value > 0) {
@@ -1552,7 +1833,7 @@ function handleKeydown(e) {
   // Ctrl+Shift+F to toggle search
   if (e.ctrlKey && e.shiftKey && (e.key === 'F' || e.key === 'f')) {
     e.preventDefault();
-    toggleSearch();
+    openSearch();
   }
   else if (e.key === 'Escape' && searchVisible.value) {
     e.preventDefault();
@@ -1705,10 +1986,13 @@ const handleMenuSelect = async (key) => {
     case 'copy': await handleCopy(); break;
     case 'paste': await handlePaste(); break;
     case 'select-all': handleSelectAll(); break;
-    case 'find': toggleSearch(); break;
+    case 'find': openSearch(); break;
     case 'clear': handleClear(); break;
     case 'clear-scrollback': clearScrollback(); break;
     case 'save-log': await saveTerminalOutput(); break;
+    case 'serial-toggle-receive': toggleSerialReceiveVisible(); break;
+    case 'serial-save-data': await saveSerialReceiveData(); break;
+    case 'serial-save-log': await saveSerialIoLog(); break;
   }
   // Re-focus terminal after menu closes (except find which opens search bar)
   if (key !== 'find') {
@@ -1763,6 +2047,7 @@ onMounted(async () => {
   loadSyncInputState();
   loadCommandKnowledgeCatalog();
   loadCommandHistory();
+  loadSerialReceivePreference();
 
   const cacheKey = props.sessionId;
   const cached = terminalCache.get(cacheKey);
@@ -1785,6 +2070,7 @@ onMounted(async () => {
     unlistenClosed = cached.unlistenClosed;
     unlistenError = cached.unlistenError;
     unlistenTerminalTransferRequest = cached.unlistenTerminalTransferRequest;
+    unlistenSerialDataSent = cached.unlistenSerialDataSent;
     textDecoder = cached.textDecoder || textDecoder;
 
     if (terminalContainer.value) {
@@ -1920,6 +2206,7 @@ onMounted(async () => {
           }
           if (!reconnectPromptShown.value) {
             term.write('\r\n\x1b[33m当前会话已断开，按 Enter 键重连。\x1b[0m\r\n');
+            markSearchBufferChanged();
             reconnectPromptShown.value = true;
           }
           scheduleLineMetrics();
@@ -1994,7 +2281,7 @@ onMounted(async () => {
         }
 
         if (routedBySync && isEnter) {
-          recordCommandHistory(currentInputBuffer.value);
+          recordCommandHistory(getSubmittedCommandText());
           currentInputBuffer.value = '';
           closeQuickHint();
           forwardTerminalInput(data);
@@ -2014,12 +2301,13 @@ onMounted(async () => {
         }
 
         if (!routedBySync && isEnter) {
-          const matched = matchSensitiveCommand(currentInputBuffer.value, knowledgeSensitiveRules.value);
+          const submittedCommand = getSubmittedCommandText();
+          const matched = matchSensitiveCommand(submittedCommand, knowledgeSensitiveRules.value);
           if (matched) {
             openSecurityModal(matched, data);
             return;
           }
-          recordCommandHistory(currentInputBuffer.value);
+          recordCommandHistory(submittedCommand);
           currentInputBuffer.value = '';
           closeQuickHint();
           forwardTerminalInput(data);
@@ -2090,10 +2378,18 @@ onMounted(async () => {
     unlistenData = await listenEvent(`ssh-data-${props.sessionId}`, (payload) => {
       // console.log('Terminal Data:', payload);
       if (Array.isArray(payload)) {
-        const decoded = textDecoder.decode(new Uint8Array(payload));
-        enqueueTerminalOutput(decoded);
+        const rawBytes = new Uint8Array(payload);
+        const decoded = textDecoder.decode(rawBytes);
+        recordSerialReceive(decoded, payload.length, rawBytes);
+        if (!isSerialSession.value || serialReceiveVisible.value) {
+          enqueueTerminalOutput(decoded);
+        }
       } else if (typeof payload === 'string') {
-        enqueueTerminalOutput(payload);
+        const rawBytes = serialTextEncoder.encode(payload);
+        recordSerialReceive(payload, rawBytes.length, rawBytes);
+        if (!isSerialSession.value || serialReceiveVisible.value) {
+          enqueueTerminalOutput(payload);
+        }
       }
     });
 
@@ -2141,6 +2437,7 @@ onMounted(async () => {
       reconnectPromptShown.value = false;
       term.write(`\r\n\x1b[31m${formatCloseReason(reason)}\x1b[0m\r\n`);
       term.write('\x1b[33m按 Enter 键尝试重连。\x1b[0m\r\n');
+      markSearchBufferChanged();
       scheduleLineMetrics();
     });
 
@@ -2150,6 +2447,7 @@ onMounted(async () => {
       reconnectPromptShown.value = false;
       term.write(`\r\n\x1b[31mError: ${err}\x1b[0m\r\n`);
       term.write('\x1b[33m按 Enter 键尝试重连。\x1b[0m\r\n');
+      markSearchBufferChanged();
       toast.error(`会话错误：${err}`);
       scheduleLineMetrics();
     });
@@ -2159,6 +2457,14 @@ onMounted(async () => {
       handleTerminalTransferRequest
     );
 
+    unlistenSerialDataSent = await listenEvent(`serial-data-sent-${props.sessionId}`, (payload) => {
+      if (Array.isArray(payload)) {
+        recordSerialSend(textDecoder.decode(new Uint8Array(payload)), payload.length);
+      } else if (typeof payload === 'string') {
+        recordSerialSend(payload, serialTextEncoder.encode(payload).length);
+      }
+    });
+
     // Listen for Global Menu Global Events
     window.addEventListener('term:zoom-in', handleZoomIn);
     window.addEventListener('term:zoom-out', handleZoomOut);
@@ -2166,7 +2472,6 @@ onMounted(async () => {
     window.addEventListener('term:copy', handleCopy);
     window.addEventListener('term:paste', handlePaste);
     window.addEventListener('term:select-all', handleSelectAll);
-    window.addEventListener('term:find', openSearchFromMenu);
 
     // Focus this terminal when session becomes active
     terminalFocusHandler = (e) => {
@@ -2199,12 +2504,13 @@ onMounted(async () => {
       termScrollDisposable,
       unlistenData,
       unlistenDebug,
-        unlistenConnected,
-        unlistenClosed,
-        unlistenError,
-        unlistenTerminalTransferRequest,
-        textDecoder
-      });
+      unlistenConnected,
+      unlistenClosed,
+      unlistenError,
+      unlistenTerminalTransferRequest,
+      unlistenSerialDataSent,
+      textDecoder
+    });
   }
 
   window.addEventListener('keydown', handleKeydown);
@@ -2313,12 +2619,14 @@ onUnmounted(() => {
   safeUnlisten(unlistenClosed);
   safeUnlisten(unlistenError);
   safeUnlisten(unlistenTerminalTransferRequest);
+  safeUnlisten(unlistenSerialDataSent);
   unlistenData = null;
   unlistenDebug = null;
   unlistenConnected = null;
   unlistenClosed = null;
   unlistenError = null;
   unlistenTerminalTransferRequest = null;
+  unlistenSerialDataSent = null;
   window.removeEventListener('resize', handleResize);
   // Always clear cache on unmount so next mount creates fresh bindings.
   // KeepAlive page switches use onDeactivated/onActivated, not onUnmounted.
@@ -2383,6 +2691,14 @@ onUnmounted(() => {
           <ContextMenuItem @select="handleMenuSelect('clear')">清屏</ContextMenuItem>
           <ContextMenuItem @select="handleMenuSelect('clear-scrollback')">清空滚动缓冲区</ContextMenuItem>
           <ContextMenuItem @select="handleMenuSelect('save-log')">保存终端输出...</ContextMenuItem>
+          <template v-if="isSerialSession">
+            <ContextMenuSeparator />
+            <ContextMenuItem @select="handleMenuSelect('serial-toggle-receive')">
+              {{ serialReceiveVisible ? '隐藏接收数据' : '显示接收数据' }}
+            </ContextMenuItem>
+            <ContextMenuItem @select="handleMenuSelect('serial-save-data')">保存接收数据...</ContextMenuItem>
+            <ContextMenuItem @select="handleMenuSelect('serial-save-log')">保存收发日志...</ContextMenuItem>
+          </template>
         </ContextMenuContent>
       </ContextMenu>
     </div>
@@ -2391,7 +2707,8 @@ onUnmounted(() => {
     <div v-show="searchVisible" class="search-bar">
       <div class="search-input-wrapper">
         <Search class="search-icon" />
-        <Input ref="searchInput" v-model="searchText" placeholder="查找..." size="sm" class="terminal-search-input w-[260px]"
+        <input ref="searchInput" v-model="searchText" type="text" placeholder="查找..."
+          class="terminal-search-input" autocomplete="off" spellcheck="false" @mousedown.stop @click.stop
           @input="handleSearchInput" @focus="handleSearchInputFocus" @blur="handleSearchInputBlur"
           @keydown="handleSearchKeydown" />
       </div>
@@ -2453,7 +2770,7 @@ onUnmounted(() => {
         <div class="px-6 pb-4 text-sm">
           <p>系统检测到您正在尝试执行以下高危命令：</p>
           <div
-            style="background: hsl(var(--secondary)); padding: 12px; border-radius: 6px; font-family: 'Cascadia Code', monospace; color: var(--color-danger, #E45649); word-break: break-all; margin: 10px 0;">
+            style="background: hsl(var(--secondary)); padding: 12px; border-radius: 6px; font-family: var(--font-mono); color: var(--color-danger, #E45649); word-break: break-all; margin: 10px 0;">
             {{ blockedCommandContent }}
           </div>
 
@@ -2544,7 +2861,7 @@ onUnmounted(() => {
   padding-right: 6px;
   box-sizing: border-box;
   font-size: 11px;
-  font-family: var(--terminal-font-family, 'Consolas', 'Cascadia Mono', monospace);
+  font-family: var(--terminal-font-family, var(--font-mono));
   contain: layout style paint;
 }
 
@@ -2579,7 +2896,7 @@ onUnmounted(() => {
   height: 100% !important;
   width: 100% !important;
   min-height: 0 !important;
-  font-family: var(--terminal-font-family, 'Consolas', 'Cascadia Mono', 'Courier New', monospace) !important;
+  font-family: var(--terminal-font-family, var(--font-mono)) !important;
   font-variant-ligatures: none;
   font-feature-settings: "liga" 0, "calt" 0;
   font-kerning: none;
@@ -2659,6 +2976,8 @@ onUnmounted(() => {
   border-radius: 6px;
   gap: 4px;
   max-width: calc(100% - 16px);
+  pointer-events: auto;
+  isolation: isolate;
 }
 
 .search-input-wrapper {
@@ -2676,23 +2995,27 @@ onUnmounted(() => {
   z-index: 1;
 }
 
-.search-input-wrapper :deep(.terminal-search-input) {
-  padding-left: 28px;
-}
-
-.search-input {
-  width: 160px;
+.terminal-search-input {
+  width: 260px;
+  height: 28px;
+  box-sizing: border-box;
+  padding: 3px 8px 3px 28px;
+  border: 1px solid var(--app-border-shadow);
+  border-radius: var(--niri-radius-sm, 6px);
   background: transparent;
-  border: none;
-  border-bottom: 1px solid var(--app-border-shadow);
   color: var(--app-text);
-  padding: 3px 6px 3px 22px;
   outline: none;
   font-size: 13px;
+  pointer-events: auto;
 }
 
-.search-input:focus {
-  border-bottom-color: var(--color-primary-muted);
+.terminal-search-input:focus {
+  border-color: var(--app-focus-border);
+  box-shadow: var(--app-focus-shadow);
+}
+
+.terminal-search-input::placeholder {
+  color: var(--app-text-muted);
 }
 
 .search-count {
@@ -2837,7 +3160,7 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--color-primary);
-  font-family: 'Consolas', 'Cascadia Mono', monospace;
+  font-family: var(--font-mono);
 }
 
 .quick-hint-meta {
@@ -2860,7 +3183,7 @@ onUnmounted(() => {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  font-family: 'Consolas', 'Cascadia Mono', monospace;
+  font-family: var(--font-mono);
 }
 
 .quick-hint-hist-tag {

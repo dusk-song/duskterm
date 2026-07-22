@@ -1734,8 +1734,6 @@ watch(() => props.visible, async (visible) => {
   if (!visible) {
     cachePanelStateForSession(sessionId);
     ++sessionSyncGeneration;
-    connected.value = false;
-    await disconnectSftpSession(sessionId);
     return;
   }
   const generation = ++sessionSyncGeneration;
@@ -2421,7 +2419,7 @@ onUnmounted(() => {
 }
 
 .fm-mono {
-  font-family: Consolas, 'Courier New', monospace;
+  font-family: var(--font-mono);
 }
 
 .align-right {
@@ -2515,7 +2513,7 @@ onUnmounted(() => {
   justify-content: space-between;
   gap: 12px;
   border-bottom: 1px solid var(--app-border-shadow, rgba(255, 255, 255, 0.08));
-  font-family: 'Mona Sans', 'Segoe UI', sans-serif;
+  font-family: var(--app-font-family);
   background: color-mix(in srgb, var(--app-bg-dialog) 96%, var(--app-text));
 }
 
@@ -2601,7 +2599,7 @@ onUnmounted(() => {
   border-top: 1px solid var(--app-border-shadow, rgba(255, 255, 255, 0.08));
   color: var(--app-text-muted);
   font-size: 12px;
-  font-family: 'Mona Sans', 'Segoe UI', sans-serif;
+  font-family: var(--app-font-family);
   background: color-mix(in srgb, var(--app-bg-dialog) 97%, var(--app-text));
 }
 
@@ -2689,7 +2687,7 @@ onUnmounted(() => {
   gap: 14px;
   padding: 4px 2px;
   color: var(--app-text);
-  font-family: 'Mona Sans', 'Segoe UI', sans-serif;
+  font-family: var(--app-font-family);
 }
 
 .editor-confirm-title {

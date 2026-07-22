@@ -3,9 +3,9 @@ import { createApp } from "vue";
 import App from "./App.vue";
 import './assets/styles/tailwind.css';
 import './components/settings/settingsPaneShared.css';
-import './styles/scrollbar.css';
 import './styles/theme.css';
 import '@xterm/xterm/css/xterm.css';
+import './styles/scrollbar.css';
 import { initPerformanceMode } from './utils/performance';
 
 initPerformanceMode();

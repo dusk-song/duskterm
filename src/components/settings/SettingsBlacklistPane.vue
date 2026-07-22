@@ -133,7 +133,7 @@ defineProps({
 
 .bl-col-pattern {
   @apply flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[11px] text-[hsl(var(--foreground))];
-  font-family: 'Consolas', 'Cascadia Mono', 'Courier New', monospace;
+  font-family: var(--font-mono);
 }
 
 .bl-header .bl-col-pattern {

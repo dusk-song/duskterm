@@ -11,13 +11,12 @@ import {
 } from '@/components/ui/alert-dialog';
 import { confirm } from '@/composables/useConfirm';
 import { toast } from '@/composables/useToast';
-import {
-  Monitor
-} from '@lucide/vue';
+import { Code2, Server, Trash2, Usb } from '@lucide/vue';
 import { computed, defineAsyncComponent, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 
 // ── Lazy-loaded heavy components for faster initial paint ──
 import ConfirmDialog from '@/components/ui/confirm/ConfirmDialog.vue';
+import ToastContainer from '@/components/ui/toast/ToastContainer.vue';
 import { TooltipProvider } from '@/components/ui/tooltip';
 import CustomTitlebar from './components/app-shell/CustomTitlebar.vue';
 import GlobalBackground from './components/app-shell/GlobalBackground.vue';
@@ -31,7 +30,6 @@ const SessionList = defineAsyncComponent(() => import('./components/session/Sess
 const SessionModal = defineAsyncComponent(() => import('./components/session/SessionModal.vue'));
 const SessionOverview = defineAsyncComponent(() => import('./components/session/SessionOverview.vue'));
 const SettingsModal = defineAsyncComponent(() => import('./components/settings/SettingsModal.vue'));
-const SnakeGame = defineAsyncComponent(() => import('./components/misc/SnakeGame.vue'));
 const SyncInputModal = defineAsyncComponent(() => import('./components/terminal/SyncInputModal.vue'));
 const SyncMergedPanelManager = defineAsyncComponent(() => import('./components/terminal/SyncMergedPanelManager.vue'));
 const TerminalPanelManager = defineAsyncComponent(() => import('./components/terminal/TerminalPanelManager.vue'));
@@ -275,8 +273,8 @@ const commandKnowledgePanelWidth = ref(360);
 const sessionPanelHeight = ref(320);
 const isDraggingColumn = ref(false);
 const isDraggingRow = ref(false);
-const workspaceSeparatorSize = 8;
-const workspaceGridGap = 6;
+const workspaceSeparatorSize = 4;
+const workspaceGridGap = 3;
 const workspaceGridPaddingX = 24;
 const leftColumnMinWidth = 280;
 const rightColumnMinWidth = 320;
@@ -666,7 +664,7 @@ if (typeof requestIdleCallback === 'function') {
 
 const { activeKey, visibleSessions, setActivePanel, movePanel } = useTerminalPanels(sshStore);
 const recentSessions = computed(() => {
-  const list = [...(sshStore.savedSessions || [])];
+  const list = (sshStore.savedSessions || []).filter((session) => Number(session?.last_connected || 0) > 0);
   list.sort((a, b) => (b.last_connected || 0) - (a.last_connected || 0));
   return list.slice(0, 6);
 });
@@ -674,6 +672,23 @@ const recentSessions = computed(() => {
 const openRecentSession = (session) => {
   if (session?.id) {
     sshStore.connectStoredSession(session.id);
+  }
+};
+
+const recentClearing = ref(false);
+const getRecentSessionIcon = (session) => {
+  const protocol = String(session?.protocol || 'ssh').toLowerCase();
+  if (protocol === 'telnet') return Server;
+  if (protocol === 'serial') return Usb;
+  return Code2;
+};
+const clearRecentSessionHistory = async () => {
+  if (recentClearing.value || recentSessions.value.length === 0) return;
+  recentClearing.value = true;
+  try {
+    await sshStore.clearRecentSessions();
+  } finally {
+    recentClearing.value = false;
   }
 };
 
@@ -772,7 +787,6 @@ watch(backgroundActive, () => {
     }));
   });
 });
-const showSnakeGame = computed(() => mainUiSettings.value.showSnakeGame !== false);
 const desktopPetSettings = computed(() => mainUiSettings.value.desktopPet || {});
 const isAnyModalOpen = computed(() =>
   isSettingsVisible.value
@@ -1169,6 +1183,9 @@ const toolbarRightItems = computed(() => toolbarItems.value
     <div class="app-shell has-floating-surfaces" :class="{ 'has-global-background': backgroundActive }">
       <GlobalBackground :settings="mainUiSettings.background" @availability-change="backgroundAvailable = $event" />
       <CustomTitlebar />
+      <div class="global-toast-layer" aria-live="polite" aria-atomic="false">
+        <ToastContainer />
+      </div>
       <div ref="workspaceRef" class="workspace-grid main-only"
         :class="{ 'has-left-panels': hasWorkspaceLeftPanels, 'has-right-panel': hasWorkspaceRightPanel }"
         :style="workspaceGridStyle">
@@ -1190,19 +1207,23 @@ const toolbarRightItems = computed(() => toolbarItems.value
             <div v-if="visibleSessions.length === 0" class="empty-state">
               <div class="empty-left">
                 <div class="recent-sessions-tree-container">
-                  <div class="tree-header">最近会话</div>
+                  <div class="tree-header">
+                    <span>最近会话</span>
+                    <button v-if="recentSessions.length" type="button" class="recent-clear-button"
+                      :disabled="recentClearing" title="清空最近会话" aria-label="清空最近会话"
+                      @click.stop="clearRecentSessionHistory">
+                      <Trash2 :size="14" />
+                    </button>
+                  </div>
                   <div v-if="recentSessions.length === 0" class="no-recent">无记录</div>
                   <div v-else class="tree-list">
-                    <div v-for="s in recentSessions" :key="s.id" class="tree-item" @click="openRecentSession(s)">
-                      <Monitor class="tree-icon" />
+                    <button v-for="s in recentSessions" :key="s.id" type="button" class="tree-item"
+                      @click="openRecentSession(s)">
+                      <component :is="getRecentSessionIcon(s)" class="tree-icon" />
                       <span class="tree-text">{{ s.name || `${s.username}@${s.host}` }}</span>
-                    </div>
+                    </button>
                   </div>
                 </div>
-              </div>
-
-              <div v-if="showSnakeGame" class="empty-right">
-                <SnakeGame />
               </div>
             </div>
             <SyncMergedPanelManager v-else-if="shouldUseSyncMergedView" :sessions="syncMergedSessions"
@@ -1319,15 +1340,31 @@ const toolbarRightItems = computed(() => toolbarItems.value
   isolation: isolate;
 }
 
+.global-toast-layer {
+  position: relative;
+  z-index: var(--z-alert);
+  display: flex;
+  width: 100%;
+  height: 21px;
+  flex: 0 0 21px;
+  align-items: center;
+  justify-content: flex-end;
+  padding: 0 4px;
+  box-sizing: border-box;
+  pointer-events: none;
+  overflow: hidden;
+}
+
 .app-shell > :not(.global-background) { position: relative; z-index: 1; }
 .app-shell.has-floating-surfaces {
   --terminal-surface-bg: color-mix(in srgb, var(--app-bg-dialog) 52%, transparent);
+  --workspace-side-panel-top-offset: 0px;
 }
 .app-shell.has-global-background {
   background: transparent;
 }
 .app-shell.has-floating-surfaces .workspace-grid {
-  padding: 0 7px 7px;
+  padding: 0 4px 4px;
   background: transparent;
   box-shadow: none;
 }
@@ -1341,6 +1378,11 @@ const toolbarRightItems = computed(() => toolbarItems.value
 }
 .app-shell.has-floating-surfaces .workspace-panel-main :deep(.tiled-panel__body) {
   padding: 0;
+}
+.app-shell.has-floating-surfaces .workspace-panel-session,
+.app-shell.has-floating-surfaces .workspace-panel-command-knowledge {
+  margin-top: var(--workspace-side-panel-top-offset);
+  height: calc(100% - var(--workspace-side-panel-top-offset));
 }
 .app-shell.has-floating-surfaces .file-manager,
 .app-shell.has-floating-surfaces .fm-table-header,
@@ -1404,12 +1446,8 @@ const toolbarRightItems = computed(() => toolbarItems.value
   z-index: 30;
 }
 
-.workspace-panel-main :deep(.tiled-panel__body) {
-  padding: 10px;
-}
-
 .workspace-panel-command-knowledge :deep(.tiled-panel__body) {
-  padding: 8px;
+  padding: 0;
   overflow: hidden;
 }
 
@@ -1444,12 +1482,12 @@ const toolbarRightItems = computed(() => toolbarItems.value
 }
 
 .workspace-separator-vertical {
-  width: 8px;
+  width: 4px;
   cursor: col-resize;
 }
 
 .workspace-separator-horizontal {
-  height: 8px;
+  height: 4px;
   cursor: row-resize;
 }
 
@@ -1503,17 +1541,6 @@ const toolbarRightItems = computed(() => toolbarItems.value
   overflow-y: hidden;
 }
 
-.empty-right {
-  flex: 0 0 auto;
-  display: flex;
-  flex-direction: column;
-  justify-content: center;
-  align-items: center;
-  background: transparent;
-  gap: 0;
-  padding: 0;
-}
-
 @media (max-width: 800px) {
   .workspace-grid {
     grid-template-columns: 1fr;
@@ -1529,7 +1556,7 @@ const toolbarRightItems = computed(() => toolbarItems.value
   }
 
   .workspace-separator-horizontal {
-    min-height: 8px;
+    min-height: 4px;
   }
 
   /* Ensure main panel does not collapse to a hairline on small screens */
@@ -1556,12 +1583,47 @@ const toolbarRightItems = computed(() => toolbarItems.value
 }
 
 .tree-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   font-weight: bold;
   font-size: 14px;
   color: var(--app-text-muted);
   border-bottom: 1px solid var(--app-border-light);
   padding-bottom: 8px;
   margin-bottom: 8px;
+}
+
+.recent-clear-button {
+  display: inline-flex;
+  width: 24px;
+  height: 24px;
+  align-items: center;
+  justify-content: center;
+  margin: -4px -4px -4px 8px;
+  padding: 0;
+  border: 0;
+  border-radius: 5px;
+  color: var(--app-text-muted);
+  background: transparent;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--app-motion-control), color var(--app-motion-control), background var(--app-motion-control);
+}
+
+.recent-sessions-tree-container:hover .recent-clear-button,
+.recent-clear-button:focus-visible {
+  opacity: 1;
+}
+
+.recent-clear-button:hover {
+  color: var(--color-danger);
+  background: color-mix(in srgb, var(--color-danger) 12%, transparent);
+}
+
+.recent-clear-button:disabled {
+  cursor: wait;
+  opacity: .45;
 }
 
 .tree-list {
@@ -1575,16 +1637,22 @@ const toolbarRightItems = computed(() => toolbarItems.value
 
 .tree-item {
   display: flex;
+  width: 100%;
   align-items: center;
   padding: 4px 8px;
+  border: 0;
   cursor: pointer;
   border-radius: 2px;
   color: var(--app-text);
+  background: transparent;
   font-size: 13px;
+  text-align: left;
   transition: background 0.1s;
 }
 
-.tree-item:hover {
+.tree-item:hover,
+.tree-item:focus-visible {
+  outline: none;
   background: var(--app-selection-bg);
   color: var(--app-selection-text);
 }
@@ -1617,7 +1685,7 @@ const toolbarRightItems = computed(() => toolbarItems.value
 .welcome-text {
   text-align: center;
   color: var(--app-text-muted);
-  font-family: monospace;
+  font-family: var(--font-mono);
 }
 
 .welcome-text h3 {
@@ -1630,10 +1698,6 @@ const toolbarRightItems = computed(() => toolbarItems.value
 }
 
 /* Dark mode adjustments for empty state parts that rely on XP vars */
-html.dark .empty-right {
-  background: transparent;
-}
-
 html.dark .empty-left {
   background: transparent;
   border-right: none;

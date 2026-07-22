@@ -27,18 +27,23 @@
       "csp": "default-src 'self'; style-src 'self' 'unsafe-inline'; style-src-elem 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; script-src 'self'; img-src 'self' asset: https: data:; font-src 'self' data:",
       "assetProtocol": {
         "enable": true,
-        "scope": [
-          "**/*.html",
-          "**/*.js",
-          "**/*.css",
-          "**/*.svg",
-          "**/*.png",
-          "**/*.gif",
-          "**/*.jpg",
-          "**/*.jpeg",
-          "**/*.webp",
-          "**/*.woff2"
-        ]
+        "scope": {
+          "allow": [
+            "$LOCALDATA/duskterm/backgrounds/**/*",
+            "$DATA/duskterm/backgrounds/**/*",
+            "**/*.html",
+            "**/*.js",
+            "**/*.css",
+            "**/*.svg",
+            "**/*.png",
+            "**/*.gif",
+            "**/*.jpg",
+            "**/*.jpeg",
+            "**/*.webp",
+            "**/*.woff2"
+          ],
+          "requireLiteralLeadingDot": false
+        }
       }
     }
   },

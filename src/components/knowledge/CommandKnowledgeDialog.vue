@@ -203,7 +203,7 @@ const handleSubmit = () => {
 
 .knowledge-command-input {
   min-height: 92px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-family: var(--font-mono);
 }
 
 .knowledge-select {

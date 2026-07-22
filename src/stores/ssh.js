@@ -483,6 +483,17 @@ export const useSshStore = defineStore('ssh', () => {
     return sessionId;
   }
 
+  async function clearRecentSessions() {
+    try {
+      await invokeCommand('clear_recent_sessions');
+      await loadSavedSessions();
+      toast.success('最近会话已清空');
+    } catch (e) {
+      console.error('Failed to clear recent sessions:', e);
+      toast.error('清空最近会话失败');
+    }
+  }
+
   async function openSplitShell(sourceSessionId, workspaceSessionId) {
     const source = getSession(sourceSessionId);
     const root = getSession(workspaceSessionId);
@@ -537,6 +548,7 @@ export const useSshStore = defineStore('ssh', () => {
     loadSavedSessions,
     saveSessionToStorage,
     deleteSessionFromStorage,
+    clearRecentSessions,
     updateSessionGroup,
     setGroupOrder,
     setGroupPinned,

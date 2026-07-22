@@ -323,11 +323,352 @@ fn maybe_send_login_script<W: Write>(
     Ok(())
 }
 
+fn maybe_send_serial_login_script<W: Write>(
+    app_handle: &AppHandle,
+    session_id: &str,
+    writer: &mut W,
+    login_script: Option<&String>,
+) -> Result<(), String> {
+    if let Some(script) = login_script {
+        let trimmed = script.trim();
+        if trimmed.is_empty() {
+            return Ok(());
+        }
+        let mut payload = trimmed.as_bytes().to_vec();
+        payload.extend_from_slice(b"\r\n");
+        writer
+            .write_all(&payload)
+            .map_err(|e| format!("发送登录脚本失败: {}", e))?;
+        writer
+            .flush()
+            .map_err(|e| format!("发送登录脚本失败: {}", e))?;
+        let _ = app_handle.emit(&format!("serial-data-sent-{}", session_id), payload);
+    }
+    Ok(())
+}
+
+fn normalize_telnet_term_type(value: Option<&str>) -> String {
+    let trimmed = value.unwrap_or("").trim();
+    let valid = trimmed.bytes().all(|byte| {
+        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
+    });
+    if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("network") || !valid {
+        return "xterm-256color".to_string();
+    }
+    trimmed.to_string()
+}
+
+#[derive(Clone, Debug)]
+struct TelnetNegotiator {
+    term_type: String,
+    cols: u32,
+    rows: u32,
+    naws_enabled: bool,
+}
+
+impl TelnetNegotiator {
+    const IAC: u8 = 255;
+    const DONT: u8 = 254;
+    const DO: u8 = 253;
+    const WONT: u8 = 252;
+    const WILL: u8 = 251;
+    const SB: u8 = 250;
+    const SE: u8 = 240;
+
+    const OPT_ECHO: u8 = 1;
+    const OPT_SGA: u8 = 3;
+    const OPT_TTYPE: u8 = 24;
+    const OPT_NAWS: u8 = 31;
+    const OPT_LINEMODE: u8 = 34;
+
+    const TTYPE_IS: u8 = 0;
+    const TTYPE_SEND: u8 = 1;
+
+    fn new(term_type: String, cols: u32, rows: u32) -> Self {
+        Self {
+            term_type,
+            cols: cols.clamp(1, u16::MAX as u32),
+            rows: rows.clamp(1, u16::MAX as u32),
+            naws_enabled: false,
+        }
+    }
+
+    fn set_window_size(&mut self, cols: u32, rows: u32) -> Vec<u8> {
+        self.cols = cols.clamp(1, u16::MAX as u32);
+        self.rows = rows.clamp(1, u16::MAX as u32);
+        if self.naws_enabled {
+            self.naws_response()
+        } else {
+            Vec::new()
+        }
+    }
+
+    fn push_command(response: &mut Vec<u8>, command: u8, option: u8) {
+        response.extend_from_slice(&[Self::IAC, command, option]);
+    }
+
+    fn push_subnegotiation_byte(response: &mut Vec<u8>, value: u8) {
+        response.push(value);
+        if value == Self::IAC {
+            response.push(Self::IAC);
+        }
+    }
+
+    fn naws_response(&self) -> Vec<u8> {
+        let cols = self.cols as u16;
+        let rows = self.rows as u16;
+        let mut response = vec![Self::IAC, Self::SB, Self::OPT_NAWS];
+        for value in [
+            (cols >> 8) as u8,
+            cols as u8,
+            (rows >> 8) as u8,
+            rows as u8,
+        ] {
+            Self::push_subnegotiation_byte(&mut response, value);
+        }
+        response.extend_from_slice(&[Self::IAC, Self::SE]);
+        response
+    }
+
+    fn ttype_response(&self) -> Vec<u8> {
+        let mut response = vec![Self::IAC, Self::SB, Self::OPT_TTYPE, Self::TTYPE_IS];
+        response.extend_from_slice(self.term_type.as_bytes());
+        response.extend_from_slice(&[Self::IAC, Self::SE]);
+        response
+    }
+
+    fn handle_option(&mut self, command: u8, option: u8, responses: &mut Vec<u8>) {
+        match command {
+            Self::DO => match option {
+                Self::OPT_TTYPE | Self::OPT_SGA => {
+                    Self::push_command(responses, Self::WILL, option);
+                }
+                Self::OPT_NAWS => {
+                    self.naws_enabled = true;
+                    Self::push_command(responses, Self::WILL, option);
+                    responses.extend_from_slice(&self.naws_response());
+                }
+                _ => Self::push_command(responses, Self::WONT, option),
+            },
+            Self::DONT if option == Self::OPT_NAWS => self.naws_enabled = false,
+            Self::DONT => {}
+            Self::WILL => match option {
+                Self::OPT_ECHO | Self::OPT_SGA => {
+                    Self::push_command(responses, Self::DO, option);
+                }
+                Self::OPT_LINEMODE => {
+                    Self::push_command(responses, Self::DONT, option);
+                }
+                _ => Self::push_command(responses, Self::DONT, option),
+            },
+            Self::WONT => {}
+            _ => {}
+        }
+    }
+
+    fn handle_subnegotiation(&mut self, payload: &[u8], responses: &mut Vec<u8>) {
+        if payload.len() >= 2
+            && payload[0] == Self::OPT_TTYPE
+            && payload[1] == Self::TTYPE_SEND
+        {
+            responses.extend_from_slice(&self.ttype_response());
+        }
+    }
+
+    fn parse(&mut self, bytes: &[u8]) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        let mut data = Vec::new();
+        let mut responses = Vec::new();
+        let mut index = 0;
+
+        while index < bytes.len() {
+            if bytes[index] != Self::IAC {
+                data.push(bytes[index]);
+                index += 1;
+                continue;
+            }
+
+            if index + 1 >= bytes.len() {
+                return (data, responses, bytes[index..].to_vec());
+            }
+
+            let command = bytes[index + 1];
+            match command {
+                Self::IAC => {
+                    data.push(Self::IAC);
+                    index += 2;
+                }
+                Self::DO | Self::DONT | Self::WILL | Self::WONT => {
+                    if index + 2 >= bytes.len() {
+                        return (data, responses, bytes[index..].to_vec());
+                    }
+                    self.handle_option(command, bytes[index + 2], &mut responses);
+                    index += 3;
+                }
+                Self::SB => {
+                    let payload_start = index + 2;
+                    let mut end = payload_start;
+                    let mut found = false;
+                    while end < bytes.len() {
+                        if bytes[end] == Self::IAC {
+                            if end + 1 >= bytes.len() {
+                                return (data, responses, bytes[index..].to_vec());
+                            }
+                            if bytes[end + 1] == Self::SE {
+                                found = true;
+                                break;
+                            }
+                            end += 2;
+                            continue;
+                        }
+                        end += 1;
+                    }
+                    if !found {
+                        return (data, responses, bytes[index..].to_vec());
+                    }
+                    self.handle_subnegotiation(&bytes[payload_start..end], &mut responses);
+                    index = end + 2;
+                }
+                _ => {
+                    index += 2;
+                }
+            }
+        }
+
+        (data, responses, Vec::new())
+    }
+}
+
+#[cfg(test)]
+mod telnet_tests {
+    use super::{normalize_telnet_term_type, TelnetNegotiator};
+
+    #[test]
+    fn telnet_accepts_remote_echo() {
+        let mut negotiator = TelnetNegotiator::new("xterm-256color".to_string(), 80, 24);
+        let (_data, responses, remainder) = negotiator.parse(&[
+            TelnetNegotiator::IAC,
+            TelnetNegotiator::WILL,
+            TelnetNegotiator::OPT_ECHO,
+        ]);
+
+        assert!(remainder.is_empty());
+        assert_eq!(
+            responses,
+            vec![
+                TelnetNegotiator::IAC,
+                TelnetNegotiator::DO,
+                TelnetNegotiator::OPT_ECHO,
+            ]
+        );
+    }
+
+    #[test]
+    fn telnet_reports_configured_terminal_type() {
+        let term_type = normalize_telnet_term_type(Some("network"));
+        let mut negotiator = TelnetNegotiator::new(term_type, 80, 24);
+        let (_data, responses, remainder) = negotiator.parse(&[
+            TelnetNegotiator::IAC,
+            TelnetNegotiator::DO,
+            TelnetNegotiator::OPT_TTYPE,
+            TelnetNegotiator::IAC,
+            TelnetNegotiator::SB,
+            TelnetNegotiator::OPT_TTYPE,
+            TelnetNegotiator::TTYPE_SEND,
+            TelnetNegotiator::IAC,
+            TelnetNegotiator::SE,
+        ]);
+
+        let mut expected = vec![
+            TelnetNegotiator::IAC,
+            TelnetNegotiator::WILL,
+            TelnetNegotiator::OPT_TTYPE,
+            TelnetNegotiator::IAC,
+            TelnetNegotiator::SB,
+            TelnetNegotiator::OPT_TTYPE,
+            TelnetNegotiator::TTYPE_IS,
+        ];
+        expected.extend_from_slice(b"xterm-256color");
+        expected.extend_from_slice(&[TelnetNegotiator::IAC, TelnetNegotiator::SE]);
+
+        assert!(remainder.is_empty());
+        assert_eq!(responses, expected);
+    }
+
+    #[test]
+    fn telnet_sends_naws_and_updates_on_resize() {
+        let mut negotiator = TelnetNegotiator::new("xterm-256color".to_string(), 80, 24);
+        let (_data, responses, remainder) = negotiator.parse(&[
+            TelnetNegotiator::IAC,
+            TelnetNegotiator::DO,
+            TelnetNegotiator::OPT_NAWS,
+        ]);
+
+        assert!(remainder.is_empty());
+        assert_eq!(
+            responses,
+            vec![
+                TelnetNegotiator::IAC,
+                TelnetNegotiator::WILL,
+                TelnetNegotiator::OPT_NAWS,
+                TelnetNegotiator::IAC,
+                TelnetNegotiator::SB,
+                TelnetNegotiator::OPT_NAWS,
+                0,
+                80,
+                0,
+                24,
+                TelnetNegotiator::IAC,
+                TelnetNegotiator::SE,
+            ]
+        );
+
+        assert_eq!(
+            negotiator.set_window_size(100, 40),
+            vec![
+                TelnetNegotiator::IAC,
+                TelnetNegotiator::SB,
+                TelnetNegotiator::OPT_NAWS,
+                0,
+                100,
+                0,
+                40,
+                TelnetNegotiator::IAC,
+                TelnetNegotiator::SE,
+            ]
+        );
+    }
+
+    #[test]
+    fn telnet_keeps_partial_iac_as_remainder() {
+        let mut negotiator = TelnetNegotiator::new("xterm-256color".to_string(), 80, 24);
+        let (data, responses, remainder) = negotiator.parse(&[b'a', TelnetNegotiator::IAC]);
+
+        assert_eq!(data, b"a");
+        assert!(responses.is_empty());
+        assert_eq!(remainder, vec![TelnetNegotiator::IAC]);
+
+        let mut combined = remainder;
+        combined.extend_from_slice(&[TelnetNegotiator::WILL, TelnetNegotiator::OPT_ECHO]);
+        let (_data, responses, remainder) = negotiator.parse(&combined);
+
+        assert!(remainder.is_empty());
+        assert_eq!(
+            responses,
+            vec![
+                TelnetNegotiator::IAC,
+                TelnetNegotiator::DO,
+                TelnetNegotiator::OPT_ECHO,
+            ]
+        );
+    }
+}
+
 fn spawn_telnet_session(
     app_handle: AppHandle,
     session_id: String,
     config: SshConfig,
     mut rx: SessionIoReceiver,
+    mut resize_rx: SessionResizeReceiver,
     mut close_rx: tokio::sync::mpsc::UnboundedReceiver<()>,
 ) {
     thread::spawn(move || {
@@ -349,6 +690,7 @@ fn spawn_telnet_session(
             let username = config.username.trim().to_string();
             let password = config.password.clone().unwrap_or_default();
             let keepalive_interval = config.keep_alive_interval.unwrap_or(0);
+            let term_type = normalize_telnet_term_type(config.term_type.as_deref());
             let mut last_keepalive = Instant::now();
             let mut sent_username = username.is_empty();
             let mut sent_password = password.is_empty();
@@ -356,6 +698,7 @@ fn spawn_telnet_session(
             let mut prompt_cache = String::new();
             let mut carry = Vec::new();
             let mut read_buf = [0u8; 4096];
+            let mut negotiator = TelnetNegotiator::new(term_type, 80, 24);
 
             loop {
                 if close_rx.try_recv().is_ok() {
@@ -375,6 +718,15 @@ fn spawn_telnet_session(
                     }
                 }
 
+                while let Ok((cols, rows)) = resize_rx.try_recv() {
+                    let response = negotiator.set_window_size(cols, rows);
+                    if !response.is_empty() {
+                        let _ = stream.write_all(&response);
+                        let _ = stream.flush();
+                        last_keepalive = Instant::now();
+                    }
+                }
+
                 if keepalive_interval > 0
                     && last_keepalive.elapsed() >= Duration::from_secs(keepalive_interval)
                 {
@@ -389,7 +741,7 @@ fn spawn_telnet_session(
                         let mut combined = Vec::with_capacity(carry.len() + read);
                         combined.extend_from_slice(&carry);
                         combined.extend_from_slice(&read_buf[..read]);
-                        let (terminal_bytes, responses, remainder) = parse_telnet_bytes(&combined);
+                        let (terminal_bytes, responses, remainder) = negotiator.parse(&combined);
                         carry = remainder;
 
                         if !responses.is_empty() {
@@ -480,7 +832,12 @@ fn spawn_serial_session(
             let mut port = build_serial_port(&config)?;
             let _ = app_handle.emit(&format!("ssh-connected-{}", session_id), ());
 
-            maybe_send_login_script(&mut port, config.login_script.as_ref(), b"\r\n")?;
+            maybe_send_serial_login_script(
+                &app_handle,
+                &session_id,
+                &mut port,
+                config.login_script.as_ref(),
+            )?;
 
             let mut read_buf = [0u8; 4096];
             loop {
@@ -493,6 +850,7 @@ fn spawn_serial_session(
                         port.write_all(&data)
                             .map_err(|e| format!("串口写入失败: {}", e))?;
                         port.flush().map_err(|e| format!("串口写入失败: {}", e))?;
+                        let _ = app_handle.emit(&format!("serial-data-sent-{}", session_id), data);
                     }
                 }
 
@@ -519,72 +877,6 @@ fn spawn_serial_session(
         }
         emit_session_closed(&app_handle, &session_id, "session closed");
     });
-}
-
-fn parse_telnet_bytes(bytes: &[u8]) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
-    const IAC: u8 = 255;
-    const DONT: u8 = 254;
-    const DO: u8 = 253;
-    const WONT: u8 = 252;
-    const WILL: u8 = 251;
-    const SB: u8 = 250;
-    const SE: u8 = 240;
-
-    let mut data = Vec::new();
-    let mut responses = Vec::new();
-    let mut index = 0;
-
-    while index < bytes.len() {
-        if bytes[index] != IAC {
-            data.push(bytes[index]);
-            index += 1;
-            continue;
-        }
-
-        if index + 1 >= bytes.len() {
-            return (data, responses, bytes[index..].to_vec());
-        }
-
-        let command = bytes[index + 1];
-        match command {
-            IAC => {
-                data.push(IAC);
-                index += 2;
-            }
-            DO | DONT | WILL | WONT => {
-                if index + 2 >= bytes.len() {
-                    return (data, responses, bytes[index..].to_vec());
-                }
-                let option = bytes[index + 2];
-                match command {
-                    DO => responses.extend_from_slice(&[IAC, WONT, option]),
-                    WILL => responses.extend_from_slice(&[IAC, DONT, option]),
-                    _ => {}
-                }
-                index += 3;
-            }
-            SB => {
-                let mut end = index + 2;
-                let mut found = false;
-                while end + 1 < bytes.len() {
-                    if bytes[end] == IAC && bytes[end + 1] == SE {
-                        found = true;
-                        break;
-                    }
-                    end += 1;
-                }
-                if !found {
-                    return (data, responses, bytes[index..].to_vec());
-                }
-                index = end + 2;
-            }
-            _ => {
-                index += 2;
-            }
-        }
-    }
-
-    (data, responses, Vec::new())
 }
 
 #[derive(Clone, Debug)]
@@ -1472,7 +1764,7 @@ pub async fn connect_ssh_legacy(
 
     match normalized_protocol(config.protocol.as_deref()) {
         "telnet" => {
-            spawn_telnet_session(app_handle, session_id_clone, config, rx, close_rx);
+            spawn_telnet_session(app_handle, session_id_clone, config, rx, resize_rx, close_rx);
             return Ok(runtime_handle);
         }
         "serial" => {
@@ -1538,7 +1830,7 @@ pub async fn connect_ssh_runtime(
 
     let task = match normalized_protocol(config.protocol.as_deref()) {
         "telnet" => {
-            spawn_telnet_session(app_handle, session_id, config, rx, close_rx);
+            spawn_telnet_session(app_handle, session_id, config, rx, resize_rx, close_rx);
             None
         }
         "serial" => {

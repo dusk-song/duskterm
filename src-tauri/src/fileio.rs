@@ -1,6 +1,7 @@
 use base64::Engine;
 use serde::Serialize;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 
 #[tauri::command]
@@ -16,6 +17,41 @@ pub fn save_text_file(path: String, content: String) -> Result<(), String> {
         fs::create_dir_all(parent).map_err(|e| e.to_string())?;
     }
     fs::write(&target, content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn save_binary_file(path: String, content: Vec<u8>) -> Result<(), String> {
+    let target = PathBuf::from(&path);
+    if target
+        .components()
+        .any(|c| c == std::path::Component::ParentDir)
+    {
+        return Err("路径包含非法字符".to_string());
+    }
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    fs::write(&target, content).map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub fn append_binary_file(path: String, content: Vec<u8>) -> Result<(), String> {
+    let target = PathBuf::from(&path);
+    if target
+        .components()
+        .any(|c| c == std::path::Component::ParentDir)
+    {
+        return Err("路径包含非法字符".to_string());
+    }
+    if let Some(parent) = target.parent() {
+        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&target)
+        .map_err(|e| e.to_string())?;
+    file.write_all(&content).map_err(|e| e.to_string())
 }
 
 #[derive(Serialize)]

@@ -51,6 +51,7 @@ pub fn run() {
             ssh::resize_ssh_shell_channel,
             ssh::close_ssh_shell_channel,
             storage::load_sessions,
+            storage::clear_recent_sessions,
             storage::save_session,
             storage::delete_session,
             storage::get_decrypted_session,
@@ -97,6 +98,8 @@ pub fn run() {
             sftp::sftp_stat,
             system::get_system_stats,
             fileio::save_text_file,
+            fileio::save_binary_file,
+            fileio::append_binary_file,
             fileio::import_desktop_pet_asset,
             remote_monitor::get_remote_stats
         ])

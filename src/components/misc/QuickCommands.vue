@@ -192,7 +192,7 @@ function handleInsert(cmd) {
 
 .qc-col-cmd {
   @apply flex-1 min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-[12px] text-[hsl(var(--foreground))];
-  font-family: 'Consolas', 'Cascadia Mono', 'Courier New', monospace;
+  font-family: var(--font-mono);
 }
 
 .qc-header .qc-col-cmd {
