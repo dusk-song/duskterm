@@ -41,12 +41,14 @@ import { useTerminalConnection } from './composables/useTerminalConnection';
 import { useTerminalPanels } from './composables/useTerminalPanels';
 import { useTheme } from './composables/useTheme';
 import { createSessionBooleanState, resolveFocusedSessionId } from './utils/sftpPanelState';
+import { useSftpTransfersStore } from './stores/sftpTransfers';
 import { useSshStore } from './stores/ssh';
 import { invokeCommand, listenEvent } from './utils/ipc';
 import { loadMainUiSettings, normalizeMainUiSettings, saveMainUiSettings } from './utils/mainUi';
 import { getPreferenceDefaults, loadPreference } from './utils/preferences';
 
 const sshStore = useSshStore();
+const sftpTransfersStore = useSftpTransfersStore();
 const { theme, setTheme } = useTheme();
 
 // Native menu handling removed — CustomTitlebar handles menus directly
@@ -1011,6 +1013,7 @@ const handleGlobalKeydown = (e) => {
 };
 
 let unlistenHostkey = null;
+let unlistenSftpProgress = null;
 
 const showHostkeyPrompt = (payload) => {
   if (!payload || !payload.sessionId) return;
@@ -1057,6 +1060,7 @@ const refreshMainUiSettings = (event) => {
 onMounted(async () => {
   const unlistenSshHostkey = await listenEvent('ssh-hostkey-request', showHostkeyPrompt);
   const unlistenSftpHostkey = await listenEvent('sftp-hostkey-request', showHostkeyPrompt);
+  unlistenSftpProgress = await listenEvent('sftp-progress', sftpTransfersStore.applyProgress);
   unlistenHostkey = () => {
     unlistenSshHostkey?.();
     unlistenSftpHostkey?.();
@@ -1080,6 +1084,7 @@ onMounted(async () => {
 
 onUnmounted(() => {
   if (unlistenHostkey) unlistenHostkey();
+  if (unlistenSftpProgress) unlistenSftpProgress();
   if (sftpPanelTransitionTimer) {
     clearTimeout(sftpPanelTransitionTimer);
     sftpPanelTransitionTimer = null;

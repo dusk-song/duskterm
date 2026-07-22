@@ -15,6 +15,7 @@ pub struct SessionRuntimeState {
     pub tunnels: TunnelRuntimeState,
     pub security: SecurityState,
     pub transfers: TransferState,
+    pub transfer_tasks: HashMap<String, tokio::task::JoinHandle<()>>,
 }
 
 impl SessionRuntimeState {
@@ -43,6 +44,7 @@ impl Default for SessionRuntimeState {
             tunnels: TunnelRuntimeState::default(),
             security: SecurityState::default(),
             transfers: TransferState::default(),
+            transfer_tasks: HashMap::new(),
         }
     }
 }

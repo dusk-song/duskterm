@@ -12,6 +12,20 @@ pub struct SessionActorHandle {
     pub sender: UnboundedSender<SessionMessage>,
 }
 
+fn reap_finished_transfer_tasks(runtime_state: &mut SessionRuntimeState) {
+    runtime_state
+        .transfer_tasks
+        .retain(|_, task| !task.is_finished());
+}
+
+async fn drain_transfer_tasks(runtime_state: &mut SessionRuntimeState) {
+    runtime_state.transfers.cancel_all();
+    let tasks = std::mem::take(&mut runtime_state.transfer_tasks);
+    for (_, task) in tasks {
+        let _ = task.await;
+    }
+}
+
 pub fn spawn_session_actor(
     session_id: String,
     pending_ssh_hostkey: SharedHostkeyDecision,
@@ -132,7 +146,7 @@ pub fn spawn_session_actor(
                 } => {
                     runtime_state.lifecycle = LifecycleState::Closed;
                     runtime_state.terminal.attached = false;
-                    runtime_state.transfers.cancel_all();
+                    drain_transfer_tasks(&mut runtime_state).await;
                     let sftp_handle = runtime_state.sftp.take();
                     runtime_state.sftp = None;
                     let ssh_runtime = runtime_state.ssh.take();
@@ -186,7 +200,7 @@ pub fn spawn_session_actor(
                     let _ = respond_to.send(response);
                 }
                 SessionMessage::DisconnectSftp { respond_to } => {
-                    runtime_state.transfers.cancel_all();
+                    drain_transfer_tasks(&mut runtime_state).await;
                     let sftp_handle = runtime_state.sftp.take();
                     runtime_state.sftp = None;
                     let result =
@@ -409,7 +423,11 @@ pub fn spawn_session_actor(
                     });
                     let pending_sftp_hostkey = runtime_state.security.pending_sftp_hostkey.clone();
                     let transfers = runtime_state.transfers.clone();
-                    tokio::spawn(async move {
+                    let cancel = transfers.register_cancel_token(&req_id);
+                    let transfer_req_id = req_id.clone();
+                    let cleanup_req_id = req_id.clone();
+                    reap_finished_transfer_tasks(&mut runtime_state);
+                    let task = tokio::spawn(async move {
                         let result = if let Some((
                             runtime_state,
                             sftp_handle,
@@ -424,7 +442,7 @@ pub fn spawn_session_actor(
                                 reused_from_ssh,
                                 connection_config,
                                 pending_sftp_hostkey,
-                                transfers,
+                                cancel,
                                 transfer_session_id,
                                 remote_path,
                                 local_path,
@@ -434,8 +452,10 @@ pub fn spawn_session_actor(
                         } else {
                             Err("SFTP Session not found".to_string())
                         };
+                        transfers.cleanup(&cleanup_req_id);
                         let _ = respond_to.send(result);
                     });
+                    runtime_state.transfer_tasks.insert(transfer_req_id, task);
                 }
                 SessionMessage::StartSftpUpload {
                     window,
@@ -455,7 +475,11 @@ pub fn spawn_session_actor(
                     });
                     let pending_sftp_hostkey = runtime_state.security.pending_sftp_hostkey.clone();
                     let transfers = runtime_state.transfers.clone();
-                    tokio::spawn(async move {
+                    let cancel = transfers.register_cancel_token(&req_id);
+                    let transfer_req_id = req_id.clone();
+                    let cleanup_req_id = req_id.clone();
+                    reap_finished_transfer_tasks(&mut runtime_state);
+                    let task = tokio::spawn(async move {
                         let result = if let Some((
                             runtime_state,
                             sftp_handle,
@@ -470,7 +494,7 @@ pub fn spawn_session_actor(
                                 reused_from_ssh,
                                 connection_config,
                                 pending_sftp_hostkey,
-                                transfers,
+                                cancel,
                                 transfer_session_id,
                                 local_path,
                                 remote_path,
@@ -480,8 +504,10 @@ pub fn spawn_session_actor(
                         } else {
                             Err("SFTP Session not found".to_string())
                         };
+                        transfers.cleanup(&cleanup_req_id);
                         let _ = respond_to.send(result);
                     });
+                    runtime_state.transfer_tasks.insert(transfer_req_id, task);
                 }
                 SessionMessage::CancelSftpTransfer { req_id, respond_to } => {
                     let result = runtime_state.transfers.cancel(&req_id);

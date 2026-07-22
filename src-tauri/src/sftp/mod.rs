@@ -824,7 +824,7 @@ pub async fn sftp_download_file_runtime(
     reused_from_ssh: bool,
     connection_config: SshConfig,
     pending_hostkey: crate::session::state::SharedHostkeyDecision,
-    transfers: crate::session::state::TransferState,
+    cancel: Arc<AtomicBool>,
     session_id: String,
     remote_path: String,
     local_path: String,
@@ -837,7 +837,7 @@ pub async fn sftp_download_file_runtime(
         reused_from_ssh,
         connection_config,
         pending_hostkey,
-        transfers,
+        cancel,
         session_id,
         remote_path,
         local_path,
@@ -853,7 +853,7 @@ pub async fn sftp_upload_file_runtime(
     reused_from_ssh: bool,
     connection_config: SshConfig,
     pending_hostkey: crate::session::state::SharedHostkeyDecision,
-    transfers: crate::session::state::TransferState,
+    cancel: Arc<AtomicBool>,
     session_id: String,
     local_path: String,
     remote_path: String,
@@ -866,7 +866,7 @@ pub async fn sftp_upload_file_runtime(
         reused_from_ssh,
         connection_config,
         pending_hostkey,
-        transfers,
+        cancel,
         session_id,
         local_path,
         remote_path,
@@ -2137,6 +2137,57 @@ pub async fn sftp_save_text_file(
         .await
 }
 
+fn emit_transfer_cancelled(
+    window: &Window,
+    session_id: &str,
+    req_id: &str,
+    direction: &str,
+    current: u64,
+    total: u64,
+) {
+    let _ = window.emit(
+        "sftp-progress",
+        ProgressPayload {
+            session_id: session_id.to_string(),
+            id: req_id.to_string(),
+            direction: direction.to_string(),
+            current,
+            total,
+            percent: if total > 0 {
+                ((current as f64 / total as f64) * 100.0) as u8
+            } else {
+                0
+            },
+            status: "cancelled".to_string(),
+            error: Some("Transfer cancelled".to_string()),
+        },
+    );
+}
+
+fn ensure_transfer_active(
+    window: &Window,
+    cancel: &Arc<AtomicBool>,
+    session_id: &str,
+    req_id: &str,
+    direction: &str,
+    current: u64,
+    total: u64,
+) -> Result<(), String> {
+    if cancel.load(Ordering::Relaxed) {
+        emit_transfer_cancelled(
+            window,
+            session_id,
+            req_id,
+            direction,
+            current,
+            total,
+        );
+        Err("Transfer cancelled".to_string())
+    } else {
+        Ok(())
+    }
+}
+
 pub async fn sftp_download_file_legacy(
     window: Window,
     state: &SftpAppState,
@@ -2144,12 +2195,21 @@ pub async fn sftp_download_file_legacy(
     reused_from_ssh: bool,
     connection_config: SshConfig,
     pending_hostkey: crate::session::state::SharedHostkeyDecision,
-    transfers: crate::session::state::TransferState,
+    cancel: Arc<AtomicBool>,
     session_id: String,
     remote_path: String,
     local_path: String,
     req_id: String,
 ) -> Result<(), String> {
+    ensure_transfer_active(
+        &window,
+        &cancel,
+        &session_id,
+        &req_id,
+        "download",
+        0,
+        0,
+    )?;
     let transfer_session = open_transfer_sftp_session(
         state,
         &window.app_handle(),
@@ -2163,6 +2223,16 @@ pub async fn sftp_download_file_legacy(
     .await?;
     let sftp = transfer_session.sftp.clone();
 
+    ensure_transfer_active(
+        &window,
+        &cancel,
+        &session_id,
+        &req_id,
+        "download",
+        0,
+        0,
+    )?;
+
     let total_size = sftp
         .metadata(&remote_path)
         .await
@@ -2170,10 +2240,21 @@ pub async fn sftp_download_file_legacy(
         .and_then(|meta| meta.size)
         .unwrap_or(0);
 
+    ensure_transfer_active(
+        &window,
+        &cancel,
+        &session_id,
+        &req_id,
+        "download",
+        0,
+        total_size,
+    )?;
+
     let emit_failed = |current: u64, total: u64, err: String| {
         let _ = window.emit(
             "sftp-progress",
             ProgressPayload {
+                session_id: session_id.clone(),
                 id: req_id.clone(),
                 direction: "download".to_string(),
                 current,
@@ -2203,6 +2284,7 @@ pub async fn sftp_download_file_legacy(
     let _ = window.emit(
         "sftp-progress",
         ProgressPayload {
+            session_id: session_id.clone(),
             id: req_id.clone(),
             direction: "download".to_string(),
             current: 0,
@@ -2213,13 +2295,29 @@ pub async fn sftp_download_file_legacy(
         },
     );
 
-    let cancel = transfers.register_cancel_token(&req_id);
     let result =
-        pipelined_sftp_download(&window, &req_id, total_size, remote, &mut local, &cancel).await;
-    transfers.cleanup(&req_id);
+        pipelined_sftp_download(
+            &window,
+            &session_id,
+            &req_id,
+            total_size,
+            remote,
+            &mut local,
+            &cancel,
+        )
+        .await;
 
     match result {
         Ok(downloaded) => {
+            ensure_transfer_active(
+                &window,
+                &cancel,
+                &session_id,
+                &req_id,
+                "download",
+                downloaded,
+                total_size,
+            )?;
             use tokio::io::AsyncWriteExt;
             local.flush().await.map_err(|e| {
                 let err = format!("Flush Error: {}", e);
@@ -2230,6 +2328,7 @@ pub async fn sftp_download_file_legacy(
             let _ = window.emit(
                 "sftp-progress",
                 ProgressPayload {
+                    session_id: session_id.clone(),
                     id: req_id,
                     direction: "download".to_string(),
                     current: downloaded,
@@ -2246,6 +2345,7 @@ pub async fn sftp_download_file_legacy(
                 let _ = window.emit(
                     "sftp-progress",
                     ProgressPayload {
+                        session_id: session_id.clone(),
                         id: req_id,
                         direction: "download".to_string(),
                         current: 0,
@@ -2284,6 +2384,7 @@ pub async fn sftp_download_file(
 
 async fn pipelined_sftp_download<RemoteReader: tokio::io::AsyncRead + Unpin + Send + 'static>(
     window: &Window,
+    session_id: &str,
     req_id: &str,
     total_size: u64,
     mut remote: RemoteReader,
@@ -2296,6 +2397,7 @@ async fn pipelined_sftp_download<RemoteReader: tokio::io::AsyncRead + Unpin + Se
         tokio::sync::mpsc::channel::<Result<Vec<u8>, String>>(SFTP_TRANSFER_CHANNEL_SIZE);
 
     let read_cancel = cancel.clone();
+    let read_session_id = session_id.to_string();
     let read_req_id = req_id.to_string();
     let read_window = window.clone();
 
@@ -2319,6 +2421,7 @@ async fn pipelined_sftp_download<RemoteReader: tokio::io::AsyncRead + Unpin + Se
                     let _ = read_window.emit(
                         "sftp-progress",
                         ProgressPayload {
+                            session_id: read_session_id.clone(),
                             id: read_req_id,
                             direction: "download".to_string(),
                             current: 0,
@@ -2339,6 +2442,7 @@ async fn pipelined_sftp_download<RemoteReader: tokio::io::AsyncRead + Unpin + Se
         let _ = window.emit(
             "sftp-progress",
             ProgressPayload {
+                session_id: session_id.to_string(),
                 id: req_id.to_string(),
                 direction: "download".to_string(),
                 current,
@@ -2378,6 +2482,7 @@ async fn pipelined_sftp_download<RemoteReader: tokio::io::AsyncRead + Unpin + Se
             let _ = window.emit(
                 "sftp-progress",
                 ProgressPayload {
+                    session_id: session_id.to_string(),
                     id: req_id.to_string(),
                     direction: "download".to_string(),
                     current: downloaded,
@@ -2407,12 +2512,21 @@ pub async fn sftp_upload_file_legacy(
     reused_from_ssh: bool,
     connection_config: SshConfig,
     pending_hostkey: crate::session::state::SharedHostkeyDecision,
-    transfers: crate::session::state::TransferState,
+    cancel: Arc<AtomicBool>,
     session_id: String,
     local_path: String,
     remote_path: String,
     req_id: String,
 ) -> Result<(), String> {
+    ensure_transfer_active(
+        &window,
+        &cancel,
+        &session_id,
+        &req_id,
+        "upload",
+        0,
+        0,
+    )?;
     let transfer_session = open_transfer_sftp_session(
         state,
         &window.app_handle(),
@@ -2426,10 +2540,21 @@ pub async fn sftp_upload_file_legacy(
     .await?;
     let sftp = transfer_session.sftp.clone();
 
+    ensure_transfer_active(
+        &window,
+        &cancel,
+        &session_id,
+        &req_id,
+        "upload",
+        0,
+        0,
+    )?;
+
     let emit_failed = |current: u64, total: u64, err: String| {
         let _ = window.emit(
             "sftp-progress",
             ProgressPayload {
+                session_id: session_id.clone(),
                 id: req_id.clone(),
                 direction: "upload".to_string(),
                 current,
@@ -2463,6 +2588,15 @@ pub async fn sftp_upload_file_legacy(
         }
     };
     let total_size = local_meta.len();
+    ensure_transfer_active(
+        &window,
+        &cancel,
+        &session_id,
+        &req_id,
+        "upload",
+        0,
+        total_size,
+    )?;
     let source_origin_time = local_meta
         .created()
         .ok()
@@ -2523,6 +2657,16 @@ pub async fn sftp_upload_file_legacy(
         format!("{}/{}", parent_dir, backup_name)
     };
 
+    ensure_transfer_active(
+        &window,
+        &cancel,
+        &session_id,
+        &req_id,
+        "upload",
+        0,
+        total_size,
+    )?;
+
     let mut remote = match sftp.create(&temp_path).await {
         Ok(file) => file,
         Err(e) => {
@@ -2535,6 +2679,7 @@ pub async fn sftp_upload_file_legacy(
     let _ = window.emit(
         "sftp-progress",
         ProgressPayload {
+            session_id: session_id.clone(),
             id: req_id.clone(),
             direction: "upload".to_string(),
             current: 0,
@@ -2545,19 +2690,26 @@ pub async fn sftp_upload_file_legacy(
         },
     );
 
-    let cancel = transfers.register_cancel_token(&req_id);
-
     let result =
-        pipelined_sftp_upload(&window, &req_id, total_size, local, &mut remote, &cancel).await;
+        pipelined_sftp_upload(
+            &window,
+            &session_id,
+            &req_id,
+            total_size,
+            local,
+            &mut remote,
+            &cancel,
+        )
+        .await;
     let uploaded = match result {
         Ok(bytes) => bytes,
         Err(e) => {
             let _ = sftp.remove_file(&temp_path).await;
-            transfers.cleanup(&req_id);
             if cancel.load(Ordering::Relaxed) {
                 let _ = window.emit(
                     "sftp-progress",
                     ProgressPayload {
+                        session_id: session_id.clone(),
                         id: req_id,
                         direction: "upload".to_string(),
                         current: 0,
@@ -2571,8 +2723,18 @@ pub async fn sftp_upload_file_legacy(
             return Err(e);
         }
     };
-    transfers.cleanup(&req_id);
-
+    if cancel.load(Ordering::Relaxed) {
+        let _ = sftp.remove_file(&temp_path).await;
+        emit_transfer_cancelled(
+            &window,
+            &session_id,
+            &req_id,
+            "upload",
+            uploaded,
+            total_size,
+        );
+        return Err("Transfer cancelled".to_string());
+    }
     // 强一致性防御：如果你本地真的扫出了总大小，而传传传...传到最后发现实际上累计传出去的字节(uploaded)
     // 根本就没有达到本地计算的总文件大小(total_size)，说明读取流在本地提前断了（比如被占用或报了0）。
     // 这种情况下直接算上传失败，绝不允许继续下一步将残次品替换上去！
@@ -2600,6 +2762,19 @@ pub async fn sftp_upload_file_legacy(
     }
     drop(remote);
 
+    if cancel.load(Ordering::Relaxed) {
+        let _ = sftp.remove_file(&temp_path).await;
+        emit_transfer_cancelled(
+            &window,
+            &session_id,
+            &req_id,
+            "upload",
+            uploaded,
+            total_size,
+        );
+        return Err("Transfer cancelled".to_string());
+    }
+
     let temp_size = match read_remote_size_with_retry(&sftp, temp_path.as_str(), 8, 120).await {
         Ok(size) => size,
         Err(e) => {
@@ -2620,6 +2795,19 @@ pub async fn sftp_upload_file_legacy(
         return Err(err);
     }
 
+    if cancel.load(Ordering::Relaxed) {
+        let _ = sftp.remove_file(&temp_path).await;
+        emit_transfer_cancelled(
+            &window,
+            &session_id,
+            &req_id,
+            "upload",
+            uploaded,
+            total_size,
+        );
+        return Err("Transfer cancelled".to_string());
+    }
+
     if had_original {
         if let Err(e) = sftp.rename(&remote_path, &backup_path).await {
             let _ = sftp.remove_file(&temp_path).await;
@@ -2627,6 +2815,7 @@ pub async fn sftp_upload_file_legacy(
             let _ = window.emit(
                 "sftp-progress",
                 ProgressPayload {
+                    session_id: session_id.clone(),
                     id: req_id.clone(),
                     direction: "upload".to_string(),
                     current: uploaded,
@@ -2644,6 +2833,22 @@ pub async fn sftp_upload_file_legacy(
         }
     }
 
+    if cancel.load(Ordering::Relaxed) {
+        if had_original {
+            let _ = sftp.rename(&backup_path, &remote_path).await;
+        }
+        let _ = sftp.remove_file(&temp_path).await;
+        emit_transfer_cancelled(
+            &window,
+            &session_id,
+            &req_id,
+            "upload",
+            uploaded,
+            total_size,
+        );
+        return Err("Transfer cancelled".to_string());
+    }
+
     if let Err(e) = sftp.rename(&temp_path, &remote_path).await {
         if had_original {
             let _ = sftp.rename(&backup_path, &remote_path).await;
@@ -2653,6 +2858,7 @@ pub async fn sftp_upload_file_legacy(
         let _ = window.emit(
             "sftp-progress",
             ProgressPayload {
+                session_id: session_id.clone(),
                 id: req_id.clone(),
                 direction: "upload".to_string(),
                 current: uploaded,
@@ -2667,6 +2873,24 @@ pub async fn sftp_upload_file_legacy(
             },
         );
         return Err(err);
+    }
+
+    if cancel.load(Ordering::Relaxed) {
+        if had_original {
+            let _ = sftp.remove_file(&remote_path).await;
+            let _ = sftp.rename(&backup_path, &remote_path).await;
+        } else {
+            let _ = sftp.remove_file(&remote_path).await;
+        }
+        emit_transfer_cancelled(
+            &window,
+            &session_id,
+            &req_id,
+            "upload",
+            uploaded,
+            total_size,
+        );
+        return Err("Transfer cancelled".to_string());
     }
 
     // We rely heavily on exact copy streams.
@@ -2694,6 +2918,7 @@ pub async fn sftp_upload_file_legacy(
         let _ = window.emit(
             "sftp-progress",
             ProgressPayload {
+                session_id: session_id.clone(),
                 id: req_id.clone(),
                 direction: "upload".to_string(),
                 current: final_size,
@@ -2708,6 +2933,24 @@ pub async fn sftp_upload_file_legacy(
             },
         );
         return Err(err);
+    }
+
+    if cancel.load(Ordering::Relaxed) {
+        if had_original {
+            let _ = sftp.remove_file(&remote_path).await;
+            let _ = sftp.rename(&backup_path, &remote_path).await;
+        } else {
+            let _ = sftp.remove_file(&remote_path).await;
+        }
+        emit_transfer_cancelled(
+            &window,
+            &session_id,
+            &req_id,
+            "upload",
+            uploaded,
+            total_size,
+        );
+        return Err("Transfer cancelled".to_string());
     }
 
     if local_atime.is_some() || local_mtime.is_some() || target_permissions.is_some() {
@@ -2728,6 +2971,24 @@ pub async fn sftp_upload_file_legacy(
         }
     }
 
+    if cancel.load(Ordering::Relaxed) {
+        if had_original {
+            let _ = sftp.remove_file(&remote_path).await;
+            let _ = sftp.rename(&backup_path, &remote_path).await;
+        } else {
+            let _ = sftp.remove_file(&remote_path).await;
+        }
+        emit_transfer_cancelled(
+            &window,
+            &session_id,
+            &req_id,
+            "upload",
+            uploaded,
+            total_size,
+        );
+        return Err("Transfer cancelled".to_string());
+    }
+
     if had_original {
         let _ = sftp.remove_file(&backup_path).await;
     }
@@ -2737,6 +2998,7 @@ pub async fn sftp_upload_file_legacy(
     let _ = window.emit(
         "sftp-progress",
         ProgressPayload {
+            session_id: session_id.clone(),
             id: req_id,
             direction: "upload".to_string(),
             current: total_size,
@@ -2778,6 +3040,7 @@ async fn pipelined_sftp_upload<
     RemoteWriter: tokio::io::AsyncWrite + Unpin,
 >(
     window: &Window,
+    session_id: &str,
     req_id: &str,
     total_size: u64,
     mut local: LocalReader,
@@ -2817,6 +3080,7 @@ async fn pipelined_sftp_upload<
         let _ = window.emit(
             "sftp-progress",
             ProgressPayload {
+                session_id: session_id.to_string(),
                 id: req_id.to_string(),
                 direction: "upload".to_string(),
                 current,
@@ -2849,6 +3113,7 @@ async fn pipelined_sftp_upload<
             let _ = window.emit(
                 "sftp-progress",
                 ProgressPayload {
+                    session_id: session_id.to_string(),
                     id: req_id.to_string(),
                     direction: "upload".to_string(),
                     current: uploaded,
@@ -2883,6 +3148,8 @@ pub async fn sftp_cancel_transfer(
 
 #[derive(Clone, serde::Serialize)]
 struct ProgressPayload {
+    #[serde(rename = "sessionId")]
+    session_id: String,
     id: String,
     direction: String,
     current: u64,

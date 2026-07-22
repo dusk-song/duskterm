@@ -82,7 +82,8 @@ describe('global background UI surfaces', () => {
     assert.doesNotMatch(transferDock, /transferSummary|class="transfer-summary"|completed\/status\.total/);
     assert.match(transferDock, /\.transfer-popup\s*\{[^}]*position:\s*fixed[^}]*z-index:\s*99999/s);
     assert.match(transferDock, /let popupPositionFrame = null/);
-    assert.match(transferDock, /let statusUpdateFrame = null/);
+    assert.match(transferDock, /useSftpTransfersStore/);
+    assert.match(transferDock, /storeToRefs\(transferStore\)/);
     assert.match(transferDock, /window\.addEventListener\('scroll', schedulePopupPosition, true\)/);
     assert.match(sessionDock, /import\s*\{\s*ChevronLeft,\s*ChevronRight\s*\}\s*from\s*'@lucide\/vue'/);
     assert.match(sessionDock, /class="session-nav session-nav--prev"/);
@@ -143,8 +144,8 @@ describe('global background UI surfaces', () => {
     assert.match(app, /\.app-shell\.has-floating-surfaces \.sftp-bottom-panel \.file-manager,[\s\S]*?\.app-shell\.has-floating-surfaces \.sftp-bottom-panel \.fm-table-body[\s\S]*?background:\s*var\(--terminal-surface-bg/s);
     assert.match(sftpManager, /\.file-manager\s*\{[^}]*background:\s*var\(--terminal-surface-bg/s);
     assert.match(sftpManager, /\.fm-table-body\s*\{[^}]*background:\s*var\(--terminal-surface-bg/s);
-    assert.match(sftpManager, /const scheduleTransferStatus = \(\) => \{/);
-    assert.match(sftpManager, /window\.removeEventListener\('sftp-clear-transfer', clearTransferHandler\)/);
+    assert.match(sftpManager, /useSftpTransfersStore/);
+    assert.doesNotMatch(sftpManager, /listenEvent\('sftp-progress'|sftp-clear-transfer|sftp-transfer-status/);
     assert.match(sessionList, /class="session-search-input"/);
     assert.match(sessionList, /\.search-bar\s*\{[^}]*background:\s*transparent/s);
   });

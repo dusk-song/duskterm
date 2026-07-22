@@ -28,9 +28,10 @@ import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from
 import { useFileSelection } from '@/composables/useFileSelection';
 import { useSftpPager } from '@/composables/useSftpPager';
 import { useVirtualList } from '@/composables/useVirtualList';
+import { useSftpTransfersStore } from '@/stores/sftpTransfers';
 import { useSshStore } from '@/stores/ssh';
 import { formatLocalTime, formatPermissions, formatSize, joinRemotePath } from '@/types/sftp';
-import { invokeCommand, listenEvent } from '@/utils/ipc';
+import { invokeCommand } from '@/utils/ipc';
 import CodeEditor from './CodeEditor.vue';
 import FileIcon from '@/components/common/FileIcon.vue';
 import IconButton from '@/components/common/IconButton.vue';
@@ -43,6 +44,7 @@ const props = defineProps({
 const emit = defineEmits(['close']);
 
 const sshStore = useSshStore();
+const transferStore = useSftpTransfersStore();
 const activeSession = computed(() => sshStore.getSession(props.sessionId));
 const followedTerminalSession = computed(() => sshStore.getSession(props.followSessionId || props.sessionId));
 const activeSessionStatus = computed(() => activeSession.value?.status || 'disconnected');
@@ -144,7 +146,6 @@ const dragState = reactive({
   draggingIndex: -1
 });
 const navigatingDir = ref(false);
-const transferTasks = ref([]);
 const resizingColumnKey = ref('');
 const reconnectingSftp = ref(false);
 
@@ -209,11 +210,6 @@ function scheduleColumnWidthRecalc(width) {
     }
   });
 }
-let unlistenSftpProgress = null;
-const TELEMETRY_WINDOW_MS = 1500;
-const TELEMETRY_MIN_SAMPLE_MS = 150;
-let transferStatusFrame = null;
-
 const confirmOverwrite = (remotePath) => new Promise((resolve) => {
   confirm({
     title: '文件已存在',
@@ -226,105 +222,17 @@ const confirmOverwrite = (remotePath) => new Promise((resolve) => {
   });
 });
 
-const emitTransferStatus = () => {
-  const items = transferTasks.value.map((task) => ({
-    id: task.id,
-    sessionId: props.sessionId,
-    name: task.fileName,
-    direction: task.direction,
-    loaded: Number(task.current || 0),
-    total: Number(task.total || 0),
-    progress: Number(task.percent || 0),
-    rate: Number(task.rate || 0),
-    etaSeconds: Number.isFinite(task.etaSeconds) ? Number(task.etaSeconds) : null,
-    status: task.status === 'success'
-      ? 'done'
-      : (task.status === 'failed' ? 'error'
-        : (task.status === 'cancelled' ? 'cancelled'
-          : (task.status === 'waiting' ? 'waiting' : 'uploading')))
-  }));
-  const active = items.filter((item) => item.status === 'uploading' || item.status === 'waiting').length;
-  const latest = items[0]?.name || '';
-  window.dispatchEvent(
-    new CustomEvent('sftp-transfer-status', {
-      detail: {
-        active,
-        total: items.length,
-        lastName: latest,
-        items
-      }
-    })
-  );
-};
-
-const scheduleTransferStatus = () => {
-  if (transferStatusFrame) return;
-  transferStatusFrame = requestAnimationFrame(() => {
-    transferStatusFrame = null;
-    emitTransferStatus();
-  });
-};
-
-const flushTransferStatus = () => {
-  if (transferStatusFrame) {
-    cancelAnimationFrame(transferStatusFrame);
-    transferStatusFrame = null;
-  }
-  emitTransferStatus();
-};
-
-const findTransferTaskById = (id) => transferTasks.value.find((task) => task.id === id);
-
-const handleCancelTransfer = async (taskId) => {
-  try {
-    await invokeCommand('sftp_cancel_transfer', { sessionId: props.sessionId, reqId: taskId });
-    toast.info('已请求取消传输');
-  } catch (err) {
-    console.error('[SFTP] Cancel transfer failed:', err);
-  }
-};
-
-const handleRemoveTransfer = (taskId) => {
-  const idx = transferTasks.value.findIndex((t) => t.id === taskId);
-  if (idx >= 0) transferTasks.value.splice(idx, 1);
-  flushTransferStatus();
-};
-
-const activeTransferCount = computed(() =>
-  transferTasks.value.filter((t) => t.status === 'uploading' || t.status === 'waiting').length
+const createTransferTask = (sessionId, direction, fileName, localPath, remotePath) => (
+  transferStore.createTask({ sessionId, direction, fileName, localPath, remotePath })
 );
 
-const createTransferTask = (direction, fileName, localPath, remotePath) => {
-  const prefix = direction === 'download' ? 'down' : 'up';
-  const id = `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-  const task = {
-    id,
-    fileName,
-    direction,
-    localPath,
-    remotePath,
-    current: 0,
-    total: 0,
-    percent: 0,
-    rate: 0,
-    etaSeconds: null,
-    lastSampleAt: 0,
-    lastSampleBytes: 0,
-    telemetrySamples: [],
-    status: 'waiting',
-    error: ''
-  };
-  transferTasks.value.unshift(task);
-  return task;
-};
-
-const createUploadTask = (filePath, remotePath) => {
+const createUploadTask = (sessionId, filePath, remotePath) => {
   const fileName = filePath.split(/[/\\]/).pop() || 'unknown';
-  return createTransferTask('upload', fileName, filePath, remotePath);
+  return createTransferTask(sessionId, 'upload', fileName, filePath, remotePath);
 };
 
-const createDownloadTask = (remotePath, localPath, fileName) => (
-  createTransferTask('download', fileName, localPath, remotePath)
+const createDownloadTask = (sessionId, remotePath, localPath, fileName) => (
+  createTransferTask(sessionId, 'download', fileName, localPath, remotePath)
 );
 
 const markUploadTaskFailed = (task, err) => {
@@ -343,89 +251,41 @@ const markTransferTaskFailed = (task, err, fallback) => {
   task.telemetrySamples = [];
 };
 
-const nowMs = () => (typeof performance !== 'undefined' && typeof performance.now === 'function'
-  ? performance.now()
-  : Date.now());
-
-const pushTelemetrySample = (task, current, stamp) => {
-  const samples = Array.isArray(task.telemetrySamples) ? [...task.telemetrySamples] : [];
-  const lastSample = samples[samples.length - 1];
-
-  if (!lastSample || current < Number(lastSample.bytes || 0)) {
-    task.telemetrySamples = [{ at: stamp, bytes: current }];
-    task.lastSampleAt = stamp;
-    task.lastSampleBytes = current;
-    return;
-  }
-
-  if (current === Number(lastSample.bytes || 0) && stamp - Number(lastSample.at || 0) < TELEMETRY_MIN_SAMPLE_MS) {
-    return;
-  }
-
-  if (stamp - Number(lastSample.at || 0) >= TELEMETRY_MIN_SAMPLE_MS || current !== Number(lastSample.bytes || 0)) {
-    samples.push({ at: stamp, bytes: current });
-  }
-
-  const cutoff = stamp - TELEMETRY_WINDOW_MS;
-  const firstValidIndex = samples.findIndex((sample) => Number(sample.at || 0) >= cutoff);
-  if (firstValidIndex > 0) {
-    task.telemetrySamples = samples.slice(firstValidIndex - 1);
-  } else {
-    task.telemetrySamples = samples;
-  }
-
-  task.lastSampleAt = stamp;
-  task.lastSampleBytes = current;
+const markTransferTaskCancelled = (task) => {
+  task.status = 'cancelled';
+  task.error = '已取消';
+  task.rate = 0;
+  task.etaSeconds = null;
+  task.telemetrySamples = [];
 };
 
-const calculateTelemetryRate = (task) => {
-  const samples = Array.isArray(task.telemetrySamples) ? task.telemetrySamples : [];
-  if (samples.length < 2) {
-    return 0;
-  }
-  const firstSample = samples[0];
-  const lastSample = samples[samples.length - 1];
-  const deltaBytes = Number(lastSample.bytes || 0) - Number(firstSample.bytes || 0);
-  const deltaMs = Number(lastSample.at || 0) - Number(firstSample.at || 0);
-  if (deltaBytes <= 0 || deltaMs <= 0) {
-    return 0;
-  }
-  return deltaBytes / (deltaMs / 1000);
-};
+const isCancelledTransfer = (task, error) => (
+  task.status === 'cancelling'
+  || task.status === 'cancelled'
+  || /cancel|取消/i.test(String(error || ''))
+);
 
-const updateTransferTelemetry = (task, payload) => {
-  if (!task) return;
+const summarizeTransferTasks = (tasks) => ({
+  success: tasks.filter((task) => task.status === 'success').length,
+  cancelled: tasks.filter((task) => task.status === 'cancelled').length,
+  failed: tasks.filter((task) => task.status === 'failed').length
+});
 
-  const current = Number(payload.current || 0);
-  const total = Number(payload.total || 0);
-  const stamp = nowMs();
-
-  if (payload.status === 'failed' || payload.status === 'waiting') {
-    task.rate = 0;
-    task.etaSeconds = null;
-    task.telemetrySamples = [{ at: stamp, bytes: current }];
-    task.lastSampleAt = stamp;
-    task.lastSampleBytes = current;
-    return;
-  }
-
-  pushTelemetrySample(task, current, stamp);
-  const measuredRate = calculateTelemetryRate(task);
-  task.rate = measuredRate > 0 ? measuredRate : (payload.status === 'success' ? Number(task.rate || 0) : 0);
-
-  if (task.rate > 0 && total > current) {
-    task.etaSeconds = Math.ceil((total - current) / task.rate);
-  } else if (total <= current && total > 0) {
-    task.etaSeconds = 0;
+const notifyTransferSummary = (action, tasks) => {
+  const summary = summarizeTransferTasks(tasks);
+  if (summary.failed > 0) {
+    toast.warning(`${action}完成：成功 ${summary.success}，取消 ${summary.cancelled}，失败 ${summary.failed}`);
+  } else if (summary.cancelled > 0) {
+    toast.info(`${action}完成：成功 ${summary.success}，取消 ${summary.cancelled}`);
   } else {
-    task.etaSeconds = null;
+    toast.success(`${action}完成：${summary.success} 个文件`);
   }
 };
 
 const verifyUploadedTask = async (task) => {
   try {
     const stat = await invokeCommand('sftp_stat', {
-      sessionId: props.sessionId,
+      sessionId: task.sessionId,
       path: task.remotePath
     });
     const remoteSize = Number(stat?.size || 0);
@@ -447,7 +307,7 @@ const runSingleUploadTask = async (task) => {
   task.etaSeconds = null;
   task.telemetrySamples = [];
   const uploadPayload = {
-    sessionId: props.sessionId,
+    sessionId: task.sessionId,
     localPath: task.localPath,
     remotePath: task.remotePath,
     reqId: task.id
@@ -467,7 +327,11 @@ const runSingleUploadTask = async (task) => {
     task.percent = task.total > 0 ? 100 : 0;
     if (task.total > 0) task.current = task.total;
   } catch (err) {
-    if (isRecoverableSftpError(err)) {
+    if (isCancelledTransfer(task, err)) {
+      markTransferTaskCancelled(task);
+      throw err;
+    }
+    if (isRecoverableSftpError(err) && task.sessionId === props.sessionId) {
       const ready = await ensureSftpReady();
       if (ready) {
         try {
@@ -480,6 +344,10 @@ const runSingleUploadTask = async (task) => {
           if (task.total > 0) task.current = task.total;
           return;
         } catch (retryErr) {
+          if (isCancelledTransfer(task, retryErr)) {
+            markTransferTaskCancelled(task);
+            throw retryErr;
+          }
           markUploadTaskFailed(task, retryErr);
           toast.error(`重试上传失败: ${task.fileName} - ${String(retryErr)}`);
           throw retryErr;
@@ -500,7 +368,7 @@ const runSingleDownloadTask = async (task) => {
   task.telemetrySamples = [];
   try {
     await invokeCommand('sftp_download_file', {
-      sessionId: props.sessionId,
+      sessionId: task.sessionId,
       remotePath: task.remotePath,
       localPath: task.localPath,
       reqId: task.id
@@ -510,6 +378,10 @@ const runSingleDownloadTask = async (task) => {
     if (task.total > 0) task.current = task.total;
     task.etaSeconds = 0;
   } catch (err) {
+    if (isCancelledTransfer(task, err)) {
+      markTransferTaskCancelled(task);
+      throw err;
+    }
     markTransferTaskFailed(task, err, '下载失败');
     toast.error(`下载失败: ${task.fileName} - ${String(err)}`);
     throw err;
@@ -525,6 +397,7 @@ const runUploadTasksWithConcurrency = async (tasks, concurrency = 1) => {
     while (queue.length) {
       const task = queue.shift();
       if (!task) return;
+      if (task.status === 'cancelled') continue;
       try {
         await runSingleUploadTask(task);
       } catch {
@@ -543,6 +416,7 @@ const runDownloadTasksWithConcurrency = async (tasks, concurrency = 1) => {
     while (queue.length) {
       const task = queue.shift();
       if (!task) return;
+      if (task.status === 'cancelled') continue;
       try {
         await runSingleDownloadTask(task);
       } catch {
@@ -1228,7 +1102,9 @@ async function runBatch(action, targets, worker) {
 }
 
 async function handleUpload() {
-  if (!props.sessionId) return;
+  const sessionId = props.sessionId;
+  const uploadDirectory = currentPath.value;
+  if (!sessionId) return;
   const ready = await ensureSftpReady();
   if (!ready) {
     toast.error('SFTP 会话不可用，请重试连接');
@@ -1243,12 +1119,12 @@ async function handleUpload() {
   const tasks = [];
   for (const path of files) {
     const name = path.split(/[/\\]/).pop() || 'unknown';
-    const remotePath = joinRemotePath(currentPath.value, name);
+    const remotePath = joinRemotePath(uploadDirectory, name);
 
     let shouldUpload = true;
     try {
       const exists = await invokeCommand('sftp_exists', {
-        sessionId: props.sessionId,
+        sessionId,
         path: remotePath
       });
       if (exists) {
@@ -1259,7 +1135,7 @@ async function handleUpload() {
     }
 
     if (!shouldUpload) continue;
-    tasks.push(createUploadTask(path, remotePath));
+    tasks.push(createUploadTask(sessionId, path, remotePath));
   }
 
   if (!tasks.length) {
@@ -1268,18 +1144,17 @@ async function handleUpload() {
   }
 
   await runUploadTasksWithConcurrency(tasks);
-  const failed = tasks.filter((task) => task.status === 'failed').length;
-  if (failed > 0) {
-    toast.warning(`上传完成：成功 ${tasks.length - failed}，失败 ${failed}`);
-  } else {
-    toast.success(`上传完成：${tasks.length} 个文件`);
+  notifyTransferSummary('上传', tasks);
+  if (props.sessionId === sessionId) {
+    await ensureSftpReady();
+    await loadFirstPage();
   }
-  await ensureSftpReady();
-  await loadFirstPage();
 }
 
 async function handleDownload(records = selectedRecords.value) {
-  if (!props.sessionId || !connected.value) return;
+  const sessionId = props.sessionId;
+  const downloadDirectory = currentPath.value;
+  if (!sessionId || !connected.value) return;
   const targets = records.filter(item => !item.is_dir);
   if (!targets.length) {
     toast.warning('请选择文件');
@@ -1291,7 +1166,8 @@ async function handleDownload(records = selectedRecords.value) {
     if (!output) return;
     const targetPath = output.path || output;
     const task = createDownloadTask(
-      joinRemotePath(currentPath.value, targets[0].name),
+      sessionId,
+      joinRemotePath(downloadDirectory, targets[0].name),
       targetPath,
       targets[0].name
     );
@@ -1307,17 +1183,13 @@ async function handleDownload(records = selectedRecords.value) {
   const base = typeof folder === 'string' ? folder : folder.path;
 
   const tasks = targets.map((item) => createDownloadTask(
-    joinRemotePath(currentPath.value, item.name),
+    sessionId,
+    joinRemotePath(downloadDirectory, item.name),
     `${base}\\${item.name}`,
     item.name
   ));
   await runDownloadTasksWithConcurrency(tasks);
-  const failed = tasks.filter((task) => task.status === 'failed').length;
-  if (failed > 0) {
-    toast.warning(`下载完成：成功 ${tasks.length - failed}，失败 ${failed}`);
-  } else {
-    toast.success(`下载完成：${tasks.length} 个文件`);
-  }
+  notifyTransferSummary('下载', tasks);
 }
 
 async function batchDelete() {
@@ -1705,8 +1577,6 @@ watch(() => props.sessionId, async (nextSessionId, prevSessionId) => {
   const generation = ++sessionSyncGeneration;
   if (prevSessionId && prevSessionId !== nextSessionId) {
     cachePanelStateForSession(prevSessionId);
-    await disconnectSftpSession(prevSessionId);
-    if (!isCurrentSessionSync(nextSessionId, generation)) return;
   }
   cancelCreateFolderDraft();
   closeContextMenu();
@@ -1778,36 +1648,7 @@ let resizeFrame = null;
 let scheduleResizeHandler = null;
 let activeSftpRefreshHandler = null;
 let sftpLayoutRefreshHandler = null;
-let clearTransferHandler = null;
 onMounted(() => {
-  listenEvent('sftp-progress', (payload) => {
-    if (!payload || !payload.direction) return;
-    const task = findTransferTaskById(payload.id);
-    if (!task) return;
-    task.current = Number(payload.current || 0);
-    task.total = Number(payload.total || 0);
-    task.percent = Number(payload.percent || 0);
-    task.direction = payload.direction || task.direction;
-    updateTransferTelemetry(task, payload);
-    if (payload.status === 'failed') {
-      task.status = 'failed';
-      task.error = String(payload.error || `${task.direction === 'download' ? '下载' : '上传'}失败`);
-      return;
-    }
-    if (payload.status === 'cancelled') {
-      task.status = 'cancelled';
-      task.error = String(payload.error || '已取消');
-      task.rate = 0;
-      task.etaSeconds = null;
-      return;
-    }
-    if (payload.status === 'success') {
-      task.status = 'success';
-    }
-  }).then((unlisten) => {
-    unlistenSftpProgress = unlisten;
-  });
-
   resizeHandler = () => {
     const height = viewportRef.value?.clientHeight || 400;
     listVirtual.setViewportHeight(height);
@@ -1834,11 +1675,6 @@ onMounted(() => {
   window.addEventListener('app:sftp-refresh-active', activeSftpRefreshHandler);
   window.addEventListener('app:sftp-layout-refresh', sftpLayoutRefreshHandler);
   window.addEventListener('keydown', onEditorKeydown);
-  clearTransferHandler = (e) => {
-    const taskId = e?.detail?.id;
-    if (taskId) handleRemoveTransfer(taskId);
-  };
-  window.addEventListener('sftp-clear-transfer', clearTransferHandler);
 
   // Track container width for auto-fit column widths
   if (viewportRef.value) {
@@ -1851,18 +1687,9 @@ onMounted(() => {
   }
 });
 
-watch(transferTasks, () => {
-  scheduleTransferStatus();
-}, { deep: true });
-
 onUnmounted(() => {
-  const sessionId = props.sessionId;
   cachePanelState();
   cancelCreateFolderDraft();
-  if (unlistenSftpProgress) {
-    unlistenSftpProgress();
-    unlistenSftpProgress = null;
-  }
   if (scheduleResizeHandler) {
     window.removeEventListener('resize', scheduleResizeHandler);
     scheduleResizeHandler = null;
@@ -1880,23 +1707,11 @@ onUnmounted(() => {
     sftpLayoutRefreshHandler = null;
   }
   window.removeEventListener('keydown', onEditorKeydown);
-  if (clearTransferHandler) {
-    window.removeEventListener('sftp-clear-transfer', clearTransferHandler);
-    clearTransferHandler = null;
-  }
-  if (transferStatusFrame) {
-    cancelAnimationFrame(transferStatusFrame);
-    transferStatusFrame = null;
-  }
   if (_colResizeFrame) {
     cancelAnimationFrame(_colResizeFrame);
     _colResizeFrame = null;
   }
   if (_colResizeObserver) { _colResizeObserver.disconnect(); _colResizeObserver = null; }
-  disconnectSftpSession(sessionId);
-  window.dispatchEvent(new CustomEvent('sftp-transfer-status', {
-    detail: { active: 0, total: 0, lastName: '', items: [] }
-  }));
 });
 </script>
 

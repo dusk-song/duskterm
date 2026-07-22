@@ -1,18 +1,19 @@
 <script setup>
 import { ListChecks } from '@lucide/vue';
+import { storeToRefs } from 'pinia';
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { useSftpTransfersStore } from '@/stores/sftpTransfers';
 import { invokeCommand } from '@/utils/ipc';
 import DuskDock from './DuskDock.vue';
 
 defineProps({ embedded: Boolean });
 
-const status = ref({ active: 0, total: 0, lastName: '', items: [] });
+const transferStore = useSftpTransfersStore();
+const { dockStatus: status } = storeToRefs(transferStore);
 const open = ref(false);
 const rootRef = ref(null);
 const popupStyle = ref({});
 let popupPositionFrame = null;
-let statusUpdateFrame = null;
-let pendingStatusDetail = null;
 const transferCount = computed(() => status.value.active || status.value.total || 0);
 
 const formatSize = (bytes) => {
@@ -24,9 +25,20 @@ const formatSize = (bytes) => {
 const formatRate = (bytes) => `${formatSize(bytes)}/s`;
 const formatEta = (seconds) => Number.isFinite(seconds) ? `${Math.max(0, Math.round(seconds))}s` : '--';
 const cancel = async (item) => {
-  if (item.sessionId) await invokeCommand('sftp_cancel_transfer', { sessionId: item.sessionId, reqId: item.id });
+  if (!item.sessionId) return;
+  const mode = transferStore.requestCancel(item.sessionId, item.id);
+  if (mode !== 'remote') return;
+  try {
+    await invokeCommand('sftp_cancel_transfer', { sessionId: item.sessionId, reqId: item.id });
+  } catch (error) {
+    const task = transferStore.findTask(item.sessionId, item.id);
+    if (task?.status === 'cancelling') {
+      task.status = 'uploading';
+      task.error = String(error || '取消传输失败');
+    }
+  }
 };
-const clear = (id) => window.dispatchEvent(new CustomEvent('sftp-clear-transfer', { detail: { id } }));
+const clear = (item) => transferStore.removeTask(item.sessionId, item.id);
 const updatePopupPosition = () => {
   const rect = rootRef.value?.getBoundingClientRect();
   if (!rect) return;
@@ -49,25 +61,9 @@ const schedulePopupPosition = () => {
 const toggleOpen = () => {
   open.value = !open.value;
 };
-const applyStatus = (detail) => {
-  if (Number(detail.active || 0) > 0 && status.value.active === 0) open.value = true;
-  status.value = {
-    active: Number(detail.active || 0),
-    total: Number(detail.total || 0),
-    lastName: detail.lastName || '',
-    items: Array.isArray(detail.items) ? detail.items : [],
-  };
-};
-const onStatus = (event) => {
-  pendingStatusDetail = event.detail || {};
-  if (statusUpdateFrame) return;
-  statusUpdateFrame = requestAnimationFrame(() => {
-    statusUpdateFrame = null;
-    const detail = pendingStatusDetail;
-    pendingStatusDetail = null;
-    applyStatus(detail || {});
-  });
-};
+watch(() => status.value.active, (active, previous) => {
+  if (active > 0 && previous === 0) open.value = true;
+});
 const onOutside = (event) => {
   if (open.value && !event.composedPath().some((element) => element?.classList?.contains('transfer-dock-root') || element?.classList?.contains('transfer-popup'))) open.value = false;
 };
@@ -81,18 +77,15 @@ watch(open, async (value) => {
   }
 });
 onMounted(() => {
-  window.addEventListener('sftp-transfer-status', onStatus);
   window.addEventListener('click', onOutside);
   window.addEventListener('resize', schedulePopupPosition);
   window.addEventListener('scroll', schedulePopupPosition, true);
 });
 onUnmounted(() => {
-  window.removeEventListener('sftp-transfer-status', onStatus);
   window.removeEventListener('click', onOutside);
   window.removeEventListener('resize', schedulePopupPosition);
   window.removeEventListener('scroll', schedulePopupPosition, true);
   if (popupPositionFrame) cancelAnimationFrame(popupPositionFrame);
-  if (statusUpdateFrame) cancelAnimationFrame(statusUpdateFrame);
 });
 </script>
 
@@ -111,7 +104,7 @@ onUnmounted(() => {
       <div v-if="open" class="transfer-popup" :style="popupStyle">
         <div class="transfer-title">传输队列</div>
         <div v-if="status.items.length" class="transfer-items">
-          <div v-for="item in status.items" :key="item.id" class="transfer-item">
+          <div v-for="item in status.items" :key="`${item.sessionId}:${item.id}`" class="transfer-item">
             <div class="transfer-row">
               <span class="transfer-name">{{ item.direction === 'download' ? '↓' : '↑' }} {{ item.name }}</span>
               <span>{{ formatSize(item.loaded) }} / {{ formatSize(item.total) }}</span>
@@ -120,7 +113,8 @@ onUnmounted(() => {
             <div class="transfer-row transfer-meta">
               <span>{{ formatRate(item.rate || 0) }} · 剩余 {{ formatEta(item.etaSeconds) }}</span>
               <button v-if="item.status === 'uploading' || item.status === 'waiting'" @click.stop="cancel(item)">取消</button>
-              <button v-else @click.stop="clear(item.id)">清除</button>
+              <button v-else-if="item.status === 'cancelling'" disabled>取消中</button>
+              <button v-else @click.stop="clear(item)">清除</button>
             </div>
           </div>
         </div>
