@@ -15,6 +15,19 @@ export function useSftpPager({ sessionIdRef, pathRef, pageSize = 200 }) {
 
   const canLoadMore = computed(() => hasMore.value && !loading.value && !loadingMore.value);
 
+  const reset = () => {
+    ++firstPageRequestId;
+    ++nextPageRequestId;
+    items.value = [];
+    loading.value = false;
+    loadingMore.value = false;
+    offset.value = 0;
+    hasMore.value = true;
+    total.value = 0;
+    totalKnown.value = false;
+    error.value = '';
+  };
+
   const loadFirstPage = async () => {
     if (!sessionIdRef.value) return;
     const requestedSessionId = sessionIdRef.value;
@@ -84,6 +97,7 @@ export function useSftpPager({ sessionIdRef, pathRef, pageSize = 200 }) {
     hasMore,
     error,
     canLoadMore,
+    reset,
     loadFirstPage,
     loadNextPage
   };

@@ -543,6 +543,14 @@ function cachePanelStateForSession(sessionId) {
   });
 }
 
+function syncListScrollTop(value = 0) {
+  const nextScrollTop = listVirtual.setScrollTop(value);
+  if (bodyScrollRef.value) {
+    bodyScrollRef.value.scrollTop = nextScrollTop;
+    listVirtual.setScrollTop(bodyScrollRef.value.scrollTop);
+  }
+}
+
 async function restorePanelState() {
   if (!props.sessionId) return;
   const state = panelStateCache.get(props.sessionId);
@@ -567,7 +575,7 @@ async function restorePanelState() {
   });
   selection.selectedKeys.value = next;
   await nextTick();
-  if (bodyScrollRef.value) bodyScrollRef.value.scrollTop = state.scrollTop || 0;
+  syncListScrollTop(state.scrollTop || 0);
 }
 
 async function initSftp(forceReconnect = false, options = {}) {
@@ -735,6 +743,7 @@ async function ensureSftpReady() {
 async function loadFirstPage() {
   const sessionId = props.sessionId;
   const path = currentPath.value;
+  syncListScrollTop(0);
   try {
     const loaded = await pager.loadFirstPage();
     if (loaded === false || props.sessionId !== sessionId || currentPath.value !== path) return false;
@@ -1578,6 +1587,8 @@ watch(() => props.sessionId, async (nextSessionId, prevSessionId) => {
   if (prevSessionId && prevSessionId !== nextSessionId) {
     cachePanelStateForSession(prevSessionId);
   }
+  pager.reset();
+  syncListScrollTop(0);
   cancelCreateFolderDraft();
   closeContextMenu();
   if (editorVisible.value) {
@@ -1638,20 +1649,27 @@ watch(activeSessionStatus, async (status, prevStatus) => {
 
   if (prevStatus !== 'connected') {
     await syncVisibleSessionState({ restore: false });
+    if (connected.value) await loadFirstPage();
   }
 });
 
-watch([() => pager.items.value.length, () => connected.value], () => nextTick(syncBottomScrollbar));
+watch([() => pager.items.value.length, () => connected.value], () => nextTick(() => {
+  listVirtual.clampScroll();
+  syncListScrollTop(listVirtual.scrollTop.value);
+  syncBottomScrollbar();
+}));
 
 let resizeHandler = null;
 let resizeFrame = null;
 let scheduleResizeHandler = null;
 let activeSftpRefreshHandler = null;
 let sftpLayoutRefreshHandler = null;
+let bodyResizeObserver = null;
 onMounted(() => {
   resizeHandler = () => {
-    const height = viewportRef.value?.clientHeight || 400;
+    const height = bodyScrollRef.value?.clientHeight || viewportRef.value?.clientHeight || 400;
     listVirtual.setViewportHeight(height);
+    syncListScrollTop(listVirtual.scrollTop.value);
   };
   scheduleResizeHandler = () => {
     if (resizeFrame) return;
@@ -1685,6 +1703,10 @@ onMounted(() => {
     _colResizeObserver.observe(viewportRef.value);
     recalcColumnWidths();
   }
+  if (bodyScrollRef.value) {
+    bodyResizeObserver = new ResizeObserver(scheduleResizeHandler);
+    bodyResizeObserver.observe(bodyScrollRef.value);
+  }
 });
 
 onUnmounted(() => {
@@ -1712,6 +1734,7 @@ onUnmounted(() => {
     _colResizeFrame = null;
   }
   if (_colResizeObserver) { _colResizeObserver.disconnect(); _colResizeObserver = null; }
+  if (bodyResizeObserver) { bodyResizeObserver.disconnect(); bodyResizeObserver = null; }
 });
 </script>
 
@@ -1792,6 +1815,8 @@ onUnmounted(() => {
           <div v-if="navigatingDir" class="fm-nav-loading-mask">
             <LoadingSpinner tip="正在加载目录..." />
           </div>
+          <div v-else-if="netError" class="fm-list-state fm-list-error">{{ netError }}</div>
+          <div v-else-if="!pager.loading.value && listItems.length === 0" class="fm-list-state">目录为空</div>
           <div class="fm-body-inner"
             :style="{ width: (colPx.select + colPx.name + colPx.modified + colPx.size + colPx.permissions + colPx.ownerGroup) + 'px', height: listVirtual.totalHeight.value + 'px' }">
             <div class="fm-virtual" :style="{ transform: `translateY(${listVirtual.translateY.value}px)` }">
@@ -2145,6 +2170,23 @@ onUnmounted(() => {
   background: var(--terminal-surface-bg, var(--app-bg-dialog));
   scrollbar-width: thin;
   scrollbar-color: var(--app-btn-border) transparent;
+}
+
+.fm-list-state {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  color: var(--app-text-secondary);
+  text-align: center;
+  pointer-events: none;
+}
+
+.fm-list-error {
+  color: var(--app-status-error, #ef4444);
 }
 
 .fm-nav-loading-mask {

@@ -1708,7 +1708,7 @@ pub async fn sftp_ls(
         .await
 }
 
-pub async fn sftp_ls_paged_legacy(
+async fn sftp_ls_paged_streaming(
     state: &SftpAppState,
     handle: &SftpConnectionHandle,
     session_id: String,
@@ -1802,6 +1802,70 @@ pub async fn sftp_ls_paged_legacy(
                 exhausted: false,
             },
         );
+    }
+}
+
+fn slice_paged_entries(entries: &[FileEntry], offset: usize, limit: usize) -> SftpLsPagedResult {
+    let total = entries.len();
+    let start = offset.min(total);
+    let end = start.saturating_add(limit).min(total);
+    SftpLsPagedResult {
+        items: entries[start..end].to_vec(),
+        offset: start,
+        limit,
+        next_offset: end,
+        has_more: end < total,
+        total,
+        total_known: true,
+    }
+}
+
+pub async fn sftp_ls_paged_legacy(
+    state: &SftpAppState,
+    handle: &SftpConnectionHandle,
+    session_id: String,
+    path: String,
+    offset: Option<usize>,
+    limit: Option<usize>,
+) -> Result<SftpLsPagedResult, String> {
+    let safe_offset = offset.unwrap_or(0);
+    let safe_limit = limit.unwrap_or(200).max(1).min(1000);
+    let pager_key = cache_key(&session_id, &path);
+
+    if safe_offset > 0 {
+        let cached = state.list_cache.lock().unwrap().get(&pager_key).cloned();
+        if let Some(entries) = cached {
+            return Ok(slice_paged_entries(&entries, safe_offset, safe_limit));
+        }
+    } else {
+        state.list_cache.lock().unwrap().remove(&pager_key);
+    }
+
+    match sftp_ls_paged_streaming(
+        state,
+        handle,
+        session_id.clone(),
+        path.clone(),
+        Some(safe_offset),
+        Some(safe_limit),
+    )
+    .await
+    {
+        Ok(result) => Ok(result),
+        Err(streaming_error) => {
+            for pager in take_session_dir_pagers(state, &session_id) {
+                close_directory_pager(pager);
+            }
+            let entries = sftp_ls_legacy(state, handle, session_id, path)
+                .await
+                .map_err(|fallback_error| {
+                    format!(
+                        "{}; fallback directory listing failed: {}",
+                        streaming_error, fallback_error
+                    )
+                })?;
+            Ok(slice_paged_entries(&entries, safe_offset, safe_limit))
+        }
     }
 }
 
