@@ -21,9 +21,29 @@ use tokio::sync::oneshot;
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 use zeroize::Zeroize;
 const SFTP_TRANSFER_BUFFER_SIZE: usize = 256 * 1024;
-const SFTP_TRANSFER_CHANNEL_SIZE: usize = 8;
+pub(crate) const SFTP_TRANSFER_CHANNEL_SIZE: usize = 8;
 const SFTP_PROGRESS_EMIT_INTERVAL: Duration = Duration::from_millis(80);
 const SFTP_PROGRESS_EMIT_STEP_BYTES: u64 = 256 * 1024;
+
+pub enum SftpStreamMessage {
+    Data(Vec<u8>),
+    End,
+    Error(String),
+}
+
+#[derive(Debug)]
+pub enum SftpStreamCompletion {
+    Consumed,
+    Failed(String),
+    Cancelled,
+}
+
+pub struct SftpStreamBridge {
+    pub receiver: crossbeam_channel::Receiver<SftpStreamMessage>,
+    pub completion: crossbeam_channel::Sender<SftpStreamCompletion>,
+    pub cancel: Arc<AtomicBool>,
+    pub total_size: u64,
+}
 
 pub(crate) fn sftp_client_config() -> russh_sftp::client::Config {
     let mut config = russh_sftp::client::Config::default();
@@ -320,9 +340,7 @@ impl client::Handler for DummyHandler {
                     *pending = Some(tx);
                 }
 
-                let fingerprint = server_public_key
-                    .fingerprint(HashAlg::Sha256)
-                    .to_string();
+                let fingerprint = server_public_key.fingerprint(HashAlg::Sha256).to_string();
                 let algorithm = server_public_key.algorithm().to_string();
 
                 let _ = self.app_handle.emit(
@@ -374,9 +392,7 @@ impl client::Handler for DummyHandler {
                     *pending = Some(tx);
                 }
 
-                let fingerprint = server_public_key
-                    .fingerprint(HashAlg::Sha256)
-                    .to_string();
+                let fingerprint = server_public_key.fingerprint(HashAlg::Sha256).to_string();
                 let algorithm = server_public_key.algorithm().to_string();
 
                 let _ = self.app_handle.emit(
@@ -465,7 +481,9 @@ where
             Err(_) => Err(ssh_algorithms::ConnectAttemptError::Timeout),
         }
     } else {
-        connect_fut.await.map_err(ssh_algorithms::ConnectAttemptError::from)
+        connect_fut
+            .await
+            .map_err(ssh_algorithms::ConnectAttemptError::from)
     }
 }
 
@@ -487,7 +505,9 @@ where
             Err(_) => Err(ssh_algorithms::ConnectAttemptError::Timeout),
         }
     } else {
-        connect_fut.await.map_err(ssh_algorithms::ConnectAttemptError::from)
+        connect_fut
+            .await
+            .map_err(ssh_algorithms::ConnectAttemptError::from)
     }
 }
 
@@ -623,7 +643,8 @@ pub async fn connect_sftp_legacy(
                 .into_stream();
 
             let client_config = build_client_config(config.keep_alive_interval, profile);
-            match connect_stream_handle(client_config, stream, handler, config.connect_timeout).await
+            match connect_stream_handle(client_config, stream, handler, config.connect_timeout)
+                .await
             {
                 Ok(session) => {
                     app_handle
@@ -844,6 +865,177 @@ pub async fn sftp_download_file_runtime(
         req_id,
     )
     .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn sftp_drag_download_stream_runtime(
+    window: Window,
+    state: SftpAppState,
+    sftp: Arc<SftpSession>,
+    reused_from_ssh: bool,
+    connection_config: SshConfig,
+    pending_hostkey: crate::session::state::SharedHostkeyDecision,
+    cancel: Arc<AtomicBool>,
+    session_id: String,
+    remote_path: String,
+    req_id: String,
+    total_size: u64,
+    sender: crossbeam_channel::Sender<SftpStreamMessage>,
+    completion: crossbeam_channel::Receiver<SftpStreamCompletion>,
+) -> Result<(), String> {
+    let emit_progress = |current: u64, status: &str, error: Option<String>| {
+        let _ = window.emit(
+            "sftp-progress",
+            ProgressPayload {
+                session_id: session_id.clone(),
+                id: req_id.clone(),
+                direction: "download".to_string(),
+                current,
+                total: total_size,
+                percent: if total_size > 0 {
+                    ((current as f64 / total_size as f64) * 100.0).min(100.0) as u8
+                } else {
+                    0
+                },
+                status: status.to_string(),
+                error,
+            },
+        );
+    };
+
+    let mut downloaded = 0u64;
+    let result = async {
+        ensure_transfer_active(
+            &window,
+            &cancel,
+            &session_id,
+            &req_id,
+            "download",
+            0,
+            total_size,
+        )?;
+        let transfer_session = open_transfer_sftp_session(
+            &state,
+            window.app_handle(),
+            sftp,
+            reused_from_ssh,
+            connection_config,
+            pending_hostkey,
+            &session_id,
+            &req_id,
+        )
+        .await?;
+        let mut remote = transfer_session
+            .sftp
+            .open(&remote_path)
+            .await
+            .map_err(|error| format!("Open Error: {error}"))?;
+
+        emit_progress(0, "uploading", None);
+        let mut buffer = vec![0u8; SFTP_TRANSFER_BUFFER_SIZE];
+        let mut last_emit = std::time::Instant::now();
+        let mut last_emit_bytes = 0u64;
+
+        loop {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("Transfer cancelled".to_string());
+            }
+
+            let read = remote
+                .read(&mut buffer)
+                .await
+                .map_err(|error| format!("Read Error: {error}"))?;
+            if read == 0 {
+                send_sftp_stream_message(&sender, SftpStreamMessage::End, &cancel).await?;
+                wait_for_sftp_stream_completion(&completion, &cancel).await?;
+                emit_progress(downloaded, "success", None);
+                return Ok(());
+            }
+
+            send_sftp_stream_message(
+                &sender,
+                SftpStreamMessage::Data(buffer[..read].to_vec()),
+                &cancel,
+            )
+            .await?;
+            downloaded = downloaded.saturating_add(read as u64);
+
+            if should_emit_transfer_progress(&last_emit, downloaded.saturating_sub(last_emit_bytes))
+            {
+                emit_progress(downloaded, "uploading", None);
+                last_emit = std::time::Instant::now();
+                last_emit_bytes = downloaded;
+            }
+        }
+    }
+    .await;
+
+    if let Err(error) = &result {
+        let cancelled =
+            cancel.load(Ordering::Relaxed) || error.eq_ignore_ascii_case("Transfer cancelled");
+        if !cancelled {
+            let _ =
+                send_sftp_stream_message(&sender, SftpStreamMessage::Error(error.clone()), &cancel)
+                    .await;
+        }
+        emit_progress(
+            downloaded,
+            if cancelled { "cancelled" } else { "failed" },
+            Some(if cancelled {
+                "用户取消了下载".to_string()
+            } else {
+                error.clone()
+            }),
+        );
+    }
+
+    result
+}
+
+async fn wait_for_sftp_stream_completion(
+    completion: &crossbeam_channel::Receiver<SftpStreamCompletion>,
+    cancel: &Arc<AtomicBool>,
+) -> Result<(), String> {
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("Transfer cancelled".to_string());
+        }
+        match completion.try_recv() {
+            Ok(SftpStreamCompletion::Consumed) => return Ok(()),
+            Ok(SftpStreamCompletion::Cancelled) => {
+                return Err("Transfer cancelled".to_string());
+            }
+            Ok(SftpStreamCompletion::Failed(error)) => return Err(error),
+            Err(crossbeam_channel::TryRecvError::Empty) => {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            Err(crossbeam_channel::TryRecvError::Disconnected) => {
+                return Err("下载目标已关闭文件流".to_string());
+            }
+        }
+    }
+}
+
+async fn send_sftp_stream_message(
+    sender: &crossbeam_channel::Sender<SftpStreamMessage>,
+    mut message: SftpStreamMessage,
+    cancel: &Arc<AtomicBool>,
+) -> Result<(), String> {
+    loop {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("Transfer cancelled".to_string());
+        }
+        match sender.try_send(message) {
+            Ok(()) => return Ok(()),
+            Err(crossbeam_channel::TrySendError::Full(pending)) => {
+                message = pending;
+                tokio::time::sleep(Duration::from_millis(5)).await;
+            }
+            Err(crossbeam_channel::TrySendError::Disconnected(_)) => {
+                return Err("Transfer cancelled".to_string());
+            }
+        }
+    }
 }
 
 pub async fn sftp_upload_file_runtime(
@@ -1080,7 +1272,8 @@ async fn open_dedicated_sftp_session(
                 .into_stream();
 
             let client_config = build_client_config(config.keep_alive_interval, profile);
-            match connect_stream_handle(client_config, stream, handler, config.connect_timeout).await
+            match connect_stream_handle(client_config, stream, handler, config.connect_timeout)
+                .await
             {
                 Ok(session) => {
                     app_handle
@@ -1301,12 +1494,7 @@ fn invalidate_session_cache(state: &SftpAppState, session_id: &str) {
     }
 }
 
-fn append_known_host(
-    host: &str,
-    port: u16,
-    key: &PublicKey,
-    path: &PathBuf,
-) -> Result<(), String> {
+fn append_known_host(host: &str, port: u16, key: &PublicKey, path: &PathBuf) -> Result<(), String> {
     use std::io::Write;
 
     let mut file = std::fs::OpenOptions::new()
@@ -1703,9 +1891,7 @@ pub async fn sftp_ls(
     session_id: String,
     path: String,
 ) -> Result<Vec<FileEntry>, String> {
-    supervisor
-        .list_sftp_dir(session_id, path)
-        .await
+    supervisor.list_sftp_dir(session_id, path).await
 }
 
 async fn sftp_ls_paged_streaming(
@@ -1901,9 +2087,7 @@ pub async fn sftp_read_file(
     session_id: String,
     path: String,
 ) -> Result<String, String> {
-    supervisor
-        .read_sftp_file(session_id, path)
-        .await
+    supervisor.read_sftp_file(session_id, path).await
 }
 
 pub async fn sftp_open_text_file_legacy(
@@ -1941,9 +2125,7 @@ pub async fn sftp_open_text_file(
     session_id: String,
     path: String,
 ) -> Result<SftpOpenTextFileResult, String> {
-    supervisor
-        .open_sftp_text_file(session_id, path)
-        .await
+    supervisor.open_sftp_text_file(session_id, path).await
 }
 
 async fn write_text_file_internal(
@@ -2134,13 +2316,7 @@ pub async fn sftp_write_file(
     expected_size: Option<u64>,
 ) -> Result<(), String> {
     supervisor
-        .write_sftp_file(
-            session_id,
-            path,
-            content,
-            expected_modified,
-            expected_size,
-        )
+        .write_sftp_file(session_id, path, content, expected_modified, expected_size)
         .await
 }
 
@@ -2192,12 +2368,7 @@ pub async fn sftp_save_text_file(
     expected_cas_token: String,
 ) -> Result<SftpSaveTextFileResult, String> {
     supervisor
-        .save_sftp_text_file(
-            session_id,
-            path,
-            content,
-            expected_cas_token,
-        )
+        .save_sftp_text_file(session_id, path, content, expected_cas_token)
         .await
 }
 
@@ -2238,14 +2409,7 @@ fn ensure_transfer_active(
     total: u64,
 ) -> Result<(), String> {
     if cancel.load(Ordering::Relaxed) {
-        emit_transfer_cancelled(
-            window,
-            session_id,
-            req_id,
-            direction,
-            current,
-            total,
-        );
+        emit_transfer_cancelled(window, session_id, req_id, direction, current, total);
         Err("Transfer cancelled".to_string())
     } else {
         Ok(())
@@ -2265,15 +2429,7 @@ pub async fn sftp_download_file_legacy(
     local_path: String,
     req_id: String,
 ) -> Result<(), String> {
-    ensure_transfer_active(
-        &window,
-        &cancel,
-        &session_id,
-        &req_id,
-        "download",
-        0,
-        0,
-    )?;
+    ensure_transfer_active(&window, &cancel, &session_id, &req_id, "download", 0, 0)?;
     let transfer_session = open_transfer_sftp_session(
         state,
         &window.app_handle(),
@@ -2287,15 +2443,7 @@ pub async fn sftp_download_file_legacy(
     .await?;
     let sftp = transfer_session.sftp.clone();
 
-    ensure_transfer_active(
-        &window,
-        &cancel,
-        &session_id,
-        &req_id,
-        "download",
-        0,
-        0,
-    )?;
+    ensure_transfer_active(&window, &cancel, &session_id, &req_id, "download", 0, 0)?;
 
     let total_size = sftp
         .metadata(&remote_path)
@@ -2359,17 +2507,16 @@ pub async fn sftp_download_file_legacy(
         },
     );
 
-    let result =
-        pipelined_sftp_download(
-            &window,
-            &session_id,
-            &req_id,
-            total_size,
-            remote,
-            &mut local,
-            &cancel,
-        )
-        .await;
+    let result = pipelined_sftp_download(
+        &window,
+        &session_id,
+        &req_id,
+        total_size,
+        remote,
+        &mut local,
+        &cancel,
+    )
+    .await;
 
     match result {
         Ok(downloaded) => {
@@ -2436,13 +2583,7 @@ pub async fn sftp_download_file(
     req_id: String,
 ) -> Result<(), String> {
     supervisor
-        .start_sftp_download(
-            window,
-            session_id,
-            remote_path,
-            local_path,
-            req_id,
-        )
+        .start_sftp_download(window, session_id, remote_path, local_path, req_id)
         .await
 }
 
@@ -2582,15 +2723,7 @@ pub async fn sftp_upload_file_legacy(
     remote_path: String,
     req_id: String,
 ) -> Result<(), String> {
-    ensure_transfer_active(
-        &window,
-        &cancel,
-        &session_id,
-        &req_id,
-        "upload",
-        0,
-        0,
-    )?;
+    ensure_transfer_active(&window, &cancel, &session_id, &req_id, "upload", 0, 0)?;
     let transfer_session = open_transfer_sftp_session(
         state,
         &window.app_handle(),
@@ -2604,15 +2737,7 @@ pub async fn sftp_upload_file_legacy(
     .await?;
     let sftp = transfer_session.sftp.clone();
 
-    ensure_transfer_active(
-        &window,
-        &cancel,
-        &session_id,
-        &req_id,
-        "upload",
-        0,
-        0,
-    )?;
+    ensure_transfer_active(&window, &cancel, &session_id, &req_id, "upload", 0, 0)?;
 
     let emit_failed = |current: u64, total: u64, err: String| {
         let _ = window.emit(
@@ -2754,17 +2879,16 @@ pub async fn sftp_upload_file_legacy(
         },
     );
 
-    let result =
-        pipelined_sftp_upload(
-            &window,
-            &session_id,
-            &req_id,
-            total_size,
-            local,
-            &mut remote,
-            &cancel,
-        )
-        .await;
+    let result = pipelined_sftp_upload(
+        &window,
+        &session_id,
+        &req_id,
+        total_size,
+        local,
+        &mut remote,
+        &cancel,
+    )
+    .await;
     let uploaded = match result {
         Ok(bytes) => bytes,
         Err(e) => {
@@ -3089,13 +3213,7 @@ pub async fn sftp_upload_file(
     req_id: String,
 ) -> Result<(), String> {
     supervisor
-        .start_sftp_upload(
-            window,
-            session_id,
-            local_path,
-            remote_path,
-            req_id,
-        )
+        .start_sftp_upload(window, session_id, local_path, remote_path, req_id)
         .await
 }
 
@@ -3254,9 +3372,7 @@ pub async fn sftp_disconnect(
     _state: tauri::State<'_, SftpAppState>,
     session_id: String,
 ) -> Result<(), String> {
-    supervisor
-        .disconnect_sftp(session_id)
-        .await
+    supervisor.disconnect_sftp(session_id).await
 }
 
 #[tauri::command]
@@ -3299,9 +3415,7 @@ pub async fn sftp_exists(
     session_id: String,
     path: String,
 ) -> Result<bool, String> {
-    supervisor
-        .sftp_exists(session_id, path)
-        .await
+    supervisor.sftp_exists(session_id, path).await
 }
 
 pub async fn sftp_mkdir_legacy(
@@ -3325,9 +3439,7 @@ pub async fn sftp_mkdir(
     session_id: String,
     path: String,
 ) -> Result<(), String> {
-    supervisor
-        .mkdir_sftp(session_id, path)
-        .await
+    supervisor.mkdir_sftp(session_id, path).await
 }
 
 pub async fn sftp_rename_legacy(
@@ -3355,9 +3467,7 @@ pub async fn sftp_rename(
     from_path: String,
     to_path: String,
 ) -> Result<(), String> {
-    supervisor
-        .rename_sftp(session_id, from_path, to_path)
-        .await
+    supervisor.rename_sftp(session_id, from_path, to_path).await
 }
 
 pub async fn sftp_remove_legacy(
@@ -3390,9 +3500,7 @@ pub async fn sftp_remove(
     path: String,
     is_dir: bool,
 ) -> Result<(), String> {
-    supervisor
-        .remove_sftp(session_id, path, is_dir)
-        .await
+    supervisor.remove_sftp(session_id, path, is_dir).await
 }
 
 pub async fn sftp_chmod_legacy(
@@ -3421,9 +3529,7 @@ pub async fn sftp_chmod(
     path: String,
     permissions: u32,
 ) -> Result<(), String> {
-    supervisor
-        .chmod_sftp(session_id, path, permissions)
-        .await
+    supervisor.chmod_sftp(session_id, path, permissions).await
 }
 
 pub async fn sftp_stat_legacy(
@@ -3459,7 +3565,5 @@ pub async fn sftp_stat(
     session_id: String,
     path: String,
 ) -> Result<FileEntry, String> {
-    supervisor
-        .stat_sftp(session_id, path)
-        .await
+    supervisor.stat_sftp(session_id, path).await
 }

@@ -26,12 +26,17 @@ import {
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { useFileSelection } from '@/composables/useFileSelection';
+import { useSftpNativeDrop } from '@/composables/useSftpNativeDrop';
 import { useSftpPager } from '@/composables/useSftpPager';
 import { useVirtualList } from '@/composables/useVirtualList';
 import { useSftpTransfersStore } from '@/stores/sftpTransfers';
 import { useSshStore } from '@/stores/ssh';
 import { formatLocalTime, formatPermissions, formatSize, joinRemotePath } from '@/types/sftp';
 import { invokeCommand } from '@/utils/ipc';
+import {
+  getNativeFileDragCapabilities,
+  startNativeSftpFileDrag
+} from '@/utils/nativeFileDrag';
 import CodeEditor from './CodeEditor.vue';
 import FileIcon from '@/components/common/FileIcon.vue';
 import IconButton from '@/components/common/IconButton.vue';
@@ -61,6 +66,8 @@ const headerScrollRef = ref(null);
 const bodyScrollRef = ref(null);
 const bottomScrollRef = ref(null);
 const viewportRef = ref(null);
+const fileManagerRef = ref(null);
+const nativeDragCapabilities = ref(null);
 
 // Direct pixel column widths — simple and reliable for drag resize
 const colPx = reactive({
@@ -141,10 +148,6 @@ const batchState = reactive({
 
 const ctxRecord = ref(null);
 
-const dragState = reactive({
-  draggingName: '',
-  draggingIndex: -1
-});
 const navigatingDir = ref(false);
 const resizingColumnKey = ref('');
 const reconnectingSftp = ref(false);
@@ -192,6 +195,24 @@ const selectedRecords = computed(() => selection.selectedList.value.filter(item 
 const panelStateCache = new Map();
 let sessionSyncGeneration = 0;
 const initializingSessionIds = new Set();
+
+const nativeDropEnabled = computed(() => (
+  props.visible
+  && !!props.sessionId
+  && connected.value
+  && activeSessionStatus.value === 'connected'
+));
+
+const {
+  active: nativeDropActive,
+  targetPath: nativeDropTargetPath,
+  pathCount: nativeDropPathCount
+} = useSftpNativeDrop({
+  enabled: nativeDropEnabled,
+  resolveTarget: resolveNativeDropTarget,
+  onDrop: handleNativeFileDrop,
+  onError: (error) => console.warn('[SFTP] native file drop unavailable:', error)
+});
 
 function isCurrentSessionSync(sessionId, generation) {
   return props.sessionId === sessionId && sessionSyncGeneration === generation;
@@ -947,11 +968,19 @@ function startColumnResize(key, event) {
 }
 
 function rowClass(record) {
-  if (record.__parent) return 'fm-row fm-row-parent';
-  if (record.__draftFolder) return 'fm-row fm-row-draft';
-  if (!connected.value) return 'fm-row fm-row-disabled';
-  if (selection.isSelected(record)) return 'fm-row fm-row-selected';
-  return 'fm-row';
+  const classes = ['fm-row'];
+  if (record.__parent) classes.push('fm-row-parent');
+  if (record.__draftFolder) classes.push('fm-row-draft');
+  if (!connected.value) classes.push('fm-row-disabled');
+  if (selection.isSelected(record)) classes.push('fm-row-selected');
+  if (
+    nativeDropActive.value
+    && nativeDropTargetPath.value
+    && dropTargetPathForRecord(record) === nativeDropTargetPath.value
+  ) {
+    classes.push('fm-row-native-drop-target');
+  }
+  return classes.join(' ');
 }
 
 function handleRowClick(record, index, event) {
@@ -1110,24 +1139,21 @@ async function runBatch(action, targets, worker) {
   await loadFirstPage();
 }
 
-async function handleUpload() {
+async function uploadLocalFiles(files, uploadDirectory = currentPath.value) {
   const sessionId = props.sessionId;
-  const uploadDirectory = currentPath.value;
-  if (!sessionId) return;
+  if (!sessionId || !files.length) return;
   const ready = await ensureSftpReady();
   if (!ready) {
     toast.error('SFTP 会话不可用，请重试连接');
     return;
   }
-  const selected = await open({ multiple: true, directory: false });
-  if (!selected) return;
-  const filePaths = Array.isArray(selected) ? selected : [selected];
-  const files = filePaths.map(item => (typeof item === 'string' ? item : item?.path)).filter(Boolean);
-  if (!files.length) return;
 
   const tasks = [];
-  for (const path of files) {
-    const name = path.split(/[/\\]/).pop() || 'unknown';
+  for (const file of files) {
+    const path = typeof file === 'string' ? file : file.path;
+    const name = typeof file === 'string'
+      ? (file.split(/[/\\]/).pop() || 'unknown')
+      : (file.name || path.split(/[/\\]/).pop() || 'unknown');
     const remotePath = joinRemotePath(uploadDirectory, name);
 
     let shouldUpload = true;
@@ -1158,6 +1184,49 @@ async function handleUpload() {
     await ensureSftpReady();
     await loadFirstPage();
   }
+}
+
+async function handleUpload() {
+  const selected = await open({ multiple: true, directory: false });
+  if (!selected) return;
+  const filePaths = Array.isArray(selected) ? selected : [selected];
+  const files = filePaths
+    .map(item => (typeof item === 'string' ? item : item?.path))
+    .filter(Boolean);
+  await uploadLocalFiles(files);
+}
+
+function parentSftpPath(path) {
+  const normalized = normalizeSftpPath(path).replace(/\/+$/, '') || '/';
+  if (normalized === '/') return '/';
+  const separator = normalized.lastIndexOf('/');
+  return separator <= 0 ? '/' : normalized.slice(0, separator);
+}
+
+function dropTargetPathForRecord(record) {
+  if (!record?.is_dir || record.__draftFolder) return '';
+  if (record.__parent) return parentSftpPath(currentPath.value);
+  return joinRemotePath(currentPath.value, record.name);
+}
+
+function resolveNativeDropTarget(position) {
+  const root = fileManagerRef.value;
+  if (!root || !nativeDropEnabled.value) return '';
+  const element = document.elementFromPoint(position.x, position.y);
+  if (!element || !root.contains(element)) return '';
+  const directoryRow = element.closest?.('[data-sftp-drop-path]');
+  return directoryRow?.dataset?.sftpDropPath || currentPath.value;
+}
+
+async function handleNativeFileDrop({ paths, targetPath }) {
+  const entries = await invokeCommand('inspect_local_drop_paths', { paths });
+  const files = entries.filter(entry => entry.isFile);
+  const directoryCount = entries.filter(entry => entry.isDir).length;
+  if (directoryCount > 0) {
+    toast.info(`已忽略 ${directoryCount} 个文件夹，文件夹拖拽将在下一阶段支持`);
+  }
+  if (!files.length) return;
+  await uploadLocalFiles(files, targetPath);
 }
 
 async function handleDownload(records = selectedRecords.value) {
@@ -1517,46 +1586,95 @@ function confirmEditorClose() {
   closeEditorState();
 }
 
-function onDragStart(record, index) {
-  if (record.__parent || record.__draftFolder) return;
-  dragState.draggingName = record.name;
-  dragState.draggingIndex = index;
+async function startRemoteFileDrag(record) {
+  const sessionId = props.sessionId;
+  if (!sessionId || !connected.value || record.is_dir) return;
+  const remotePath = joinRemotePath(currentPath.value, record.name);
+  const task = createDownloadTask(sessionId, remotePath, '', record.name);
+
+  try {
+    const outcome = await startNativeSftpFileDrag({
+      sessionId,
+      remotePath,
+      fileName: record.name,
+      size: record.size,
+      reqId: task.id
+    });
+    if (!outcome?.dropped && !['success', 'failed', 'cancelled'].includes(task.status)) {
+      markTransferTaskCancelled(task);
+    }
+  } catch (error) {
+    if (isCancelledTransfer(task, error)) {
+      markTransferTaskCancelled(task);
+      return;
+    }
+    markTransferTaskFailed(task, error, '拖动下载失败');
+    toast.error(`拖动下载失败: ${record.name} - ${String(error)}`);
+  }
 }
 
-async function onDropRow(record, targetIndex) {
-  if (!dragState.draggingName) return;
-  const fromName = dragState.draggingName;
-  const fromItem = pager.items.value.find(item => item.name === fromName);
-  dragState.draggingName = '';
-  dragState.draggingIndex = -1;
-  if (!fromItem || fromName === record.name) return;
+let pendingFileDrag = null;
 
-  if (record.is_dir) {
-    await invokeCommand('sftp_rename', {
-      sessionId: props.sessionId,
-      fromPath: joinRemotePath(currentPath.value, fromName),
-      toPath: joinRemotePath(joinRemotePath(currentPath.value, record.name), fromName)
-    });
-    toast.success(`已移动到 ${record.name}`);
-    await loadFirstPage();
+function clearPendingFileDrag(event) {
+  const pointerId = pendingFileDrag?.pointerId;
+  pendingFileDrag = null;
+  if (
+    event?.currentTarget
+    && pointerId != null
+    && event.currentTarget.hasPointerCapture?.(pointerId)
+  ) {
+    event.currentTarget.releasePointerCapture(pointerId);
+  }
+}
+
+function onFilePointerDown(event, record) {
+  if (
+    event.button !== 0
+    || record.__parent
+    || record.__draftFolder
+    || record.is_dir
+    || nativeDragCapabilities.value?.remoteVirtualFiles === false
+  ) return;
+
+  pendingFileDrag = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    record
+  };
+  event.currentTarget.setPointerCapture?.(event.pointerId);
+}
+
+function onFilePointerMove(event) {
+  const pending = pendingFileDrag;
+  if (!pending || pending.pointerId !== event.pointerId) return;
+  if ((event.buttons & 1) === 0) {
+    clearPendingFileDrag(event);
     return;
   }
 
-  const source = pager.items.value.findIndex(item => item.name === fromName);
-  const target = targetIndex
-    - (currentPath.value === '/' ? 0 : 1)
-    - (draftFolderVisible.value ? 1 : 0);
-  if (source < 0 || target < 0 || source === target) return;
-  const local = [...pager.items.value];
-  const moved = local.splice(source, 1)[0];
-  local.splice(Math.min(target, local.length), 0, moved);
-  pager.items.value = local;
-  toast.info('已调整当前视图顺序（仅本次会话）');
+  const distance = Math.hypot(
+    event.clientX - pending.startX,
+    event.clientY - pending.startY
+  );
+  const outsideWindow = (
+    event.clientX <= 1
+    || event.clientY <= 1
+    || event.clientX >= window.innerWidth - 1
+    || event.clientY >= window.innerHeight - 1
+  );
+  if (distance < 6 || !outsideWindow) return;
+
+  const record = pending.record;
+  clearPendingFileDrag(event);
+  event.preventDefault();
+  event.stopPropagation();
+  void startRemoteFileDrag(record);
 }
 
-function onDropBlank() {
-  dragState.draggingName = '';
-  dragState.draggingIndex = -1;
+function onFilePointerEnd(event) {
+  if (pendingFileDrag?.pointerId !== event.pointerId) return;
+  clearPendingFileDrag(event);
 }
 
 function runContextAction(action, record) {
@@ -1666,6 +1784,13 @@ let activeSftpRefreshHandler = null;
 let sftpLayoutRefreshHandler = null;
 let bodyResizeObserver = null;
 onMounted(() => {
+  getNativeFileDragCapabilities()
+    .then((capabilities) => {
+      nativeDragCapabilities.value = capabilities;
+    })
+    .catch((error) => {
+      console.warn('[SFTP] native file drag unavailable:', error);
+    });
   resizeHandler = () => {
     const height = bodyScrollRef.value?.clientHeight || viewportRef.value?.clientHeight || 400;
     listVirtual.setViewportHeight(height);
@@ -1710,6 +1835,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  pendingFileDrag = null;
   cachePanelState();
   cancelCreateFolderDraft();
   if (scheduleResizeHandler) {
@@ -1739,7 +1865,12 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="file-manager" @click="closeContextMenu">
+  <div ref="fileManagerRef" class="file-manager" :class="{ 'is-native-drop-active': nativeDropActive }"
+    @click="closeContextMenu">
+    <div v-if="nativeDropActive" class="fm-native-drop-banner">
+      <Upload :size="16" />
+      <span>释放以上传 {{ nativeDropPathCount ? `${nativeDropPathCount} 个项目` : '文件' }} 到 {{ nativeDropTargetPath }}</span>
+    </div>
     <div class="fm-address fm-address-row">
       <Input v-model="currentPath" @keyup.enter="manualRefresh" size="sm" class="flex-1" />
       <div class="fm-actions">
@@ -1810,8 +1941,7 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div class="fm-table-body" ref="bodyScrollRef" @scroll="onBodyScroll" @wheel="onTableWheel" @dragover.prevent
-          @drop.prevent="onDropBlank">
+        <div class="fm-table-body" ref="bodyScrollRef" @scroll="onBodyScroll" @wheel="onTableWheel">
           <div v-if="navigatingDir" class="fm-nav-loading-mask">
             <LoadingSpinner tip="正在加载目录..." />
           </div>
@@ -1822,9 +1952,13 @@ onUnmounted(() => {
             <div class="fm-virtual" :style="{ transform: `translateY(${listVirtual.translateY.value}px)` }">
               <ContextMenu v-for="row in visibleRows" :key="row.item.__draftFolder ? '__draft-folder-row' : (row.item.name + '-' + row.index)">
                 <ContextMenuTrigger as-child>
-                  <div :class="rowClass(row.item)" :draggable="!row.item.__parent && !row.item.__draftFolder"
-                    @dragstart="onDragStart(row.item, row.index)"
-                    @dragover.prevent @drop.prevent="onDropRow(row.item, row.index)"
+                  <div :class="rowClass(row.item)"
+                    :data-sftp-drop-path="dropTargetPathForRecord(row.item) || null"
+                    @pointerdown="(event) => onFilePointerDown(event, row.item)"
+                    @pointermove="onFilePointerMove"
+                    @pointerup="onFilePointerEnd"
+                    @pointercancel="onFilePointerEnd"
+                    @lostpointercapture="onFilePointerEnd"
                     @click="(e) => handleRowClick(row.item, row.index, e)"
                     @dblclick="() => handleRowDoubleClick(row.item)">
                     <div class="fm-cell" :class="{ 'fm-cell-hidden': !showSelectionColumn }"
@@ -1966,12 +2100,37 @@ onUnmounted(() => {
 
 <style scoped>
 .file-manager {
+  position: relative;
   display: flex;
   flex-direction: column;
   height: 100%;
   min-height: 0;
   min-width: 260px;
   background: var(--terminal-surface-bg, var(--app-bg-dialog));
+}
+
+.file-manager.is-native-drop-active {
+  box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--color-primary) 72%, transparent);
+}
+
+.fm-native-drop-banner {
+  position: absolute;
+  top: 44px;
+  left: 50%;
+  z-index: 20;
+  display: flex;
+  max-width: calc(100% - 32px);
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 58%, transparent);
+  border-radius: var(--niri-radius-control, 8px);
+  background: color-mix(in srgb, var(--app-bg-dialog) 92%, var(--color-primary) 8%);
+  color: var(--app-text);
+  box-shadow: var(--niri-shadow-dialog);
+  font-size: 12px;
+  pointer-events: none;
+  transform: translateX(-50%);
 }
 
 .fm-address,
@@ -2243,6 +2402,13 @@ onUnmounted(() => {
 .fm-row-selected:hover {
   background: var(--app-selection-bg);
   color: var(--app-selection-text);
+}
+
+.fm-row-native-drop-target,
+.fm-row-native-drop-target:hover {
+  background: color-mix(in srgb, var(--color-primary) 24%, var(--app-selection-bg));
+  color: var(--app-text);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--color-primary) 68%, transparent);
 }
 
 .fm-row-disabled {

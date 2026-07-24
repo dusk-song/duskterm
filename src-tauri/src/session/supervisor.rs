@@ -8,7 +8,7 @@ use crate::{
     remote_monitor::RemoteStats,
     sftp::{
         FileEntry, SftpAppState, SftpLsPagedResult, SftpOpenTextFileResult, SftpSaveTextFileResult,
-        SshConfig as SftpConfig,
+        SftpStreamBridge, SshConfig as SftpConfig,
     },
     ssh::SshConfig,
     storage::SharedStorageState,
@@ -252,36 +252,88 @@ impl SessionSupervisor {
             .map_err(|_| "Session actor dropped resize response".to_string())?
     }
 
-    pub async fn open_shell_channel(&self, app_handle: AppHandle, root_session_id: String, channel_id: String, term_type: Option<String>, login_script: Option<String>) -> Result<(), String> {
+    pub async fn open_shell_channel(
+        &self,
+        app_handle: AppHandle,
+        root_session_id: String,
+        channel_id: String,
+        term_type: Option<String>,
+        login_script: Option<String>,
+    ) -> Result<(), String> {
         let actor = self.get_actor(&root_session_id)?;
         let (respond_to, rx) = oneshot::channel();
-        actor.sender.send(SessionMessage::OpenShellChannel { app_handle, channel_id, term_type, login_script, respond_to })
+        actor
+            .sender
+            .send(SessionMessage::OpenShellChannel {
+                app_handle,
+                channel_id,
+                term_type,
+                login_script,
+                respond_to,
+            })
             .map_err(|_| "Failed to send open shell channel message".to_string())?;
-        rx.await.map_err(|_| "Session actor dropped open shell channel response".to_string())?
+        rx.await
+            .map_err(|_| "Session actor dropped open shell channel response".to_string())?
     }
 
-    pub async fn write_shell_channel(&self, root_session_id: String, channel_id: String, data: String) -> Result<(), String> {
+    pub async fn write_shell_channel(
+        &self,
+        root_session_id: String,
+        channel_id: String,
+        data: String,
+    ) -> Result<(), String> {
         let actor = self.get_actor(&root_session_id)?;
         let (respond_to, rx) = oneshot::channel();
-        actor.sender.send(SessionMessage::WriteShellChannel { channel_id, data, respond_to })
+        actor
+            .sender
+            .send(SessionMessage::WriteShellChannel {
+                channel_id,
+                data,
+                respond_to,
+            })
             .map_err(|_| "Failed to send shell channel write".to_string())?;
-        rx.await.map_err(|_| "Session actor dropped shell channel write response".to_string())?
+        rx.await
+            .map_err(|_| "Session actor dropped shell channel write response".to_string())?
     }
 
-    pub async fn resize_shell_channel(&self, root_session_id: String, channel_id: String, cols: u32, rows: u32) -> Result<(), String> {
+    pub async fn resize_shell_channel(
+        &self,
+        root_session_id: String,
+        channel_id: String,
+        cols: u32,
+        rows: u32,
+    ) -> Result<(), String> {
         let actor = self.get_actor(&root_session_id)?;
         let (respond_to, rx) = oneshot::channel();
-        actor.sender.send(SessionMessage::ResizeShellChannel { channel_id, cols, rows, respond_to })
+        actor
+            .sender
+            .send(SessionMessage::ResizeShellChannel {
+                channel_id,
+                cols,
+                rows,
+                respond_to,
+            })
             .map_err(|_| "Failed to send shell channel resize".to_string())?;
-        rx.await.map_err(|_| "Session actor dropped shell channel resize response".to_string())?
+        rx.await
+            .map_err(|_| "Session actor dropped shell channel resize response".to_string())?
     }
 
-    pub async fn close_shell_channel(&self, root_session_id: String, channel_id: String) -> Result<(), String> {
+    pub async fn close_shell_channel(
+        &self,
+        root_session_id: String,
+        channel_id: String,
+    ) -> Result<(), String> {
         let actor = self.get_actor(&root_session_id)?;
         let (respond_to, rx) = oneshot::channel();
-        actor.sender.send(SessionMessage::CloseShellChannel { channel_id, respond_to })
+        actor
+            .sender
+            .send(SessionMessage::CloseShellChannel {
+                channel_id,
+                respond_to,
+            })
             .map_err(|_| "Failed to send close shell channel message".to_string())?;
-        rx.await.map_err(|_| "Session actor dropped close shell channel response".to_string())?
+        rx.await
+            .map_err(|_| "Session actor dropped close shell channel response".to_string())?
     }
 
     pub async fn disconnect(
@@ -721,6 +773,33 @@ impl SessionSupervisor {
 
         rx.await
             .map_err(|_| "Session actor dropped SFTP download response".to_string())?
+    }
+
+    pub async fn start_sftp_drag_download(
+        &self,
+        window: Window,
+        session_id: String,
+        remote_path: String,
+        req_id: String,
+        total_size: u64,
+    ) -> Result<SftpStreamBridge, String> {
+        let actor = self.get_or_spawn_actor(&session_id);
+        let (respond_to, rx) = oneshot::channel();
+        actor
+            .sender
+            .send(SessionMessage::StartSftpDragDownload {
+                window,
+                remote_path,
+                req_id,
+                total_size,
+                respond_to,
+            })
+            .map_err(|_| {
+                "Failed to send SFTP drag download request to session actor".to_string()
+            })?;
+
+        rx.await
+            .map_err(|_| "Session actor dropped SFTP drag download response".to_string())?
     }
 
     pub async fn start_sftp_upload(

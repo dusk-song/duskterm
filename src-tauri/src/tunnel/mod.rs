@@ -261,7 +261,8 @@ fn preview_for_request(req: &TunnelRequest) -> String {
 }
 
 fn build_tunnel_info(req: &TunnelRequest) -> TunnelInfo {
-    let id = normalize_non_empty(req.id.clone()).unwrap_or_else(|| format!("tunnel-{}", now_millis()));
+    let id =
+        normalize_non_empty(req.id.clone()).unwrap_or_else(|| format!("tunnel-{}", now_millis()));
     let name = normalize_non_empty(req.name.clone()).unwrap_or_else(|| {
         let mode_tag = match req.mode.to_ascii_lowercase().as_str() {
             "local" => "L",
@@ -360,9 +361,14 @@ fn load_saved_tunnel_launch(
         flow_control: None,
         local_profile: None,
         local_working_directory: None,
+        initial_cols: None,
+        initial_rows: None,
     };
 
-    Ok(SavedTunnelLaunch { request, ssh_config })
+    Ok(SavedTunnelLaunch {
+        request,
+        ssh_config,
+    })
 }
 
 fn build_direct_ssh_config(request: &TunnelRequest) -> ssh::SshConfig {
@@ -393,6 +399,8 @@ fn build_direct_ssh_config(request: &TunnelRequest) -> ssh::SshConfig {
         flow_control: None,
         local_profile: None,
         local_working_directory: None,
+        initial_cols: None,
+        initial_rows: None,
     }
 }
 
@@ -407,9 +415,7 @@ pub fn load_session_id_for_tunnel_config(
     Ok(config.session_id)
 }
 
-fn live_shared_session_slot(
-    slot: Option<SharedSshSessionSlot>,
-) -> Option<SharedSshSessionSlot> {
+fn live_shared_session_slot(slot: Option<SharedSshSessionSlot>) -> Option<SharedSshSessionSlot> {
     let candidate = slot?;
     if candidate
         .lock()
@@ -441,7 +447,9 @@ async fn resolve_local_tunnel_resources(
         app_handle,
         pending_hostkey,
         session_id,
-        ssh_config.ok_or_else(|| "Tunnel startup requires a saved SSH session or direct key-auth data".to_string())?,
+        ssh_config.ok_or_else(|| {
+            "Tunnel startup requires a saved SSH session or direct key-auth data".to_string()
+        })?,
         None,
     )
     .await?;
@@ -882,7 +890,10 @@ pub async fn start_tunnel_runtime(
                 {
                     let session = connection.shared_session.lock().await;
                     let _ = session
-                        .cancel_tcpip_forward(info_clone.listen_host.clone(), info_clone.listen_port as u32)
+                        .cancel_tcpip_forward(
+                            info_clone.listen_host.clone(),
+                            info_clone.listen_port as u32,
+                        )
                         .await;
                 }
                 connection.disconnect().await;

@@ -2130,6 +2130,7 @@ onMounted(async () => {
       theme: getTerminalTheme(terminalThemeSettings.value.theme || 'default', isDark.value),
       allowProposedApi: true,
       scrollback: 50000,
+      overviewRuler: { width: 7 },
       cols: 120,
       rows: 40,
       // iGPU optimizations: skip transparency blending, skip bold-bright conversion
@@ -2552,10 +2553,13 @@ onMounted(async () => {
   terminalWrapperRef.value?.addEventListener('wheel', handleTerminalWheel, { passive: true });
 
   window.addEventListener('resize', handleResize);
+  const readyDimensions = fitAddon?.proposeDimensions?.();
   window.dispatchEvent(
     new CustomEvent('terminal-ready', {
       detail: {
-        sessionId: props.sessionId
+        sessionId: props.sessionId,
+        cols: readyDimensions?.cols || term?.cols || 80,
+        rows: readyDimensions?.rows || term?.rows || 24
       }
     })
   );

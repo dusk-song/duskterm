@@ -1,19 +1,21 @@
-use std::io::{Read, Write};
 use std::future::Future;
+use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::sftp::SftpAppState;
 use crate::connection_log;
-use crate::ssh_algorithms::{self, ConnectAttemptError, NegotiationProfile, NegotiationProfileCache};
+use crate::sftp::SftpAppState;
+use crate::ssh_algorithms::{
+    self, ConnectAttemptError, NegotiationProfile, NegotiationProfileCache,
+};
 use crate::terminal_transfer::{TerminalTransferProbe, ZmodemDetector};
 use crate::tunnel::TunnelState;
-use russh::{client, ChannelMsg, Disconnect};
 use russh::keys::{check_known_hosts_path, HashAlg, PublicKey};
 use russh::Pty;
+use russh::{client, ChannelMsg, Disconnect};
 
 use serialport::{available_ports, DataBits, FlowControl, Parity, StopBits};
 use tauri::{AppHandle, Emitter, Manager};
@@ -58,12 +60,7 @@ impl SshAppState {
             .preferred_profile_for_endpoint(host, port)
     }
 
-    pub fn remember_successful_profile(
-        &self,
-        host: &str,
-        port: u16,
-        profile: NegotiationProfile,
-    ) {
+    pub fn remember_successful_profile(&self, host: &str, port: u16, profile: NegotiationProfile) {
         self.negotiation_profiles
             .remember_successful_profile(host, port, profile);
     }
@@ -97,8 +94,7 @@ pub(crate) fn create_terminal_runtime_channels() -> (
     let (window_size_tx, window_size_rx) = unbounded_channel::<(u32, u32)>();
     let (close_tx, close_rx) = unbounded_channel::<()>();
     let shared_session = Arc::new(Mutex::new(None));
-    let channel_lifecycle =
-        Arc::new(Mutex::new(channel_state::ChannelLifecycle::default()));
+    let channel_lifecycle = Arc::new(Mutex::new(channel_state::ChannelLifecycle::default()));
 
     (
         TerminalRuntimeHandle {
@@ -142,6 +138,8 @@ pub struct SshConfig {
     pub(crate) flow_control: Option<String>,
     pub(crate) local_profile: Option<String>,
     pub(crate) local_working_directory: Option<String>,
+    pub(crate) initial_cols: Option<u16>,
+    pub(crate) initial_rows: Option<u16>,
 }
 
 impl Drop for SshConfig {
@@ -281,7 +279,10 @@ fn terminate_channel(
     let reason = cause.reason();
     let first = lifecycle.lock().unwrap().terminate(cause);
     if first {
-        connection_log::append(session_id, format!("channel terminal state reason={}", reason));
+        connection_log::append(
+            session_id,
+            format!("channel terminal state reason={}", reason),
+        );
         emit_session_closed(app_handle, session_id, reason);
     }
     first
@@ -403,9 +404,9 @@ fn maybe_send_serial_login_script<W: Write>(
 
 fn normalize_telnet_term_type(value: Option<&str>) -> String {
     let trimmed = value.unwrap_or("").trim();
-    let valid = trimmed.bytes().all(|byte| {
-        byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.')
-    });
+    let valid = trimmed
+        .bytes()
+        .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'));
     if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("network") || !valid {
         return "xterm-256color".to_string();
     }
@@ -472,12 +473,7 @@ impl TelnetNegotiator {
         let cols = self.cols as u16;
         let rows = self.rows as u16;
         let mut response = vec![Self::IAC, Self::SB, Self::OPT_NAWS];
-        for value in [
-            (cols >> 8) as u8,
-            cols as u8,
-            (rows >> 8) as u8,
-            rows as u8,
-        ] {
+        for value in [(cols >> 8) as u8, cols as u8, (rows >> 8) as u8, rows as u8] {
             Self::push_subnegotiation_byte(&mut response, value);
         }
         response.extend_from_slice(&[Self::IAC, Self::SE]);
@@ -521,10 +517,7 @@ impl TelnetNegotiator {
     }
 
     fn handle_subnegotiation(&mut self, payload: &[u8], responses: &mut Vec<u8>) {
-        if payload.len() >= 2
-            && payload[0] == Self::OPT_TTYPE
-            && payload[1] == Self::TTYPE_SEND
-        {
+        if payload.len() >= 2 && payload[0] == Self::OPT_TTYPE && payload[1] == Self::TTYPE_SEND {
             responses.extend_from_slice(&self.ttype_response());
         }
     }
@@ -1041,7 +1034,10 @@ impl client::Handler for ClientHandler {
             Ok(true) => {
                 connection_log::append(
                     &self.session_id,
-                    format!("server host key matched known_hosts endpoint={}:{}", self.host, self.port),
+                    format!(
+                        "server host key matched known_hosts endpoint={}:{}",
+                        self.host, self.port
+                    ),
                 );
                 Ok(true)
             }
@@ -1057,7 +1053,10 @@ impl client::Handler for ClientHandler {
                 let algo = server_public_key.algorithm().to_string();
                 connection_log::append(
                     &self.session_id,
-                    format!("unknown server host key endpoint={}:{} algorithm={} fingerprint={}", self.host, self.port, algo, fingerprint),
+                    format!(
+                        "unknown server host key endpoint={}:{} algorithm={} fingerprint={}",
+                        self.host, self.port, algo, fingerprint
+                    ),
                 );
 
                 let _ = self.app_handle.emit(
@@ -1085,7 +1084,10 @@ impl client::Handler for ClientHandler {
                 }
 
                 if accepted {
-                    connection_log::append(&self.session_id, "unknown server host key accepted by user");
+                    connection_log::append(
+                        &self.session_id,
+                        "unknown server host key accepted by user",
+                    );
                     // Manual known_hosts appending
                     if let Err(e) = append_known_host(
                         &self.host,
@@ -1102,7 +1104,10 @@ impl client::Handler for ClientHandler {
                     }
                     Ok(true)
                 } else {
-                    connection_log::append(&self.session_id, "unknown server host key rejected or prompt timed out");
+                    connection_log::append(
+                        &self.session_id,
+                        "unknown server host key rejected or prompt timed out",
+                    );
                     let _ = self.app_handle.emit(
                         &format!("ssh-error-{}", self.session_id),
                         "Host key not trusted. Connection cancelled.".to_string(),
@@ -1150,7 +1155,10 @@ impl client::Handler for ClientHandler {
                 }
 
                 if accepted {
-                    connection_log::append(&self.session_id, "mismatched server host key accepted by user");
+                    connection_log::append(
+                        &self.session_id,
+                        "mismatched server host key accepted by user",
+                    );
                     let _ = append_known_host(
                         &self.host,
                         self.port,
@@ -1159,7 +1167,10 @@ impl client::Handler for ClientHandler {
                     );
                     Ok(true)
                 } else {
-                    connection_log::append(&self.session_id, "mismatched server host key rejected or prompt timed out");
+                    connection_log::append(
+                        &self.session_id,
+                        "mismatched server host key rejected or prompt timed out",
+                    );
                     let _ = self.app_handle.emit(
                         &format!("ssh-error-{}", self.session_id),
                         "Host key not trusted. Connection cancelled.".to_string(),
@@ -1224,8 +1235,8 @@ impl client::Handler for ClientHandler {
             {
                 Ok(mut local_stream) => {
                     let mut remote_stream = channel.into_stream();
-                    let _ = tokio::io::copy_bidirectional(&mut remote_stream, &mut local_stream)
-                        .await;
+                    let _ =
+                        tokio::io::copy_bidirectional(&mut remote_stream, &mut local_stream).await;
                     let _ = remote_stream.shutdown().await;
                     let _ = local_stream.shutdown().await;
                 }
@@ -1261,12 +1272,7 @@ impl client::Handler for TestClientHandler {
     }
 }
 
-fn append_known_host(
-    host: &str,
-    port: u16,
-    key: &PublicKey,
-    path: &PathBuf,
-) -> Result<(), String> {
+fn append_known_host(host: &str, port: u16, key: &PublicKey, path: &PathBuf) -> Result<(), String> {
     use std::io::Write;
 
     let mut file = std::fs::OpenOptions::new()
@@ -1336,8 +1342,8 @@ pub async fn open_sftp_subsystem_for_session(
         channel.into_stream(),
         crate::sftp::sftp_client_config(),
     )
-        .await
-        .map_err(|e| format!("Failed to init shared SFTP session: {}", e))
+    .await
+    .map_err(|e| format!("Failed to init shared SFTP session: {}", e))
 }
 
 fn sanitize_optional(value: Option<String>) -> Option<String> {
@@ -1467,7 +1473,10 @@ pub async fn connect_shared_ssh_runtime(
         ssh_algorithms::effective_keepalive_interval(config.keep_alive_interval);
     connection_log::append(
         &session_id,
-        format!("initializing known_hosts for endpoint={}:{}", config.host, config.port),
+        format!(
+            "initializing known_hosts for endpoint={}:{}",
+            config.host, config.port
+        ),
     );
     let known_hosts_path = app_known_hosts_path()
         .map_err(|error| format!("Failed to initialize known_hosts: {}", error))?;
@@ -1480,7 +1489,10 @@ pub async fn connect_shared_ssh_runtime(
         let jump_port = jump.port;
         connection_log::append(
             &session_id,
-            format!("connecting configured jump host endpoint={}:{} user={}", jump_host, jump_port, jump.username),
+            format!(
+                "connecting configured jump host endpoint={}:{} user={}",
+                jump_host, jump_port, jump.username
+            ),
         );
 
         let mut jump_handle = connect_with_profile_retry(
@@ -1512,7 +1524,10 @@ pub async fn connect_shared_ssh_runtime(
         )
         .await
         .map_err(|error| format!("Jump host connection failed: {}", error))?;
-        connection_log::append(&session_id, "jump host SSH transport connected; authenticating");
+        connection_log::append(
+            &session_id,
+            "jump host SSH transport connected; authenticating",
+        );
 
         auth::authenticate_session(
             &session_id,
@@ -1543,7 +1558,10 @@ pub async fn connect_shared_ssh_runtime(
         loop {
             connection_log::append(
                 &session_id,
-                format!("opening direct-tcpip through jump host target={}:{}", target_host, target_port),
+                format!(
+                    "opening direct-tcpip through jump host target={}:{}",
+                    target_host, target_port
+                ),
             );
             let handler = ClientHandler {
                 app_handle: app_handle.clone(),
@@ -1559,10 +1577,14 @@ pub async fn connect_shared_ssh_runtime(
                 .await
                 .map_err(|error| format!("Jump tunnel open failed: {}", error))?
                 .into_stream();
-            connection_log::append(&session_id, "direct-tcpip channel opened; starting target SSH transport");
+            connection_log::append(
+                &session_id,
+                "direct-tcpip channel opened; starting target SSH transport",
+            );
 
             let client_config = build_client_config(config.keep_alive_interval, profile);
-            match connect_stream_handle(client_config, stream, handler, config.connect_timeout).await
+            match connect_stream_handle(client_config, stream, handler, config.connect_timeout)
+                .await
             {
                 Ok(session) => {
                     app_handle
@@ -1589,7 +1611,10 @@ pub async fn connect_shared_ssh_runtime(
 
         connection_log::append(
             &session_id,
-            format!("connecting direct SSH transport endpoint={}:{}", target_host, target_port),
+            format!(
+                "connecting direct SSH transport endpoint={}:{}",
+                target_host, target_port
+            ),
         );
         let connected = connect_with_profile_retry(
             &app_handle,
@@ -1623,7 +1648,10 @@ pub async fn connect_shared_ssh_runtime(
         connected
     };
 
-    connection_log::append(&session_id, format!("authenticating SSH user={}", config.username));
+    connection_log::append(
+        &session_id,
+        format!("authenticating SSH user={}", config.username),
+    );
     auth::authenticate_session(
         &session_id,
         &mut session,
@@ -1636,7 +1664,8 @@ pub async fn connect_shared_ssh_runtime(
     connection_log::append(&session_id, "SSH authentication accepted");
 
     let shared_session: SharedSshSession = Arc::new(AsyncMutex::new(session));
-    let shared_session_slot: SharedSshSessionSlot = Arc::new(Mutex::new(Some(shared_session.clone())));
+    let shared_session_slot: SharedSshSessionSlot =
+        Arc::new(Mutex::new(Some(shared_session.clone())));
     let jump_session = jump_session.map(Arc::new);
     let keepalive = supervisor::spawn_locked_keepalive_task(
         session_id,
@@ -1695,7 +1724,11 @@ async fn run_ssh_session_task(
         Err(error) => {
             connection_log::append(
                 &session_id,
-                format!("ssh connect failed elapsed_ms={} error={}", started_at.elapsed().as_millis(), error),
+                format!(
+                    "ssh connect failed elapsed_ms={} error={}",
+                    started_at.elapsed().as_millis(),
+                    error
+                ),
             );
             fail_session_connect(
                 &app_handle,
@@ -1715,7 +1748,10 @@ async fn run_ssh_session_task(
     };
     connection_log::append(
         &session_id,
-        format!("ssh transport authenticated elapsed_ms={}", started_at.elapsed().as_millis()),
+        format!(
+            "ssh transport authenticated elapsed_ms={}",
+            started_at.elapsed().as_millis()
+        ),
     );
 
     {
@@ -1729,7 +1765,10 @@ async fn run_ssh_session_task(
         match session.channel_open_session().await {
             Ok(channel) => channel,
             Err(error) => {
-                connection_log::append(&session_id, format!("session channel open failed error={}", error));
+                connection_log::append(
+                    &session_id,
+                    format!("session channel open failed error={}", error),
+                );
                 fail_session_connect(
                     &app_handle,
                     &shared_session_slot,
@@ -1747,12 +1786,25 @@ async fn run_ssh_session_task(
             }
         }
     };
-    connection_log::append(&session_id, format!("session channel opened channel_id={:?}", channel.id()));
+    connection_log::append(
+        &session_id,
+        format!("session channel opened channel_id={:?}", channel.id()),
+    );
 
     let term = term_type.as_deref().unwrap_or("xterm-256color");
     let terminal_modes = default_terminal_modes();
-    connection_log::append(&session_id, format!("requesting pty term={} cols=80 rows=24 modes={}", term, terminal_modes.len()));
-    if let Err(error) = channel.request_pty(true, term, 80, 24, 0, 0, &terminal_modes).await {
+    connection_log::append(
+        &session_id,
+        format!(
+            "requesting pty term={} cols=80 rows=24 modes={}",
+            term,
+            terminal_modes.len()
+        ),
+    );
+    if let Err(error) = channel
+        .request_pty(true, term, 80, 24, 0, 0, &terminal_modes)
+        .await
+    {
         connection_log::append(&session_id, format!("pty request failed error={}", error));
         fail_session_connect(
             &app_handle,
@@ -1793,7 +1845,13 @@ async fn run_ssh_session_task(
 
     if let Some(script) = &login_script {
         if !script.is_empty() {
-            connection_log::append(&session_id, format!("sending login script bytes={} content=redacted", script.len()));
+            connection_log::append(
+                &session_id,
+                format!(
+                    "sending login script bytes={} content=redacted",
+                    script.len()
+                ),
+            );
             let _ = channel.data(script.as_bytes()).await;
             if !script.ends_with('\n') {
                 let _ = channel.data("\n".as_bytes()).await;
@@ -1802,7 +1860,13 @@ async fn run_ssh_session_task(
     }
 
     let _ = app_handle.emit(&format!("ssh-connected-{}", session_id), ());
-    connection_log::append(&session_id, format!("ssh connected event emitted elapsed_ms={}", started_at.elapsed().as_millis()));
+    connection_log::append(
+        &session_id,
+        format!(
+            "ssh connected event emitted elapsed_ms={}",
+            started_at.elapsed().as_millis()
+        ),
+    );
     let mut zmodem_detector = ZmodemDetector::new();
     let mut sent_packets = 0u64;
     let mut sent_bytes = 0u64;
@@ -1930,7 +1994,13 @@ async fn run_ssh_session_task(
         }
     }
 
-    connection_log::append(&session_id, format!("ssh session cleanup elapsed_ms={}", started_at.elapsed().as_millis()));
+    connection_log::append(
+        &session_id,
+        format!(
+            "ssh session cleanup elapsed_ms={}",
+            started_at.elapsed().as_millis()
+        ),
+    );
     connection_log::append(
         &session_id,
         format!(
@@ -1969,7 +2039,14 @@ pub async fn connect_ssh_legacy(
 
     match normalized_protocol(config.protocol.as_deref()) {
         "telnet" => {
-            spawn_telnet_session(app_handle, session_id_clone, config, rx, resize_rx, close_rx);
+            spawn_telnet_session(
+                app_handle,
+                session_id_clone,
+                config,
+                rx,
+                resize_rx,
+                close_rx,
+            );
             return Ok(runtime_handle);
         }
         "serial" => {
@@ -2059,10 +2136,7 @@ pub async fn connect_ssh_runtime(
         ))),
     };
 
-    Ok(crate::session::state::ManagedSshRuntime {
-        handle,
-        task,
-    })
+    Ok(crate::session::state::ManagedSshRuntime { handle, task })
 }
 
 async fn run_shared_shell_channel_task(
@@ -2087,19 +2161,46 @@ async fn run_shared_shell_channel_task(
             Err(error) => {
                 let message = format!("Channel open failed: {}", error);
                 connection_log::append(&channel_id, &message);
-                if let Some(tx) = ready_tx.take() { let _ = tx.send(Err(message.clone())); }
+                if let Some(tx) = ready_tx.take() {
+                    let _ = tx.send(Err(message.clone()));
+                }
                 let _ = app_handle.emit(&format!("ssh-error-{}", channel_id), message);
                 return;
             }
         }
     };
-    connection_log::append(&channel_id, format!("shared session channel opened channel_id={:?}", channel.id()));
+    connection_log::append(
+        &channel_id,
+        format!(
+            "shared session channel opened channel_id={:?}",
+            channel.id()
+        ),
+    );
     let terminal_modes = default_terminal_modes();
-    connection_log::append(&channel_id, format!("requesting shared channel pty term={}", term_type.as_deref().unwrap_or("xterm-256color")));
-    if let Err(error) = channel.request_pty(true, term_type.as_deref().unwrap_or("xterm-256color"), 80, 24, 0, 0, &terminal_modes).await {
+    connection_log::append(
+        &channel_id,
+        format!(
+            "requesting shared channel pty term={}",
+            term_type.as_deref().unwrap_or("xterm-256color")
+        ),
+    );
+    if let Err(error) = channel
+        .request_pty(
+            true,
+            term_type.as_deref().unwrap_or("xterm-256color"),
+            80,
+            24,
+            0,
+            0,
+            &terminal_modes,
+        )
+        .await
+    {
         let message = format!("PTY request failed: {}", error);
         connection_log::append(&channel_id, &message);
-        if let Some(tx) = ready_tx.take() { let _ = tx.send(Err(message.clone())); }
+        if let Some(tx) = ready_tx.take() {
+            let _ = tx.send(Err(message.clone()));
+        }
         let _ = app_handle.emit(&format!("ssh-error-{}", channel_id), message);
         return;
     }
@@ -2108,19 +2209,37 @@ async fn run_shared_shell_channel_task(
     if let Err(error) = channel.request_shell(true).await {
         let message = format!("Shell request failed: {}", error);
         connection_log::append(&channel_id, &message);
-        if let Some(tx) = ready_tx.take() { let _ = tx.send(Err(message.clone())); }
+        if let Some(tx) = ready_tx.take() {
+            let _ = tx.send(Err(message.clone()));
+        }
         let _ = app_handle.emit(&format!("ssh-error-{}", channel_id), message);
         return;
     }
     connection_log::append(&channel_id, "shared interactive shell accepted");
     if let Some(script) = login_script.filter(|script| !script.is_empty()) {
-        connection_log::append(&channel_id, format!("sending shared channel login script bytes={} content=redacted", script.len()));
+        connection_log::append(
+            &channel_id,
+            format!(
+                "sending shared channel login script bytes={} content=redacted",
+                script.len()
+            ),
+        );
         let _ = channel.data(script.as_bytes()).await;
-        if !script.ends_with('\n') { let _ = channel.data("\n".as_bytes()).await; }
+        if !script.ends_with('\n') {
+            let _ = channel.data("\n".as_bytes()).await;
+        }
     }
-    if let Some(tx) = ready_tx.take() { let _ = tx.send(Ok(())); }
+    if let Some(tx) = ready_tx.take() {
+        let _ = tx.send(Ok(()));
+    }
     let _ = app_handle.emit(&format!("ssh-connected-{}", channel_id), ());
-    connection_log::append(&channel_id, format!("shared shell connected elapsed_ms={}", started_at.elapsed().as_millis()));
+    connection_log::append(
+        &channel_id,
+        format!(
+            "shared shell connected elapsed_ms={}",
+            started_at.elapsed().as_millis()
+        ),
+    );
     let mut zmodem_detector = ZmodemDetector::new();
     let mut sent_packets = 0u64;
     let mut sent_bytes = 0u64;
@@ -2197,7 +2316,13 @@ async fn run_shared_shell_channel_task(
             },
         }
     }
-    connection_log::append(&channel_id, format!("shared shell channel task ended elapsed_ms={}", started_at.elapsed().as_millis()));
+    connection_log::append(
+        &channel_id,
+        format!(
+            "shared shell channel task ended elapsed_ms={}",
+            started_at.elapsed().as_millis()
+        ),
+    );
     connection_log::append(
         &channel_id,
         format!(
@@ -2214,7 +2339,11 @@ pub async fn open_shared_shell_channel_runtime(
     term_type: Option<String>,
     login_script: Option<String>,
 ) -> Result<crate::session::state::ManagedSshRuntime, String> {
-    let shared_session = root_handle.shared_session.lock().unwrap().clone()
+    let shared_session = root_handle
+        .shared_session
+        .lock()
+        .unwrap()
+        .clone()
         .ok_or_else(|| "Root SSH transport is not ready".to_string())?;
     let (tx, rx) = channel::<Vec<u8>>(SSH_INPUT_QUEUE_CAPACITY);
     let (resize_tx, resize_rx) = unbounded_channel::<(u32, u32)>();
@@ -2228,11 +2357,31 @@ pub async fn open_shared_shell_channel_runtime(
         channel_lifecycle: channel_lifecycle.clone(),
     };
     let (ready_tx, ready_rx) = oneshot::channel();
-    let task = tokio::spawn(run_shared_shell_channel_task(app_handle, channel_id, shared_session, term_type, login_script, rx, resize_rx, close_rx, channel_lifecycle, ready_tx));
+    let task = tokio::spawn(run_shared_shell_channel_task(
+        app_handle,
+        channel_id,
+        shared_session,
+        term_type,
+        login_script,
+        rx,
+        resize_rx,
+        close_rx,
+        channel_lifecycle,
+        ready_tx,
+    ));
     match ready_rx.await {
-        Ok(Ok(())) => Ok(crate::session::state::ManagedSshRuntime { handle, task: Some(task) }),
-        Ok(Err(error)) => { let _ = task.await; Err(error) }
-        Err(_) => { let _ = task.await; Err("Shell channel task ended before becoming ready".to_string()) }
+        Ok(Ok(())) => Ok(crate::session::state::ManagedSshRuntime {
+            handle,
+            task: Some(task),
+        }),
+        Ok(Err(error)) => {
+            let _ = task.await;
+            Err(error)
+        }
+        Err(_) => {
+            let _ = task.await;
+            Err("Shell channel task ended before becoming ready".to_string())
+        }
     }
 }
 
@@ -2424,23 +2573,59 @@ pub async fn resize_ssh(
 }
 
 #[tauri::command]
-pub async fn open_ssh_shell_channel(app_handle: AppHandle, supervisor: tauri::State<'_, crate::session::supervisor::SessionSupervisor>, root_session_id: String, channel_id: String, term_type: Option<String>, login_script: Option<String>) -> Result<(), String> {
-    supervisor.open_shell_channel(app_handle, root_session_id, channel_id, term_type, login_script).await
+pub async fn open_ssh_shell_channel(
+    app_handle: AppHandle,
+    supervisor: tauri::State<'_, crate::session::supervisor::SessionSupervisor>,
+    root_session_id: String,
+    channel_id: String,
+    term_type: Option<String>,
+    login_script: Option<String>,
+) -> Result<(), String> {
+    supervisor
+        .open_shell_channel(
+            app_handle,
+            root_session_id,
+            channel_id,
+            term_type,
+            login_script,
+        )
+        .await
 }
 
 #[tauri::command]
-pub async fn write_ssh_shell_channel(supervisor: tauri::State<'_, crate::session::supervisor::SessionSupervisor>, root_session_id: String, channel_id: String, data: String) -> Result<(), String> {
-    supervisor.write_shell_channel(root_session_id, channel_id, data).await
+pub async fn write_ssh_shell_channel(
+    supervisor: tauri::State<'_, crate::session::supervisor::SessionSupervisor>,
+    root_session_id: String,
+    channel_id: String,
+    data: String,
+) -> Result<(), String> {
+    supervisor
+        .write_shell_channel(root_session_id, channel_id, data)
+        .await
 }
 
 #[tauri::command]
-pub async fn resize_ssh_shell_channel(supervisor: tauri::State<'_, crate::session::supervisor::SessionSupervisor>, root_session_id: String, channel_id: String, cols: u32, rows: u32) -> Result<(), String> {
-    supervisor.resize_shell_channel(root_session_id, channel_id, cols, rows).await
+pub async fn resize_ssh_shell_channel(
+    supervisor: tauri::State<'_, crate::session::supervisor::SessionSupervisor>,
+    root_session_id: String,
+    channel_id: String,
+    cols: u32,
+    rows: u32,
+) -> Result<(), String> {
+    supervisor
+        .resize_shell_channel(root_session_id, channel_id, cols, rows)
+        .await
 }
 
 #[tauri::command]
-pub async fn close_ssh_shell_channel(supervisor: tauri::State<'_, crate::session::supervisor::SessionSupervisor>, root_session_id: String, channel_id: String) -> Result<(), String> {
-    supervisor.close_shell_channel(root_session_id, channel_id).await
+pub async fn close_ssh_shell_channel(
+    supervisor: tauri::State<'_, crate::session::supervisor::SessionSupervisor>,
+    root_session_id: String,
+    channel_id: String,
+) -> Result<(), String> {
+    supervisor
+        .close_shell_channel(root_session_id, channel_id)
+        .await
 }
 
 #[tauri::command]

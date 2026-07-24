@@ -135,6 +135,13 @@ pub enum SessionMessage {
         req_id: String,
         respond_to: oneshot::Sender<Result<(), String>>,
     },
+    StartSftpDragDownload {
+        window: Window,
+        remote_path: String,
+        req_id: String,
+        total_size: u64,
+        respond_to: oneshot::Sender<Result<crate::sftp::SftpStreamBridge, String>>,
+    },
     StartSftpUpload {
         window: Window,
         local_path: String,

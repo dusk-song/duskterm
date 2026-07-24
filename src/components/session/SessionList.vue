@@ -281,24 +281,53 @@ const { visibleItems, totalHeight, translateY, onScroll: onVirtualScroll, setVie
 // Drag reorder for groups only
 const draggingGroupName = ref('');
 const dragOverGroupName = ref('');
-const onGroupDragStart = (groupName, e) => {
-  if (!groupName) return;
-  draggingGroupName.value = groupName;
-  e.dataTransfer.effectAllowed = 'move';
-  e.dataTransfer.setData('text/plain', groupName);
+let groupDragPointerId = null;
+
+const parentGroupPath = (name) => String(name || '').split('/').slice(0, -1).join('/');
+const isSiblingGroup = (source, target) => (
+  !!source && !!target && source !== target && parentGroupPath(source) === parentGroupPath(target)
+);
+
+const onGroupPointerMove = (e) => {
+  if (groupDragPointerId !== e.pointerId || !draggingGroupName.value) return;
+  const row = document.elementFromPoint(e.clientX, e.clientY)?.closest?.('.tree-row[data-group-name]');
+  const targetGroupName = row?.dataset?.groupName || '';
+  dragOverGroupName.value = isSiblingGroup(draggingGroupName.value, targetGroupName)
+    ? targetGroupName
+    : '';
 };
-const onGroupDragOver = (groupName, e) => {
+
+const cleanupGroupPointerDrag = () => {
+  window.removeEventListener('pointermove', onGroupPointerMove);
+  window.removeEventListener('pointerup', onGroupPointerUp);
+  window.removeEventListener('pointercancel', cleanupGroupPointerDrag);
+  groupDragPointerId = null;
+  draggingGroupName.value = '';
+  dragOverGroupName.value = '';
+};
+
+const onGroupPointerUp = (e) => {
+  if (groupDragPointerId !== e.pointerId) return;
+  const targetGroupName = dragOverGroupName.value;
+  if (targetGroupName) onGroupDrop(targetGroupName);
+  cleanupGroupPointerDrag();
+};
+
+const onGroupPointerDown = (groupName, e) => {
+  if (!groupName || e.button !== 0) return;
   e.preventDefault();
-  if (draggingGroupName.value && draggingGroupName.value !== groupName) {
-    dragOverGroupName.value = groupName;
-  }
+  e.stopPropagation();
+  draggingGroupName.value = groupName;
+  groupDragPointerId = e.pointerId;
+  window.addEventListener('pointermove', onGroupPointerMove);
+  window.addEventListener('pointerup', onGroupPointerUp);
+  window.addEventListener('pointercancel', cleanupGroupPointerDrag);
 };
-const onGroupDragLeave = () => { dragOverGroupName.value = ''; };
+
 const onGroupDrop = (targetGroupName) => {
   const src = draggingGroupName.value;
   if (!src || src === targetGroupName) { draggingGroupName.value = ''; dragOverGroupName.value = ''; return; }
-  const parentPath = (name) => String(name || '').split('/').slice(0, -1).join('/');
-  if (parentPath(src) !== parentPath(targetGroupName)) {
+  if (!isSiblingGroup(src, targetGroupName)) {
     draggingGroupName.value = '';
     dragOverGroupName.value = '';
     return;
@@ -326,10 +355,6 @@ const onGroupDrop = (targetGroupName) => {
   }
   next.splice(targetIdx, 0, ...sourceBlock);
   sshStore.setGroupOrder(next);
-  draggingGroupName.value = '';
-  dragOverGroupName.value = '';
-};
-const onGroupDragEnd = () => {
   draggingGroupName.value = '';
   dragOverGroupName.value = '';
 };
@@ -407,6 +432,7 @@ onMounted(() => {
 });
 
 onUnmounted(() => {
+  cleanupGroupPointerDrag();
   if (resizeObserver) resizeObserver.disconnect();
 });
 
@@ -561,11 +587,9 @@ const handleImportSessions = async () => {
                     'drag-over': dragOverGroupName === (item.data?.groupName || item.title),
                     'is-dragging': draggingGroupName === (item.data?.groupName || item.title)
                   }"
+                  :data-group-name="item._isGroup ? (item.data?.groupName || item.title) : null"
                   :style="{ paddingLeft: (item._depth * 16 + 4) + 'px', height: '34px' }"
                   @click="onTreeRowClick(item)"
-                  @dragover="item._isGroup ? onGroupDragOver(item.data?.groupName || item.title, $event) : null"
-                  @dragleave="item._isGroup ? onGroupDragLeave() : null"
-                  @drop.stop.prevent="item._isGroup ? onGroupDrop(item.data?.groupName || item.title) : null"
                   @dblclick="item.isLeaf ? sshStore.connectStoredSession(item.key) : null">
 
                   <span v-if="item._isGroup" class="tree-arrow"
@@ -597,13 +621,13 @@ const handleImportSessions = async () => {
                     <span v-if="item.isLeaf" class="node-meta">({{ getSessionMeta(item.data) }})</span>
                   </span>
 
-                  <button v-if="item._isGroup && item.key !== 'group-__ungrouped__'" type="button"
-                    class="tree-drag-handle" :disabled="item.data?.locked" draggable="true"
+                  <span v-if="item._isGroup && item.key !== 'group-__ungrouped__'"
+                    class="tree-drag-handle" :class="{ disabled: item.data?.locked }"
+                    role="button" tabindex="0"
                     aria-label="拖动目录排序" title="拖动目录排序" @click.stop
-                    @dragstart.stop="onGroupDragStart(item.data?.groupName || item.title, $event)"
-                    @dragend="onGroupDragEnd">
+                    @pointerdown="!item.data?.locked && onGroupPointerDown(item.data?.groupName || item.title, $event)">
                     <GripVertical />
-                  </button>
+                  </span>
                 </div>
               </ContextMenuTrigger>
               <ContextMenuContent>
@@ -834,6 +858,8 @@ html.dark .tree-row:hover {
   border-radius: 5px;
   background: transparent;
   cursor: grab;
+  touch-action: none;
+  user-select: none;
   color: var(--app-text-muted);
   flex-shrink: 0;
   opacity: 0.42;
@@ -857,7 +883,7 @@ html.dark .tree-row:hover {
   cursor: grabbing;
 }
 
-.tree-drag-handle:disabled {
+.tree-drag-handle.disabled {
   cursor: not-allowed;
   opacity: 0.2;
 }

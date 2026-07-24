@@ -95,7 +95,9 @@ mod tests {
         let mut detector = ZmodemDetector::new();
         match detector.inspect(b"hello shell\r\n") {
             TerminalTransferProbe::TerminalData(data) => assert_eq!(data, b"hello shell\r\n"),
-            TerminalTransferProbe::Detected(_, _) => panic!("ordinary terminal output was detected"),
+            TerminalTransferProbe::Detected(_, _) => {
+                panic!("ordinary terminal output was detected")
+            }
         }
     }
 

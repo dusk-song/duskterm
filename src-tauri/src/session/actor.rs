@@ -151,22 +151,42 @@ pub fn spawn_session_actor(
                     };
                     let _ = respond_to.send(result);
                 }
-                SessionMessage::WriteShellChannel { channel_id, data, respond_to } => {
-                    let result = runtime_state.shell_channels.get(&channel_id)
+                SessionMessage::WriteShellChannel {
+                    channel_id,
+                    data,
+                    respond_to,
+                } => {
+                    let result = runtime_state
+                        .shell_channels
+                        .get(&channel_id)
                         .ok_or_else(|| "Shell channel not found".to_string())
                         .and_then(|runtime| ssh::write_ssh_runtime(&runtime.handle, data));
                     let _ = respond_to.send(result);
                 }
-                SessionMessage::ResizeShellChannel { channel_id, cols, rows, respond_to } => {
-                    let result = runtime_state.shell_channels.get(&channel_id)
+                SessionMessage::ResizeShellChannel {
+                    channel_id,
+                    cols,
+                    rows,
+                    respond_to,
+                } => {
+                    let result = runtime_state
+                        .shell_channels
+                        .get(&channel_id)
                         .ok_or_else(|| "Shell channel not found".to_string())
                         .and_then(|runtime| ssh::resize_ssh_runtime(&runtime.handle, cols, rows));
                     let _ = respond_to.send(result);
                 }
-                SessionMessage::CloseShellChannel { channel_id, respond_to } => {
-                    let result = if let Some(mut runtime) = runtime_state.shell_channels.remove(&channel_id) {
+                SessionMessage::CloseShellChannel {
+                    channel_id,
+                    respond_to,
+                } => {
+                    let result = if let Some(mut runtime) =
+                        runtime_state.shell_channels.remove(&channel_id)
+                    {
                         let _ = runtime.handle.close_tx.send(());
-                        if let Some(task) = runtime.task.take() { let _ = task.await; }
+                        if let Some(task) = runtime.task.take() {
+                            let _ = task.await;
+                        }
                         Ok(())
                     } else {
                         Ok(())
@@ -188,7 +208,9 @@ pub fn spawn_session_actor(
                     let child_runtimes = std::mem::take(&mut runtime_state.shell_channels);
                     for (_, mut runtime) in child_runtimes {
                         let _ = runtime.handle.close_tx.send(());
-                        if let Some(task) = runtime.task.take() { let _ = task.await; }
+                        if let Some(task) = runtime.task.take() {
+                            let _ = task.await;
+                        }
                     }
                     let tunnel_result =
                         tunnel::stop_all_runtime_tunnels(&tunnel_state, &mut runtime_state.tunnels)
@@ -491,6 +513,67 @@ pub fn spawn_session_actor(
                         let _ = respond_to.send(result);
                     });
                     runtime_state.transfer_tasks.insert(transfer_req_id, task);
+                }
+                SessionMessage::StartSftpDragDownload {
+                    window,
+                    remote_path,
+                    req_id,
+                    total_size,
+                    respond_to,
+                } => {
+                    let transfer_session_id = session_id.clone();
+                    let transfer_runtime = runtime_state.sftp.as_ref().map(|runtime| {
+                        (
+                            runtime.state.clone(),
+                            runtime.handle.sftp.clone(),
+                            runtime.handle.reused_from_ssh,
+                            runtime.handle.connection_config.clone(),
+                        )
+                    });
+                    let pending_sftp_hostkey = runtime_state.security.pending_sftp_hostkey.clone();
+                    let transfers = runtime_state.transfers.clone();
+                    let cancel = transfers.register_cancel_token(&req_id);
+                    let transfer_req_id = req_id.clone();
+                    let cleanup_req_id = req_id.clone();
+                    let (stream_tx, stream_rx) =
+                        crossbeam_channel::bounded(crate::sftp::SFTP_TRANSFER_CHANNEL_SIZE);
+                    let (completion_tx, completion_rx) = crossbeam_channel::bounded(1);
+                    let bridge = crate::sftp::SftpStreamBridge {
+                        receiver: stream_rx,
+                        completion: completion_tx,
+                        cancel: cancel.clone(),
+                        total_size,
+                    };
+
+                    if let Some((sftp_state, sftp_handle, reused_from_ssh, connection_config)) =
+                        transfer_runtime
+                    {
+                        reap_finished_transfer_tasks(&mut runtime_state);
+                        let task = tokio::spawn(async move {
+                            let _ = sftp::sftp_drag_download_stream_runtime(
+                                window,
+                                sftp_state,
+                                sftp_handle,
+                                reused_from_ssh,
+                                connection_config,
+                                pending_sftp_hostkey,
+                                cancel,
+                                transfer_session_id,
+                                remote_path,
+                                req_id,
+                                total_size,
+                                stream_tx,
+                                completion_rx,
+                            )
+                            .await;
+                            transfers.cleanup(&cleanup_req_id);
+                        });
+                        runtime_state.transfer_tasks.insert(transfer_req_id, task);
+                        let _ = respond_to.send(Ok(bridge));
+                    } else {
+                        transfers.cleanup(&cleanup_req_id);
+                        let _ = respond_to.send(Err("SFTP Session not found".to_string()));
+                    }
                 }
                 SessionMessage::StartSftpUpload {
                     window,

@@ -144,7 +144,7 @@ onUnmounted(() => {
         <button class="tb-btn" @click="toggleTheme" :title="isDark ? '切换亮色主题' : '切换暗色主题'"><Sun v-if="isDark" :size="15" /><Moon v-else :size="15" /></button>
         <button class="tb-btn" @click="win?.minimize()" title="最小化"><Minus :size="13" /></button>
         <button class="tb-btn" @click="winMax" :title="isMaximized ? '还原' : '最大化'"><Copy v-if="isMaximized" :size="12" /><Square v-else :size="12" /></button>
-        <button class="tb-btn close" @click="win?.close()" title="关闭"><X :size="14" /></button>
+        <button class="tb-btn close" @click="executeMenuAction('file_quit')" title="关闭"><X :size="14" /></button>
       </DuskDock>
     </div>
     <Teleport to="body">

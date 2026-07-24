@@ -368,16 +368,16 @@ export const useSshStore = defineStore('ssh', () => {
         }
       };
 
-      const finish = () => {
+      const finish = (detail = null) => {
         if (done) return;
         done = true;
         cleanup();
-        resolve();
+        resolve(detail);
       };
 
       const onReady = (event) => {
         if (event?.detail?.sessionId !== sessionId) return;
-        finish();
+        finish(event.detail);
       };
 
       window.addEventListener(TERMINAL_READY_EVENT, onReady);
@@ -385,8 +385,13 @@ export const useSshStore = defineStore('ssh', () => {
     });
 
   const connectSessionById = async (sessionId, config) => {
-    await waitForTerminalReady(sessionId);
-    await invokeCommand('connect_ssh', { id: sessionId, config });
+    const terminalSize = await waitForTerminalReady(sessionId);
+    const connectionConfig = {
+      ...config,
+      initial_cols: Math.max(2, Number(terminalSize?.cols) || 80),
+      initial_rows: Math.max(2, Number(terminalSize?.rows) || 24)
+    };
+    await invokeCommand('connect_ssh', { id: sessionId, config: connectionConfig });
   };
 
   async function reconnectSession(sessionId) {

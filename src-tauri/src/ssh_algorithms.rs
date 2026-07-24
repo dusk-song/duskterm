@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use std::fmt;
 use std::sync::{Arc, Mutex};
 
-use russh::{cipher, client, compression, kex, mac, AlgorithmKind, Preferred};
 use russh::keys::{Algorithm, EcdsaCurve, HashAlg};
+use russh::{cipher, client, compression, kex, mac, AlgorithmKind, Preferred};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NegotiationProfile {
@@ -94,12 +94,7 @@ impl NegotiationProfileCache {
             .unwrap_or(NegotiationProfile::Modern)
     }
 
-    pub fn remember_successful_profile(
-        &self,
-        host: &str,
-        port: u16,
-        profile: NegotiationProfile,
-    ) {
+    pub fn remember_successful_profile(&self, host: &str, port: u16, profile: NegotiationProfile) {
         self.inner
             .lock()
             .unwrap()
@@ -173,22 +168,21 @@ pub fn validate_private_key_algorithm(algorithm: &Algorithm) -> Result<(), Strin
     }
 }
 
-pub fn should_retry_with_legacy(
-    profile: NegotiationProfile,
-    error: &ConnectAttemptError,
-) -> bool {
+pub fn should_retry_with_legacy(profile: NegotiationProfile, error: &ConnectAttemptError) -> bool {
     if profile != NegotiationProfile::Modern {
         return false;
     }
 
     matches!(
         error,
-        ConnectAttemptError::Russh(russh::Error::NoCommonAlgo {
-            kind: AlgorithmKind::Key,
-            ..
-        } | russh::Error::UnknownAlgo
-            | russh::Error::KexInit
-            | russh::Error::WrongServerSig)
+        ConnectAttemptError::Russh(
+            russh::Error::NoCommonAlgo {
+                kind: AlgorithmKind::Key,
+                ..
+            } | russh::Error::UnknownAlgo
+                | russh::Error::KexInit
+                | russh::Error::WrongServerSig
+        )
     )
 }
 

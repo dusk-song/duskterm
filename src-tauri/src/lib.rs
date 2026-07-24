@@ -1,11 +1,15 @@
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::Manager;
 use tauri::PhysicalSize;
 
-mod fileio;
+static SHUTDOWN_STARTED: AtomicBool = AtomicBool::new(false);
+
 mod background;
 mod connection_log;
+mod fileio;
 mod local_terminal;
+mod native_drag;
 mod remote_monitor;
 mod session;
 mod sftp;
@@ -17,17 +21,23 @@ mod terminal_transfer;
 mod tunnel;
 
 #[tauri::command]
-async fn exit_app(
-    app_handle: tauri::AppHandle,
-    supervisor: tauri::State<'_, session::supervisor::SessionSupervisor>,
-    sftp_state: tauri::State<'_, sftp::SftpAppState>,
-    tunnel_state: tauri::State<'_, tunnel::TunnelState>,
-) -> Result<(), String> {
+async fn shutdown_app(app_handle: tauri::AppHandle) -> Result<(), String> {
+    if SHUTDOWN_STARTED.swap(true, Ordering::SeqCst) {
+        return Ok(());
+    }
+    let supervisor = app_handle.state::<session::supervisor::SessionSupervisor>();
+    let sftp_state = app_handle.state::<sftp::SftpAppState>();
+    let tunnel_state = app_handle.state::<tunnel::TunnelState>();
     let result = supervisor
         .disconnect_all(sftp_state.inner().clone(), tunnel_state.inner().clone())
         .await;
     app_handle.exit(0);
     result
+}
+
+#[tauri::command]
+async fn exit_app(app_handle: tauri::AppHandle) -> Result<(), String> {
+    shutdown_app(app_handle).await
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -47,12 +57,26 @@ pub fn run() {
             }
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                api.prevent_close();
+                if !SHUTDOWN_STARTED.load(Ordering::SeqCst) {
+                    let app_handle = window.app_handle().clone();
+                    tauri::async_runtime::spawn(async move {
+                        let _ = shutdown_app(app_handle).await;
+                    });
+                }
+            }
+        })
         .invoke_handler(tauri::generate_handler![
             exit_app,
             background::import_background_image,
             background::ensure_background_image,
             background::delete_background_image,
             local_terminal::list_local_shell_profiles,
+            native_drag::native_drag_capabilities,
+            native_drag::start_native_local_file_drag,
+            native_drag::start_native_sftp_file_drag,
             ssh::connect_ssh,
             ssh::test_ssh_connection,
             ssh::list_serial_ports,
@@ -112,6 +136,7 @@ pub fn run() {
             fileio::save_text_file,
             fileio::save_binary_file,
             fileio::append_binary_file,
+            fileio::inspect_local_drop_paths,
             fileio::import_desktop_pet_asset,
             remote_monitor::get_remote_stats
         ])

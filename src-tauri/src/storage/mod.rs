@@ -341,7 +341,9 @@ fn save_command_knowledge_storage_data(
     fs::write(path, json).map_err(|e| e.to_string())
 }
 
-fn normalize_command_knowledge_entry(mut entry: CommandKnowledgeEntry) -> Result<CommandKnowledgeEntry, String> {
+fn normalize_command_knowledge_entry(
+    mut entry: CommandKnowledgeEntry,
+) -> Result<CommandKnowledgeEntry, String> {
     entry.id = entry.id.trim().to_string();
     if entry.id.is_empty() {
         entry.id = Uuid::new_v4().to_string();
@@ -905,13 +907,17 @@ pub fn import_command_knowledge_from(
 ) -> Result<Vec<CommandKnowledgeEntry>, String> {
     let state = state.lock().unwrap();
     let validated = validate_io_path(&source_path, true)?;
-    let content = fs::read_to_string(&validated).map_err(|e| format!("读取命令知识库失败: {}", e))?;
+    let content =
+        fs::read_to_string(&validated).map_err(|e| format!("读取命令知识库失败: {}", e))?;
     let imported: CommandKnowledgeStorageData = serde_json::from_str(&content)
         .map_err(|_| "文件格式不正确，请选择有效的命令知识库导出文件".to_string())?;
 
     let mut existing = load_command_knowledge_storage_data(&state)?;
-    let mut existing_ids: std::collections::HashSet<String> =
-        existing.entries.iter().map(|entry| entry.id.clone()).collect();
+    let mut existing_ids: std::collections::HashSet<String> = existing
+        .entries
+        .iter()
+        .map(|entry| entry.id.clone())
+        .collect();
     let mut added = Vec::new();
 
     let entries = &mut existing.entries;

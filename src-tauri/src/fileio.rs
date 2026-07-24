@@ -4,6 +4,45 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LocalDropEntry {
+    pub path: String,
+    pub name: String,
+    pub is_file: bool,
+    pub is_dir: bool,
+    pub size: u64,
+}
+
+#[tauri::command]
+pub fn inspect_local_drop_paths(paths: Vec<String>) -> Result<Vec<LocalDropEntry>, String> {
+    paths
+        .into_iter()
+        .map(|raw_path| {
+            let path = PathBuf::from(&raw_path);
+            let metadata = fs::metadata(&path)
+                .map_err(|error| format!("无法读取本地路径 {}：{}", path.display(), error))?;
+            let name = path
+                .file_name()
+                .and_then(|value| value.to_str())
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| format!("无法识别本地路径名称：{}", path.display()))?
+                .to_string();
+            Ok(LocalDropEntry {
+                path: path_to_string(&path)?,
+                name,
+                is_file: metadata.is_file(),
+                is_dir: metadata.is_dir(),
+                size: if metadata.is_file() {
+                    metadata.len()
+                } else {
+                    0
+                },
+            })
+        })
+        .collect()
+}
+
 #[tauri::command]
 pub fn save_text_file(path: String, content: String) -> Result<(), String> {
     let target = PathBuf::from(&path);

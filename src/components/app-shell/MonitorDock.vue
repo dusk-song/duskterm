@@ -31,7 +31,8 @@ async function fetchStats(diskOnly = false) {
   if (!diskOnly) polling = true;
   try {
     const active = activeSession.value;
-    const remote = active?.status === 'connected' && active.config;
+    const protocol = String(active?.config?.protocol || 'ssh').toLowerCase();
+    const remote = active?.status === 'connected' && protocol === 'ssh';
     remoteSource.value = Boolean(remote);
     const data = remote
       ? await invokeCommand('get_remote_stats', { sessionId: active.id })

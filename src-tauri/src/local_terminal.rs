@@ -41,6 +41,8 @@ pub struct LocalTerminalConfig {
     executable: PathBuf,
     args: Vec<String>,
     working_directory: PathBuf,
+    initial_cols: u16,
+    initial_rows: u16,
 }
 
 enum ReaderOutcome {
@@ -401,6 +403,8 @@ pub fn resolve_local_config(config: &SshConfig) -> Result<LocalTerminalConfig, S
         executable,
         args,
         working_directory,
+        initial_cols: config.initial_cols.unwrap_or(DEFAULT_COLS).clamp(2, 1000),
+        initial_rows: config.initial_rows.unwrap_or(DEFAULT_ROWS).clamp(2, 1000),
     })
 }
 
@@ -446,8 +450,8 @@ fn run_local_terminal(
         let pty_system = native_pty_system();
         let pair = pty_system
             .openpty(PtySize {
-                rows: DEFAULT_ROWS,
-                cols: DEFAULT_COLS,
+                rows: config.initial_rows,
+                cols: config.initial_cols,
                 pixel_width: 0,
                 pixel_height: 0,
             })
@@ -661,6 +665,8 @@ mod tests {
             flow_control: None,
             local_profile: None,
             local_working_directory: None,
+            initial_cols: None,
+            initial_rows: None,
         };
 
         let resolved = resolve_local_config(&config).expect("config should resolve");
