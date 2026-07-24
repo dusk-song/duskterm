@@ -347,6 +347,11 @@ export const useSshStore = defineStore('ssh', () => {
     if (protocol === 'telnet') {
       return config.host ? `Telnet ${config.host}` : 'Telnet 会话';
     }
+    if (protocol === 'local') {
+      if (config.local_profile === 'cmd') return 'CMD';
+      if (config.local_shell_name) return config.local_shell_name;
+      return 'PowerShell';
+    }
     return config.host ? `${config.username || 'user'}@${config.host}` : 'SSH 会话';
   };
 
@@ -451,10 +456,12 @@ export const useSshStore = defineStore('ssh', () => {
 
     try {
       await connectSessionById(sessionId, config);
+      return sessionId;
     } catch (err) {
       removeSession(sessionId);
       console.error(err);
       toast.error('连接请求失败');
+      return null;
     }
   }
 
@@ -481,6 +488,26 @@ export const useSshStore = defineStore('ssh', () => {
     }
 
     return sessionId;
+  }
+
+  async function openLocalTerminal(profile = {}) {
+    const profileId = String(profile.id || '').trim();
+    if (!profileId) {
+      toast.error('未找到可用的本地 Shell');
+      return null;
+    }
+
+    const config = {
+      protocol: 'local',
+      host: '',
+      port: 0,
+      username: '',
+      auth_type: 'password',
+      name: profile.name || '本地终端',
+      local_profile: profileId,
+      local_shell_name: profile.name || '本地终端'
+    };
+    return connectLogic(config);
   }
 
   async function clearRecentSessions() {
@@ -559,6 +586,7 @@ export const useSshStore = defineStore('ssh', () => {
     setSessionStatus,
     connectLogic,
     connectLogicWithMeta,
+    openLocalTerminal,
     openSplitShell,
     reconnectSession,
     reconnectAllSessions,

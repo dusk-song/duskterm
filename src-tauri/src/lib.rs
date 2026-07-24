@@ -5,6 +5,7 @@ use tauri::PhysicalSize;
 mod fileio;
 mod background;
 mod connection_log;
+mod local_terminal;
 mod remote_monitor;
 mod session;
 mod sftp;
@@ -16,8 +17,17 @@ mod terminal_transfer;
 mod tunnel;
 
 #[tauri::command]
-fn exit_app() {
-    std::process::exit(0);
+async fn exit_app(
+    app_handle: tauri::AppHandle,
+    supervisor: tauri::State<'_, session::supervisor::SessionSupervisor>,
+    sftp_state: tauri::State<'_, sftp::SftpAppState>,
+    tunnel_state: tauri::State<'_, tunnel::TunnelState>,
+) -> Result<(), String> {
+    let result = supervisor
+        .disconnect_all(sftp_state.inner().clone(), tunnel_state.inner().clone())
+        .await;
+    app_handle.exit(0);
+    result
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -42,6 +52,7 @@ pub fn run() {
             background::import_background_image,
             background::ensure_background_image,
             background::delete_background_image,
+            local_terminal::list_local_shell_profiles,
             ssh::connect_ssh,
             ssh::test_ssh_connection,
             ssh::list_serial_ports,

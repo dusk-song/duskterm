@@ -146,6 +146,7 @@ const serialTextEncoder = new TextEncoder();
 const currentSession = computed(() => sshStore.sessions.find(s => s.id === props.sessionId) || null);
 const sessionName = computed(() => currentSession.value?.name || 'Unknown');
 const isSerialSession = computed(() => String(currentSession.value?.config?.protocol || '').toLowerCase() === 'serial');
+const isLocalSession = computed(() => String(currentSession.value?.config?.protocol || '').toLowerCase() === 'local');
 
 const serialPreferenceKey = () => {
   const config = currentSession.value?.config || {};
@@ -252,6 +253,9 @@ function sendData(data) {
 
 const formatCloseReason = (reason) => {
   const text = String(reason || '').trim();
+  if (isLocalSession.value) {
+    return text || '本地 Shell 已关闭。';
+  }
   return text ? `Connection closed by remote host (${text}).` : 'Connection closed by remote host.';
 };
 
@@ -456,7 +460,6 @@ const PHYSICAL_LINE_CHECKPOINT_STEP_HUGE = 1024;
 const PHYSICAL_LINE_THRESHOLD_MEDIUM = 20000;
 const PHYSICAL_LINE_THRESHOLD_LARGE = 100000;
 const PHYSICAL_LINE_THRESHOLD_HUGE = 200000;
-const TERMINAL_IMMEDIATE_WRITE_MAX_CHARS = 4096;
 const terminalThemeSettings = ref(loadTerminalThemeSettings());
 const CJK_MONO_FALLBACK_FONTS = '"Dusk Noto Sans SC", "Sarasa Mono SC", "Noto Sans Mono CJK SC", "Microsoft YaHei Mono", "SimSun", monospace';
 const TERMINAL_DEFAULT_FONT = '"Consolas"';
@@ -949,12 +952,12 @@ const applyQuickHintSelection = () => {
 
   const matched = matchSensitiveCommand(command, knowledgeSensitiveRules.value);
   if (matched) {
-    openSecurityModal(matched, `${buildTerminalLineReplacementPayload(command)}\r`);
+    openSecurityModal(matched, `${buildTerminalLineReplacementPayload(command, currentInputBuffer.value)}\r`);
     closeQuickHint();
     return true;
   }
 
-  forwardTerminalInput(buildTerminalLineReplacementPayload(command));
+  forwardTerminalInput(buildTerminalLineReplacementPayload(command, currentInputBuffer.value));
   currentInputBuffer.value = command;
   if (selected?._source === 'knowledge' && selected?.id) {
     commandKnowledgeStore.recordUsage(selected.id);
@@ -1650,12 +1653,6 @@ const flushTerminalOutput = () => {
 
 const enqueueTerminalOutput = (chunk) => {
   if (!chunk) return;
-  if (!writeFlushRafId && pendingOutputChunks.length === 0 && chunk.length <= TERMINAL_IMMEDIATE_WRITE_MAX_CHARS) {
-    term?.write(chunk);
-    markSearchBufferChanged();
-    scheduleLineMetrics();
-    return;
-  }
   pendingOutputChunks.push(chunk);
   if (writeFlushRafId) return;
   writeFlushRafId = requestAnimationFrame(flushTerminalOutput);
@@ -2399,7 +2396,7 @@ onMounted(async () => {
       // console.log('Terminal Data:', payload);
       if (Array.isArray(payload)) {
         const rawBytes = new Uint8Array(payload);
-        const decoded = textDecoder.decode(rawBytes);
+        const decoded = textDecoder.decode(rawBytes, { stream: true });
         recordSerialReceive(decoded, payload.length, rawBytes);
         if (!isSerialSession.value || serialReceiveVisible.value) {
           enqueueTerminalOutput(decoded);
@@ -2456,7 +2453,7 @@ onMounted(async () => {
       sshStore.setSessionStatus(props.sessionId, 'disconnected');
       reconnectPromptShown.value = false;
       term.write(`\r\n\x1b[31m${formatCloseReason(reason)}\x1b[0m\r\n`);
-      term.write('\x1b[33m按 Enter 键尝试重连。\x1b[0m\r\n');
+      term.write(`\x1b[33m按 Enter 键尝试${isLocalSession.value ? '重新启动' : '重连'}。\x1b[0m\r\n`);
       markSearchBufferChanged();
       scheduleLineMetrics();
     });

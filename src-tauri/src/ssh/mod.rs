@@ -87,6 +87,33 @@ pub type SessionIoReceiver = Receiver<Vec<u8>>;
 pub type SessionResizeReceiver = tokio::sync::mpsc::UnboundedReceiver<(u32, u32)>;
 pub type SessionCloseReceiver = tokio::sync::mpsc::UnboundedReceiver<()>;
 
+pub(crate) fn create_terminal_runtime_channels() -> (
+    TerminalRuntimeHandle,
+    SessionIoReceiver,
+    SessionResizeReceiver,
+    SessionCloseReceiver,
+) {
+    let (tx, rx) = channel::<Vec<u8>>(SSH_INPUT_QUEUE_CAPACITY);
+    let (window_size_tx, window_size_rx) = unbounded_channel::<(u32, u32)>();
+    let (close_tx, close_rx) = unbounded_channel::<()>();
+    let shared_session = Arc::new(Mutex::new(None));
+    let channel_lifecycle =
+        Arc::new(Mutex::new(channel_state::ChannelLifecycle::default()));
+
+    (
+        TerminalRuntimeHandle {
+            tx,
+            window_size_tx,
+            close_tx,
+            shared_session,
+            channel_lifecycle,
+        },
+        rx,
+        window_size_rx,
+        close_rx,
+    )
+}
+
 #[derive(serde::Deserialize, Debug, Clone)]
 pub struct SshConfig {
     pub(crate) protocol: Option<String>,
@@ -113,6 +140,8 @@ pub struct SshConfig {
     pub(crate) stop_bits: Option<String>,
     pub(crate) parity: Option<String>,
     pub(crate) flow_control: Option<String>,
+    pub(crate) local_profile: Option<String>,
+    pub(crate) local_working_directory: Option<String>,
 }
 
 impl Drop for SshConfig {
@@ -142,8 +171,13 @@ fn normalized_protocol(value: Option<&str>) -> &'static str {
     match value.unwrap_or("ssh").trim().to_ascii_lowercase().as_str() {
         "telnet" => "telnet",
         "serial" => "serial",
+        "local" => "local",
         _ => "ssh",
     }
+}
+
+pub(crate) fn is_local_protocol(config: &SshConfig) -> bool {
+    normalized_protocol(config.protocol.as_deref()) == "local"
 }
 
 fn socket_address(host: &str, port: u16) -> Result<std::net::SocketAddr, String> {

@@ -715,6 +715,13 @@ const {
 
 const focusedTerminalRuntimeId = computed(() => resolveFocusedSessionId(activeKey.value, focusedLeaf.value));
 const activeSftpWorkspaceId = computed(() => activeKey.value || '');
+const activeSessionSupportsSftp = computed(() => {
+  const session = sshStore.getSession(activeKey.value);
+  return String(session?.config?.protocol || 'ssh').toLowerCase() === 'ssh';
+});
+const showActiveSftpPanel = computed(
+  () => showSftpPanel.value && visibleSessions.value.length > 0 && activeSessionSupportsSftp.value
+);
 getActiveSftpWorkspaceId = () => activeSftpWorkspaceId.value;
 watch(activeSftpWorkspaceId, async (sessionId) => {
   showSftpPanel.value = sftpPanelVisibility.get(sessionId);
@@ -1140,7 +1147,8 @@ const toolbarRightItems = computed(() => toolbarItems.value
         <!-- Left: Session List (inline panel, not overlay) -->
         <div v-if="hasWorkspaceLeftPanels" class="workspace-left-stack" :style="workspaceLeftStackStyle">
           <TiledPanel class="workspace-panel workspace-panel-session" :dense="true" :padded="false">
-            <SessionList :width="'100%'" :sftp-active="showSftpPanel" :sftp-disabled="visibleSessions.length === 0"
+            <SessionList :width="'100%'" :sftp-active="showActiveSftpPanel"
+              :sftp-disabled="visibleSessions.length === 0 || !activeSessionSupportsSftp"
               @open-create="() => { showSessionModal(null); }" @open-edit="(s) => { openSavedSessionEditor(s); }"
               @toggle-sftp="showSftpPanel = !showSftpPanel" @close="showSessionPanel = false" />
           </TiledPanel>
@@ -1151,7 +1159,7 @@ const toolbarRightItems = computed(() => toolbarItems.value
           @mousedown="startWorkspaceResize('columns', $event)" />
 
         <TiledPanel class="workspace-panel workspace-panel-main" :dense="true" :padded="false" aria-label="主界面面板">
-          <div class="main-panel-body" :class="{ 'has-sftp-panel': showSftpPanel && visibleSessions.length > 0 }">
+          <div class="main-panel-body" :class="{ 'has-sftp-panel': showActiveSftpPanel }">
             <div v-if="visibleSessions.length === 0" class="empty-state">
               <div class="empty-left">
                 <div class="recent-sessions-tree-container">
@@ -1181,12 +1189,12 @@ const toolbarRightItems = computed(() => toolbarItems.value
 
             <!-- SFTP bottom sliding panel (v-show keeps FileManager alive to preserve path) -->
             <Transition name="sftp-slide">
-              <div v-show="showSftpPanel && visibleSessions.length > 0" class="sftp-bottom-panel"
+              <div v-show="showActiveSftpPanel" class="sftp-bottom-panel"
                 :style="{ height: `${sftpPanelHeightRatio * 100}vh` }">
                 <div class="sftp-resize-handle" :class="{ 'is-dragging': isSftpResizing }"
                   @mousedown="startSftpResize" />
                 <FileManager :sessionId="activeSftpWorkspaceId" :follow-session-id="focusedTerminalRuntimeId"
-                  :visible="showSftpPanel"
+                  :visible="showActiveSftpPanel"
                   @close="showSftpPanel = false" />
               </div>
             </Transition>

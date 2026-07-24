@@ -22,7 +22,7 @@ import {
 } from '@lucide/vue';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { v4 as uuidv4 } from 'uuid';
-import { computed, h, onMounted, onUnmounted, ref } from 'vue';
+import { computed, h, nextTick, onMounted, onUnmounted, ref } from 'vue';
 import { useVirtualList } from '@/composables/useVirtualList';
 import { useSshStore } from '@/stores/ssh';
 import { invokeCommand } from '@/utils/ipc';
@@ -42,6 +42,9 @@ const sshStore = useSshStore();
 const expandedKeys = ref([]);
 const searchKeyword = ref('');
 const panelContentRef = ref(null);
+const localShellProfiles = ref([]);
+const localShellPlatform = ref('');
+const openingLocalProfileId = ref('');
 let resizeObserver = null;
 
 const panelWidthStyle = computed(() => {
@@ -57,6 +60,33 @@ const panelWidthStyle = computed(() => {
 });
 
 const normalizedKeyword = computed(() => searchKeyword.value.trim().toLowerCase());
+const localShellButtons = computed(() => {
+  if (localShellPlatform.value === 'windows') {
+    return localShellProfiles.value.filter((profile) => ['powershell', 'cmd'].includes(profile.id));
+  }
+  return localShellProfiles.value.slice(0, 1);
+});
+
+const loadLocalShellProfiles = async () => {
+  try {
+    const result = await invokeCommand('list_local_shell_profiles');
+    localShellPlatform.value = String(result?.platform || '');
+    localShellProfiles.value = Array.isArray(result?.profiles) ? result.profiles : [];
+  } catch (error) {
+    localShellProfiles.value = [];
+    console.error('Failed to load local shell profiles:', error);
+  }
+};
+
+const openLocalShell = async (profile) => {
+  if (!profile?.id || openingLocalProfileId.value) return;
+  openingLocalProfileId.value = profile.id;
+  try {
+    await sshStore.openLocalTerminal(profile);
+  } finally {
+    openingLocalProfileId.value = '';
+  }
+};
 
 const getProtocol = (session) => String(session?.protocol || 'ssh').toLowerCase();
 
@@ -77,6 +107,8 @@ const getSessionMeta = (session) => {
       return session?.serial_path || '串口';
     case 'telnet':
       return session?.host ? `${session.host}:${session.port || 23}` : 'Telnet';
+    case 'local':
+      return session?.local_shell_name || (session?.local_profile === 'cmd' ? 'CMD' : 'PowerShell');
     default:
       return session?.host || 'SSH';
   }
@@ -338,6 +370,7 @@ const splitTitle = (text) => {
 };
 
 onMounted(() => {
+  void loadLocalShellProfiles();
   resizeObserver = new ResizeObserver(() => {
     if (panelContentRef.value) {
       setViewportHeight(Math.max(200, panelContentRef.value.clientHeight - 6));
@@ -476,6 +509,15 @@ const handleImportSessions = async () => {
           <IconButton :icon="X" size="sm" aria-label="关闭面板" :action="() => $emit('close')" />
         </div>
       </div>
+      <div v-if="localShellButtons.length" class="local-shell-launcher"
+        :style="{ '--local-shell-button-count': localShellButtons.length }">
+        <button v-for="profile in localShellButtons" :key="profile.id" type="button"
+          class="local-shell-button" :disabled="Boolean(openingLocalProfileId)"
+          :title="`${profile.executable}\n打开新的本地终端`" @click="openLocalShell(profile)">
+          <Code2 />
+          <span>{{ profile.name }}</span>
+        </button>
+      </div>
       <div v-if="sshStore.savedSessions.length > 0" class="session-tree-viewport" @scroll="onVirtualScroll">
         <div :style="{ height: totalHeight + 'px', position: 'relative' }">
           <div :style="{ transform: `translateY(${translateY}px)` }">
@@ -607,6 +649,59 @@ const handleImportSessions = async () => {
   flex: 0 0 auto;
   /* 固定到右侧 */
   margin-left: auto;
+}
+
+.local-shell-launcher {
+  display: grid;
+  grid-template-columns: repeat(var(--local-shell-button-count), minmax(0, 1fr));
+  gap: 6px;
+  padding: 0 8px 6px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.local-shell-button {
+  min-width: 0;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid var(--app-border-shadow);
+  border-radius: 8px;
+  background: var(--app-input-bg);
+  color: var(--app-text);
+  font-family: var(--app-font-family);
+  font-size: 12px;
+  cursor: pointer;
+  transition: border-color 120ms ease, background-color 120ms ease, color 120ms ease;
+}
+
+.local-shell-button svg {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+
+.local-shell-button span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.local-shell-button:hover:not(:disabled) {
+  border-color: var(--app-focus-border);
+  background: var(--app-btn-hover);
+}
+
+.local-shell-button:focus-visible {
+  outline: 2px solid var(--app-focus-border);
+  outline-offset: 1px;
+}
+
+.local-shell-button:disabled {
+  cursor: wait;
+  opacity: 0.58;
 }
 
 

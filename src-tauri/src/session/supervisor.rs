@@ -308,6 +308,37 @@ impl SessionSupervisor {
         result
     }
 
+    pub async fn disconnect_all(
+        &self,
+        sftp_state: SftpAppState,
+        tunnel_state: TunnelState,
+    ) -> Result<(), String> {
+        let session_ids = self
+            .actors
+            .lock()
+            .unwrap()
+            .keys()
+            .cloned()
+            .collect::<Vec<_>>();
+        let mut first_error = None;
+
+        for session_id in session_ids {
+            if let Err(error) = self
+                .disconnect(sftp_state.clone(), tunnel_state.clone(), session_id)
+                .await
+            {
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+
+        match first_error {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
+    }
+
     pub async fn start_tunnel(
         &self,
         app_handle: AppHandle,

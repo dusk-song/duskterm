@@ -9,7 +9,10 @@ const syncChannelModule = await import('./syncInputChannels.js').catch(() => ({}
 
 test('terminal line replacement clears the existing line for every synchronized target', () => {
   assert.equal(typeof historyModule.buildTerminalLineReplacementPayload, 'function');
-  assert.equal(historyModule.buildTerminalLineReplacementPayload('cd /srv/app'), '\u0015cd /srv/app');
+  assert.equal(
+    historyModule.buildTerminalLineReplacementPayload('cd /srv/app', 'cd /tmp'),
+    '\u007f\u007f\u007f\u007f\u007f\u007f\u007fcd /srv/app',
+  );
 });
 
 test('history matches only expose commands ordered by count then recency', () => {

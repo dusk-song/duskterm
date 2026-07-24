@@ -85,6 +85,9 @@ pub struct SessionConfig {
     pub stop_bits: Option<String>,
     pub parity: Option<String>,
     pub flow_control: Option<String>,
+    pub local_profile: Option<String>,
+    pub local_shell_name: Option<String>,
+    pub local_working_directory: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]

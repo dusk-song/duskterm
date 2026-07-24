@@ -358,6 +358,8 @@ fn load_saved_tunnel_launch(
         stop_bits: None,
         parity: None,
         flow_control: None,
+        local_profile: None,
+        local_working_directory: None,
     };
 
     Ok(SavedTunnelLaunch { request, ssh_config })
@@ -389,6 +391,8 @@ fn build_direct_ssh_config(request: &TunnelRequest) -> ssh::SshConfig {
         stop_bits: None,
         parity: None,
         flow_control: None,
+        local_profile: None,
+        local_working_directory: None,
     }
 }
 

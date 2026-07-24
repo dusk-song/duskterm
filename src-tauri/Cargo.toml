@@ -43,6 +43,7 @@ tauri-plugin-dialog = "2.6.0"
 zeroize = "1.7.0"
 sysinfo = "0.30.13"
 serialport = "4.7.0"
+portable-pty = "0.9.0"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 webp = "0.3"
 
@@ -50,6 +51,16 @@ alloc-stdlib = "=0.2.2"
 brotli-decompressor = "=5.0.1"
 russh = { version = "0.62.3", default-features = false, features = ["flate2", "ring", "rsa"] }
 russh-sftp = "2.3.0"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = [
+  "Win32_Foundation",
+  "Win32_System_JobObjects",
+  "Win32_System_Threading",
+] }
 
 [profile.release]
 opt-level = "s"

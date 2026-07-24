@@ -3,9 +3,10 @@ const DEFAULT_HISTORY_MIN_LENGTH = 5;
 
 const normalizeCount = (value) => Math.max(1, Math.floor(Number(value) || 1));
 
-export const buildTerminalLineReplacementPayload = (command) => (
-  `\u0015${String(command || '').trim()}`
-);
+export const buildTerminalLineReplacementPayload = (command, currentInput = '') => {
+  const eraseCurrentInput = '\u007f'.repeat(Array.from(String(currentInput || '')).length);
+  return `${eraseCurrentInput}${String(command || '').trim()}`;
+};
 
 export const normalizeCommandHistory = (entries = []) => {
   const normalized = [];

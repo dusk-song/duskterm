@@ -1,6 +1,6 @@
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
-use crate::{remote_monitor, sftp, ssh, tunnel};
+use crate::{local_terminal, remote_monitor, sftp, ssh, tunnel};
 
 use super::{
     message::SessionMessage,
@@ -49,18 +49,42 @@ pub fn spawn_session_actor(
                     runtime_state.lifecycle = LifecycleState::Starting;
                     runtime_state.terminal.attached = true;
 
-                    let result = ssh::connect_ssh_runtime(
-                        app_handle,
-                        sftp_state,
-                        runtime_state.security.pending_ssh_hostkey.clone(),
-                        session_id.clone(),
-                        config,
-                    )
-                    .await;
+                    let is_local = ssh::is_local_protocol(&config);
+                    let local_config = if is_local {
+                        match local_terminal::resolve_local_config(&config) {
+                            Ok(config) => Some(config),
+                            Err(error) => {
+                                runtime_state.lifecycle = LifecycleState::Error;
+                                let _ = respond_to.send(Err(error));
+                                continue;
+                            }
+                        }
+                    } else {
+                        None
+                    };
+
+                    let result = if let Some(config) = local_config.clone() {
+                        local_terminal::connect_local_terminal_runtime(
+                            app_handle,
+                            session_id.clone(),
+                            config,
+                        )
+                        .await
+                    } else {
+                        ssh::connect_ssh_runtime(
+                            app_handle,
+                            sftp_state,
+                            runtime_state.security.pending_ssh_hostkey.clone(),
+                            session_id.clone(),
+                            config,
+                        )
+                        .await
+                    };
 
                     let response = match result {
                         Ok(runtime) => {
                             runtime_state.ssh = Some(runtime);
+                            runtime_state.local_config = local_config;
                             runtime_state.lifecycle = LifecycleState::Active;
                             Ok(session_id.clone())
                         }
@@ -100,6 +124,16 @@ pub fn spawn_session_actor(
                 } => {
                     let result = if runtime_state.shell_channels.contains_key(&channel_id) {
                         Err("Shell channel already exists".to_string())
+                    } else if let Some(local_config) = runtime_state.local_config.clone() {
+                        local_terminal::connect_local_terminal_runtime(
+                            app_handle,
+                            channel_id.clone(),
+                            local_config,
+                        )
+                        .await
+                        .map(|runtime| {
+                            runtime_state.shell_channels.insert(channel_id, runtime);
+                        })
                     } else if let Some(root_runtime) = runtime_state.ssh.as_ref() {
                         ssh::open_shared_shell_channel_runtime(
                             app_handle,
@@ -150,6 +184,7 @@ pub fn spawn_session_actor(
                     let sftp_handle = runtime_state.sftp.take();
                     runtime_state.sftp = None;
                     let ssh_runtime = runtime_state.ssh.take();
+                    runtime_state.local_config = None;
                     let child_runtimes = std::mem::take(&mut runtime_state.shell_channels);
                     for (_, mut runtime) in child_runtimes {
                         let _ = runtime.handle.close_tx.send(());
