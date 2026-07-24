@@ -15,7 +15,7 @@ const terminalThemes = {
       foreground: '#e4e0d8',
       cursor: '#d1b16b',
       cursorAccent: '#111113',
-      selection: 'rgba(192,132,47,0.22)',
+      selection: 'rgba(192,132,47,0.46)',
       black: '#111113',
       red: '#d17a72',
       green: '#b8a06a',
@@ -41,7 +41,7 @@ const terminalThemes = {
       foreground: '#25221f',
       cursor: '#8a5a16',
       cursorAccent: '#f7f3eb',
-      selection: 'rgba(192,132,47,0.24)',
+      selection: 'rgba(192,132,47,0.38)',
       black: '#25221f',
       red: '#a3483f',
       green: '#6f613a',
@@ -66,7 +66,7 @@ const terminalThemes = {
       background: '#1e1e1e',
       foreground: '#d4d4d4',
       cursor: '#d4d4d4',
-      selection: 'rgba(255,255,255,0.2)',
+      selection: 'rgba(255,255,255,0.42)',
       black: '#000000', red: '#ff5f5f', green: '#5fff87', yellow: '#ffd75f',
       blue: '#5f87ff', magenta: '#af87ff', cyan: '#5fffff', white: '#ffffff',
       brightBlack: '#5c6370', brightRed: '#ff6c6b', brightGreen: '#98be65',
@@ -78,7 +78,7 @@ const terminalThemes = {
     name: 'Dracula',
     theme: {
       background: '#282a36', foreground: '#f8f8f2', cursor: '#f8f8f2',
-      selection: 'rgba(189,147,249,0.3)',
+      selection: 'rgba(189,147,249,0.46)',
       black: '#21222c', red: '#ff5555', green: '#50fa7b', yellow: '#f1fa8c',
       blue: '#bd93f9', magenta: '#ff79c6', cyan: '#8be9fd', white: '#f8f8f2',
       brightBlack: '#6272a4', brightRed: '#ff6e6e', brightGreen: '#69ff94',
@@ -90,7 +90,7 @@ const terminalThemes = {
     name: 'Nord',
     theme: {
       background: '#2e3440', foreground: '#d8dee9', cursor: '#d8dee9',
-      selection: 'rgba(136,192,208,0.3)',
+      selection: 'rgba(136,192,208,0.46)',
       black: '#3b4252', red: '#bf616a', green: '#a3be8c', yellow: '#ebcb8b',
       blue: '#81a1c1', magenta: '#b48ead', cyan: '#88c0d0', white: '#e5e9f0',
       brightBlack: '#4c566a', brightRed: '#bf616a', brightGreen: '#a3be8c',
@@ -102,7 +102,7 @@ const terminalThemes = {
     name: 'Gruvbox Dark',
     theme: {
       background: '#282828', foreground: '#ebdbb2', cursor: '#ebdbb2',
-      selection: 'rgba(146,131,116,0.3)',
+      selection: 'rgba(146,131,116,0.46)',
       black: '#282828', red: '#cc241d', green: '#98971a', yellow: '#d79921',
       blue: '#458588', magenta: '#b16286', cyan: '#689d6a', white: '#a89984',
       brightBlack: '#928374', brightRed: '#fb4934', brightGreen: '#b8bb26',
@@ -114,7 +114,7 @@ const terminalThemes = {
     name: 'Tokyo Night',
     theme: {
       background: '#1a1b26', foreground: '#c0caf5', cursor: '#c0caf5',
-      selection: 'rgba(51,70,100,0.4)',
+      selection: 'rgba(82,112,160,0.52)',
       black: '#15161e', red: '#f7768e', green: '#9ece6a', yellow: '#e0af68',
       blue: '#7aa2f7', magenta: '#bb9af7', cyan: '#7dcfff', white: '#a9b1d6',
       brightBlack: '#414868', brightRed: '#f7768e', brightGreen: '#9ece6a',
@@ -150,7 +150,7 @@ const terminalThemes = {
     name: 'Catppuccin Mocha',
     theme: {
       background: '#1e1e2e', foreground: '#cdd6f4', cursor: '#f5e0dc',
-      selection: 'rgba(108,112,134,0.3)',
+      selection: 'rgba(108,112,134,0.5)',
       black: '#45475a', red: '#f38ba8', green: '#a6e3a1', yellow: '#f9e2af',
       blue: '#89b4fa', magenta: '#f5c2e7', cyan: '#94e2d5', white: '#bac2de',
       brightBlack: '#585b70', brightRed: '#f38ba8', brightGreen: '#a6e3a1',
@@ -174,7 +174,7 @@ const terminalThemes = {
     name: 'oh-my-zsh',
     theme: {
       background: '#0f172a', foreground: '#f8fafc', cursor: '#f8fafc',
-      selection: 'rgba(255,255,255,0.2)',
+      selection: 'rgba(255,255,255,0.42)',
       black: '#0b1220', red: '#f87171', green: '#4ade80', yellow: '#fbbf24',
       blue: '#60a5fa', magenta: '#c084fc', cyan: '#22d3ee', white: '#e2e8f0',
       brightBlack: '#475569', brightRed: '#fb7185', brightGreen: '#86efac',
@@ -206,7 +206,7 @@ function resolveTerminalThemeKey(themeKey) {
 }
 
 function normalizeXtermTheme(theme = {}) {
-  const selectionBackground = theme.selectionBackground || theme.selection || 'rgba(255,255,255,0.24)';
+  const selectionBackground = theme.selectionBackground || theme.selection || 'rgba(255,255,255,0.42)';
   const selectionInactiveBackground = theme.selectionInactiveBackground || selectionBackground;
   const cursor = theme.cursor || theme.foreground || '#d4d4d4';
   const cursorAccent = theme.cursorAccent || theme.background || '#1e1e1e';

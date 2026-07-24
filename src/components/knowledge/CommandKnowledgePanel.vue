@@ -306,7 +306,7 @@ onUnmounted(() => {
           <button v-for="{ entry, index } in visibleRows" :key="entry.id" type="button" class="knowledge-row"
             :class="{ active: entry.id === selectedEntry?.id }" :data-index="index" @click="selectEntry(entry)"
             @dblclick="insertCommand(entry)">
-            <span v-if="entry.trigger" class="knowledge-trigger">{{ entry.trigger }}</span>
+            <span class="knowledge-trigger" :class="{ empty: !entry.trigger }">{{ entry.trigger || '' }}</span>
             <span class="knowledge-row-title">{{ entry.title }}</span>
             <span class="knowledge-row-command">{{ summarizeCommand(entry.command) }}</span>
             <Star v-if="entry.favorite" class="knowledge-star" />
@@ -318,13 +318,15 @@ onUnmounted(() => {
 
     <footer v-if="selectedEntry" class="knowledge-detail">
       <div class="detail-title-line">
-        <strong>{{ selectedEntry.title }}</strong>
+        <div class="detail-heading">
+          <strong>{{ selectedEntry.title }}</strong>
+          <span v-if="selectedEntry.description" class="detail-description">{{ selectedEntry.description }}</span>
+        </div>
         <span class="detail-badge" :class="`risk-${selectedEntry.safetyLevel}`">
           {{ safetyLabel(selectedEntry.safetyLevel) }}
         </span>
       </div>
       <pre class="detail-command">{{ selectedEntry.command }}</pre>
-      <div v-if="selectedEntry.description" class="detail-description">{{ selectedEntry.description }}</div>
       <div class="detail-meta">
         <span>{{ policyLabel(selectedEntry.executionPolicy) }}</span>
         <span v-if="selectedEntry.trigger">#{{ selectedEntry.trigger }}</span>
@@ -396,17 +398,15 @@ onUnmounted(() => {
 
 .knowledge-tag-filters {
   display: flex;
+  flex-wrap: wrap;
   gap: 5px;
   min-width: 0;
-  overflow-x: auto;
-  padding-bottom: 2px;
-  scrollbar-width: thin;
+  overflow-x: hidden;
 }
 
 .knowledge-tag-chip {
   flex: 0 0 auto;
   height: 22px;
-  max-width: 112px;
   padding: 0 7px;
   border: 1px solid var(--tag-border);
   border-radius: 4px;
@@ -415,8 +415,6 @@ onUnmounted(() => {
   font-size: 11px;
   line-height: 20px;
   white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   cursor: pointer;
 }
 
@@ -448,7 +446,7 @@ onUnmounted(() => {
 
 .knowledge-row {
   display: grid;
-  grid-template-columns: minmax(42px, auto) minmax(86px, 0.52fr) minmax(0, 1fr) 16px;
+  grid-template-columns: 72px minmax(88px, 0.8fr) minmax(0, 1.2fr) 16px;
   align-items: center;
   gap: 6px;
   width: 100%;
@@ -481,12 +479,17 @@ onUnmounted(() => {
 }
 
 .knowledge-trigger {
+  display: block;
   padding: 1px 5px;
   border: 1px solid var(--app-border-light);
   border-radius: 4px;
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--app-text-muted);
+}
+
+.knowledge-trigger.empty {
+  border-color: transparent;
 }
 
 .knowledge-row-title {
@@ -537,8 +540,19 @@ onUnmounted(() => {
   min-width: 0;
 }
 
-.detail-title-line strong {
+.detail-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
   min-width: 0;
+  flex: 1 1 auto;
+  overflow: hidden;
+}
+
+.detail-heading strong {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -581,9 +595,13 @@ onUnmounted(() => {
 }
 
 .detail-description {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   color: var(--app-text-muted);
   font-size: 12px;
-  line-height: 1.45;
 }
 
 .detail-meta {

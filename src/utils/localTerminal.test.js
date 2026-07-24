@@ -17,6 +17,15 @@ test('session list keeps local shell launchers above the session tree', () => {
   assert.match(source, /white-space:\s*nowrap/);
 });
 
+test('session directories toggle from the full row and expose a trailing reorder handle', () => {
+  const source = read('../components/session/SessionList.vue');
+  assert.match(source, /@click="onTreeRowClick\(item\)"/);
+  assert.match(source, /class="tree-drag-handle"/);
+  assert.match(source, /<GripVertical \/>/);
+  assert.match(source, /@drop\.stop\.prevent/);
+  assert.match(source, /sourceBlock[\s\S]*next\.splice\(targetIdx,\s*0,\s*\.\.\.sourceBlock\)/);
+});
+
 test('windows launcher is restricted to PowerShell and CMD', () => {
   const source = read('../components/session/SessionList.vue');
   assert.match(source, /\['powershell', 'cmd'\]\.includes\(profile\.id\)/);

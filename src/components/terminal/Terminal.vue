@@ -623,7 +623,7 @@ const applyTerminalTheme = () => {
   const themeBackground = hasFloatingSurfaces ? 'rgba(0, 0, 0, 0)' : opaqueThemeBackground;
   const selectionBackground = resolveCssColor(
     baseTheme.selectionBackground || 'var(--app-selection-bg)',
-    'rgba(192,132,47,0.28)'
+    'rgba(192,132,47,0.46)'
   );
   const theme = {
     ...baseTheme,

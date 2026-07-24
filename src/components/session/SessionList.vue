@@ -12,6 +12,7 @@ import {
   Download,
   Folder,
   Lock,
+  GripVertical,
   Pin,
   Plus,
   Server,
@@ -281,8 +282,10 @@ const { visibleItems, totalHeight, translateY, onScroll: onVirtualScroll, setVie
 const draggingGroupName = ref('');
 const dragOverGroupName = ref('');
 const onGroupDragStart = (groupName, e) => {
+  if (!groupName) return;
   draggingGroupName.value = groupName;
   e.dataTransfer.effectAllowed = 'move';
+  e.dataTransfer.setData('text/plain', groupName);
 };
 const onGroupDragOver = (groupName, e) => {
   e.preventDefault();
@@ -294,15 +297,39 @@ const onGroupDragLeave = () => { dragOverGroupName.value = ''; };
 const onGroupDrop = (targetGroupName) => {
   const src = draggingGroupName.value;
   if (!src || src === targetGroupName) { draggingGroupName.value = ''; dragOverGroupName.value = ''; return; }
+  const parentPath = (name) => String(name || '').split('/').slice(0, -1).join('/');
+  if (parentPath(src) !== parentPath(targetGroupName)) {
+    draggingGroupName.value = '';
+    dragOverGroupName.value = '';
+    return;
+  }
   const order = (sshStore.groupOrder || []).filter(Boolean);
   const allGroups = [...new Set((sshStore.savedSessions || []).map(s => s.group).filter(Boolean))];
   const base = [...order.filter(g => allGroups.includes(g)), ...allGroups.filter(g => !order.includes(g))];
-  const dragIdx = base.indexOf(src);
-  const targetIdx = base.indexOf(targetGroupName);
-  if (dragIdx === -1 || targetIdx === -1) { draggingGroupName.value = ''; dragOverGroupName.value = ''; return; }
-  const next = base.filter(g => g !== src);
-  next.splice(targetIdx, 0, src);
+  const belongsToGroup = (groupName, directoryName) => (
+    groupName === directoryName || groupName.startsWith(`${directoryName}/`)
+  );
+  const sourceBlock = base.filter(groupName => belongsToGroup(groupName, src));
+  const targetBlock = base.filter(groupName => belongsToGroup(groupName, targetGroupName));
+  if (!sourceBlock.length || !targetBlock.length) {
+    draggingGroupName.value = '';
+    dragOverGroupName.value = '';
+    return;
+  }
+  const sourceSet = new Set(sourceBlock);
+  const next = base.filter(groupName => !sourceSet.has(groupName));
+  const targetIdx = next.indexOf(targetBlock[0]);
+  if (targetIdx === -1) {
+    draggingGroupName.value = '';
+    dragOverGroupName.value = '';
+    return;
+  }
+  next.splice(targetIdx, 0, ...sourceBlock);
   sshStore.setGroupOrder(next);
+  draggingGroupName.value = '';
+  dragOverGroupName.value = '';
+};
+const onGroupDragEnd = () => {
   draggingGroupName.value = '';
   dragOverGroupName.value = '';
 };
@@ -461,6 +488,12 @@ const toggleGroup = (key) => {
   else expandedKeys.value.push(key);
 };
 
+const onTreeRowClick = (item) => {
+  if (item?._isGroup && !draggingGroupName.value) {
+    toggleGroup(item.key);
+  }
+};
+
 const handleExportSessions = async () => {
   try {
     const output = await save({
@@ -524,12 +557,19 @@ const handleImportSessions = async () => {
             <ContextMenu v-for="item in visibleItems" :key="item.key">
               <ContextMenuTrigger as-child>
                 <div class="tree-row"
-                  :class="{ 'drag-over': dragOverGroupName === (item.data?.groupName || item.title) }"
+                  :class="{
+                    'drag-over': dragOverGroupName === (item.data?.groupName || item.title),
+                    'is-dragging': draggingGroupName === (item.data?.groupName || item.title)
+                  }"
                   :style="{ paddingLeft: (item._depth * 16 + 4) + 'px', height: '34px' }"
+                  @click="onTreeRowClick(item)"
+                  @dragover="item._isGroup ? onGroupDragOver(item.data?.groupName || item.title, $event) : null"
+                  @dragleave="item._isGroup ? onGroupDragLeave() : null"
+                  @drop.stop.prevent="item._isGroup ? onGroupDrop(item.data?.groupName || item.title) : null"
                   @dblclick="item.isLeaf ? sshStore.connectStoredSession(item.key) : null">
 
-                  <span v-if="item._isGroup" class="tree-arrow" :class="{ expanded: expandedKeys.includes(item.key) }"
-                    @click.stop="toggleGroup(item.key)">▶</span>
+                  <span v-if="item._isGroup" class="tree-arrow"
+                    :class="{ expanded: expandedKeys.includes(item.key) }">▶</span>
                   <span v-else class="tree-arrow" style="visibility:hidden">▶</span>
 
                   <component :is="item.isLeaf ? getSessionIcon(item.data) : Folder"
@@ -557,11 +597,13 @@ const handleImportSessions = async () => {
                     <span v-if="item.isLeaf" class="node-meta">({{ getSessionMeta(item.data) }})</span>
                   </span>
 
-                  <span v-if="item._isGroup && item.key !== 'group-__ungrouped__'" class="tree-drag-handle"
-                    draggable="true" @dragstart="onGroupDragStart(item.data?.groupName || item.title, $event)"
-                    @dragover="onGroupDragOver(item.data?.groupName || item.title, $event)"
-                    @dragleave="onGroupDragLeave" @drop="onGroupDrop(item.data?.groupName || item.title)" @click.stop
-                    title="拖拽排序">⠿</span>
+                  <button v-if="item._isGroup && item.key !== 'group-__ungrouped__'" type="button"
+                    class="tree-drag-handle" :disabled="item.data?.locked" draggable="true"
+                    aria-label="拖动目录排序" title="拖动目录排序" @click.stop
+                    @dragstart.stop="onGroupDragStart(item.data?.groupName || item.title, $event)"
+                    @dragend="onGroupDragEnd">
+                    <GripVertical />
+                  </button>
                 </div>
               </ContextMenuTrigger>
               <ContextMenuContent>
@@ -756,7 +798,12 @@ html.dark .tree-row:hover {
 }
 
 .tree-row.drag-over {
-  border-top: 2px solid hsl(var(--primary));
+  border-color: hsl(var(--primary));
+  background: color-mix(in srgb, hsl(var(--primary)) 12%, transparent);
+}
+
+.tree-row.is-dragging {
+  opacity: 0.55;
 }
 
 .tree-arrow {
@@ -776,21 +823,43 @@ html.dark .tree-row:hover {
 }
 
 .tree-drag-handle {
+  width: 24px;
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: auto;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
   cursor: grab;
   color: var(--app-text-muted);
-  font-size: 14px;
-  padding: 0 4px;
   flex-shrink: 0;
-  opacity: 0;
-  transition: opacity 0.1s;
+  opacity: 0.42;
+  transition: opacity 0.1s, color 0.1s, background-color 0.1s, border-color 0.1s;
 }
 
-.tree-row:hover .tree-drag-handle {
-  opacity: 0.6;
+.tree-drag-handle svg {
+  width: 15px;
+  height: 15px;
+}
+
+.tree-row:hover .tree-drag-handle,
+.tree-drag-handle:focus-visible {
+  opacity: 1;
+  color: var(--app-text);
+  border-color: var(--app-border-light);
+  background: var(--app-btn-hover);
 }
 
 .tree-drag-handle:active {
   cursor: grabbing;
+}
+
+.tree-drag-handle:disabled {
+  cursor: not-allowed;
+  opacity: 0.2;
 }
 
 /* ── Existing tree node styling ── */
