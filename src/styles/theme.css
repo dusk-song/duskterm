@@ -1,4 +1,4 @@
-@font-face {
+/*@font-face {
   font-family: 'Dusk Noto Sans SC';
   src: url('/fonts/NotoSansSC-Medium.ttf') format('truetype');
   font-weight: 500;
@@ -15,7 +15,7 @@
     U+FE10-FE1F,
     U+FE30-FE4F,
     U+FF00-FFEF;
-}
+}*/
 
 /* ================================================================
    DuskTerm — Non-color tokens & global utilities
@@ -24,8 +24,8 @@
 
 :root {
   /* ===== Typography ===== */
-  --font-sans: 'Consolas', 'Dusk Noto Sans SC', 'Microsoft YaHei', monospace;
-  --font-mono: 'Consolas', 'Dusk Noto Sans SC', 'Cascadia Mono', 'SF Mono', 'Microsoft YaHei Mono', monospace;
+  --font-sans: 'Consolas', 'Microsoft YaHei', monospace;
+  --font-mono: 'Consolas', 'Cascadia Mono', 'SF Mono', 'Microsoft YaHei Mono', monospace;
   --font-size-base: 0.8125rem;
   /* 13px */
   --font-size-sm: 0.75rem;
