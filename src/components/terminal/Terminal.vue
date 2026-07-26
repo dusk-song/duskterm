@@ -2132,7 +2132,6 @@ onMounted(async () => {
       theme: getTerminalTheme(terminalThemeSettings.value.theme || 'default', isDark.value),
       allowProposedApi: true,
       scrollback: 50000,
-      overviewRuler: { width: 7 },
       cols: 120,
       rows: 40,
       // iGPU optimizations: skip transparency blending, skip bold-bright conversion
