@@ -1460,7 +1460,12 @@ async function startRemoteFileDrag(record) {
   const sessionId = props.sessionId;
   if (!sessionId || !connected.value || record.is_dir) return;
   const remotePath = joinRemotePath(currentPath.value, record.name);
-  const task = createDownloadTask(sessionId, remotePath, '', record.name);
+  const task = createDownloadTask(
+    sessionId,
+    remotePath,
+    '系统拖放位置',
+    record.name
+  );
 
   try {
     const outcome = await startNativeSftpFileDrag({

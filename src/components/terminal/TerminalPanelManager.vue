@@ -122,7 +122,15 @@ onUnmounted(() => {
   window.removeEventListener('wheel', handleWheel);
 });
 
-const panelLayout = (panelId) => computeSplitLayout(props.resolveTree(panelId));
+const panelLayouts = computed(() => props.panels.map((panel) => {
+  const tree = props.splitTrees[panel.id] || props.resolveTree(panel.id);
+  const layout = computeSplitLayout(tree);
+  return {
+    panel,
+    leaves: layout.leaves,
+    dividers: layout.dividers
+  };
+}));
 const SPLIT_PANEL_GAP = 8;
 const SPLIT_EDGE_EPSILON = 0.001;
 const leafStyle = (leaf) => {
@@ -151,14 +159,14 @@ const dividerStyle = (divider) => divider.direction === 'vertical'
     <div v-if="hasPanels" class="panel-scroll-track">
       <div class="panel-scroll-strip" :style="{ transform: `translateX(-${scrollIndex * 100}%)` }"
         :class="{ transitioning: isTransitioning }" @transitionend="onTransitionEnd">
-        <div v-for="panel in panels" :key="panel.id" class="scroll-pane">
-          <div v-for="leaf in panelLayout(panel.id).leaves" :key="leaf.sessionId" class="split-leaf"
-            :class="{ 'split-focused': panelLayout(panel.id).leaves.length > 1 && focusedLeaf[panel.id] === leaf.sessionId }"
+        <div v-for="entry in panelLayouts" :key="entry.panel.id" class="scroll-pane">
+          <div v-for="leaf in entry.leaves" :key="leaf.sessionId" class="split-leaf"
+            :class="{ 'split-focused': entry.leaves.length > 1 && focusedLeaf[entry.panel.id] === leaf.sessionId }"
             :style="leafStyle(leaf)"
-            @mousedown="onSetFocused(panel.id, leaf.sessionId)">
-            <Terminal :session-id="leaf.sessionId" />
+            @mousedown="onSetFocused(entry.panel.id, leaf.sessionId)">
+            <Terminal :session-id="leaf.sessionId" :active="entry.panel.id === activePanelId" />
           </div>
-          <div v-for="(divider, index) in panelLayout(panel.id).dividers" :key="index" class="split-divider"
+          <div v-for="(divider, index) in entry.dividers" :key="index" class="split-divider"
             :class="divider.direction === 'vertical' ? 'divider-vertical' : 'divider-horizontal'"
             :style="dividerStyle(divider)" @mousedown="onSplitDrag($event, divider.node, divider.bounds)" />
         </div>

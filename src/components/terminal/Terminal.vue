@@ -48,6 +48,10 @@ const props = defineProps({
   sessionId: {
     type: String,
     required: true
+  },
+  active: {
+    type: Boolean,
+    default: true
   }
 });
 
@@ -1864,6 +1868,7 @@ function sendResizeIfNeeded(cols, rows, options = {}) {
 }
 
 let resizeTimeout = null;
+let needsFitOnActivation = false;
 function doFit(options = {}) {
   if (fitAddon && term?.element) {
     if (terminalContainer.value && terminalContainer.value.clientHeight > 2 && terminalContainer.value.clientWidth > 2) {
@@ -1908,7 +1913,6 @@ function doFit(options = {}) {
         fitAddon.fit();
         resetPhysicalLineCache();
 
-        sendResizeIfNeeded(dims.cols, dims.rows);
         scheduleLineMetrics();
         updateLineNumberRowHeight();
         scheduleQuickHintPositionUpdate();
@@ -1947,6 +1951,10 @@ function scheduleDragFit() {
 }
 
 function handleResize(immediate = false) {
+  if (!props.active) {
+    needsFitOnActivation = true;
+    return;
+  }
   if (resizeTimeout) clearTimeout(resizeTimeout);
   if (!immediate && isLayoutDragging) {
     if (deferLayoutFit) {
@@ -1968,6 +1976,10 @@ function handleResize(immediate = false) {
 }
 
 function handleLayoutResize() {
+  if (!props.active) {
+    needsFitOnActivation = true;
+    return;
+  }
   handleResize(true);
 }
 
@@ -1986,6 +1998,24 @@ function handleLayoutDragging(event) {
     }
   }
 }
+
+watch(() => props.active, (active) => {
+  if (!active) {
+    if (resizeTimeout) {
+      clearTimeout(resizeTimeout);
+      resizeTimeout = null;
+    }
+    return;
+  }
+
+  if (!needsFitOnActivation) return;
+  needsFitOnActivation = false;
+  nextTick(() => {
+    requestAnimationFrame(() => {
+      doFit();
+    });
+  });
+});
 
 // --- Context Menu ---
 const handleMenuSelect = async (key) => {

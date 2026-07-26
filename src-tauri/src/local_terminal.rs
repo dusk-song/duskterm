@@ -18,6 +18,7 @@ use crate::ssh::{
 const DEFAULT_COLS: u16 = 80;
 const DEFAULT_ROWS: u16 = 24;
 const IO_POLL_INTERVAL: Duration = Duration::from_millis(8);
+const MAX_OUTPUT_BATCH_BYTES: usize = 16 * 1024;
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -45,9 +46,21 @@ pub struct LocalTerminalConfig {
     initial_rows: u16,
 }
 
-enum ReaderOutcome {
+enum ReaderMessage {
+    Data(Vec<u8>),
     Eof,
     Error(String),
+}
+
+fn append_output_chunk(output_batch: &mut Vec<u8>, data: Vec<u8>) -> Option<Vec<u8>> {
+    let ready =
+        if !output_batch.is_empty() && output_batch.len() + data.len() > MAX_OUTPUT_BATCH_BYTES {
+            Some(std::mem::take(output_batch))
+        } else {
+            None
+        };
+    output_batch.extend_from_slice(&data);
+    ready
 }
 
 #[cfg(windows)]
@@ -504,25 +517,25 @@ fn run_local_terminal(
 
     let _ = app_handle.emit(&format!("ssh-connected-{session_id}"), ());
 
-    let (reader_outcome_tx, reader_outcome_rx) = mpsc::channel();
-    let reader_app = app_handle.clone();
-    let reader_session_id = session_id.clone();
+    let (reader_message_tx, reader_message_rx) = mpsc::channel();
     let reader_thread = thread::spawn(move || {
         let mut buffer = [0u8; 16 * 1024];
         loop {
             match reader.read(&mut buffer) {
                 Ok(0) => {
-                    let _ = reader_outcome_tx.send(ReaderOutcome::Eof);
+                    let _ = reader_message_tx.send(ReaderMessage::Eof);
                     break;
                 }
                 Ok(read) => {
-                    let _ = reader_app.emit(
-                        &format!("ssh-data-{reader_session_id}"),
-                        buffer[..read].to_vec(),
-                    );
+                    if reader_message_tx
+                        .send(ReaderMessage::Data(buffer[..read].to_vec()))
+                        .is_err()
+                    {
+                        break;
+                    }
                 }
                 Err(error) => {
-                    let _ = reader_outcome_tx.send(ReaderOutcome::Error(error.to_string()));
+                    let _ = reader_message_tx.send(ReaderMessage::Error(error.to_string()));
                     break;
                 }
             }
@@ -530,6 +543,7 @@ fn run_local_terminal(
     });
 
     let mut terminal_error = None;
+    let mut reader_outcome = None;
     let exit_code = loop {
         if close_rx.try_recv().is_ok() {
             break match stop_process_tree(&mut child, &process_tree) {
@@ -571,6 +585,29 @@ fn run_local_terminal(
             }
         }
 
+        let mut output_batch = Vec::new();
+        loop {
+            match reader_message_rx.try_recv() {
+                Ok(ReaderMessage::Data(data)) => {
+                    if let Some(ready) = append_output_chunk(&mut output_batch, data) {
+                        let _ = app_handle.emit(&format!("ssh-data-{session_id}"), ready);
+                    }
+                }
+                Ok(ReaderMessage::Eof) => {
+                    reader_outcome = Some(ReaderMessage::Eof);
+                    break;
+                }
+                Ok(ReaderMessage::Error(error)) => {
+                    reader_outcome = Some(ReaderMessage::Error(error));
+                    break;
+                }
+                Err(mpsc::TryRecvError::Empty) | Err(mpsc::TryRecvError::Disconnected) => break,
+            }
+        }
+        if !output_batch.is_empty() {
+            let _ = app_handle.emit(&format!("ssh-data-{session_id}"), output_batch);
+        }
+
         match child.try_wait() {
             Ok(Some(status)) => break Some(status.exit_code()),
             Ok(None) => {}
@@ -580,21 +617,22 @@ fn run_local_terminal(
             }
         }
 
-        match reader_outcome_rx.try_recv() {
-            Ok(ReaderOutcome::Eof) => match child.try_wait() {
+        match reader_outcome.take() {
+            Some(ReaderMessage::Eof) => match child.try_wait() {
                 Ok(Some(status)) => break Some(status.exit_code()),
-                Ok(None) => {}
+                Ok(None) => {
+                    reader_outcome = Some(ReaderMessage::Eof);
+                }
                 Err(error) => {
                     terminal_error = Some(format!("无法读取本地 Shell 状态：{error}"));
                     break stop_process_tree(&mut child, &process_tree).ok().flatten();
                 }
             },
-            Ok(ReaderOutcome::Error(error)) => {
+            Some(ReaderMessage::Error(error)) => {
                 terminal_error = Some(format!("本地终端读取失败：{error}"));
                 break stop_process_tree(&mut child, &process_tree).ok().flatten();
             }
-            Err(mpsc::TryRecvError::Empty) => {}
-            Err(mpsc::TryRecvError::Disconnected) => {}
+            Some(ReaderMessage::Data(_)) | None => {}
         }
 
         thread::sleep(IO_POLL_INTERVAL);
@@ -671,6 +709,27 @@ mod tests {
 
         let resolved = resolve_local_config(&config).expect("config should resolve");
         assert!(resolved.working_directory.is_dir());
+    }
+
+    #[test]
+    fn output_batch_keeps_chunks_within_the_target_size() {
+        let mut batch = vec![1; 10 * 1024];
+        let ready = append_output_chunk(&mut batch, vec![2; 8 * 1024])
+            .expect("the existing batch should be ready");
+
+        assert_eq!(ready.len(), 10 * 1024);
+        assert_eq!(batch.len(), 8 * 1024);
+        assert!(ready.iter().all(|byte| *byte == 1));
+        assert!(batch.iter().all(|byte| *byte == 2));
+    }
+
+    #[test]
+    fn output_batch_combines_small_chunks_without_reordering() {
+        let mut batch = vec![1, 2];
+        let ready = append_output_chunk(&mut batch, vec![3, 4]);
+
+        assert!(ready.is_none());
+        assert_eq!(batch, vec![1, 2, 3, 4]);
     }
 
     #[test]

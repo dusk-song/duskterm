@@ -10,7 +10,7 @@ use std::{
 };
 
 use windows::{
-    core::{implement, Error, HRESULT, HSTRING},
+    core::{implement, ComInterface, Error, HRESULT, HSTRING},
     Win32::{
         Foundation::{
             BOOL, DRAGDROP_S_CANCEL, DRAGDROP_S_DROP, DRAGDROP_S_USEDEFAULTCURSORS, DV_E_FORMATETC,
@@ -832,6 +832,15 @@ pub fn start_virtual_file_drag(
     )
     .map_err(|error| error.to_string())?
     .into();
+    let async_capability: IDataObjectAsyncCapability = data_object
+        .cast()
+        .map_err(|error| format!("无法启用 Windows 异步文件拖放: {error}"))?;
+    unsafe {
+        async_capability
+            .SetAsyncMode(BOOL(1))
+            .map_err(|error| format!("无法设置 Windows 异步文件拖放模式: {error}"))?;
+    }
+    connection_log::append(&session_id, "sftp native drag async mode enabled");
     let drop_source: IDropSource = VirtualFileDropSource.into();
     let mut effect = DROPEFFECT::default();
     let result = unsafe { DoDragDrop(&data_object, &drop_source, DROPEFFECT_COPY, &mut effect) };
