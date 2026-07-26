@@ -2,6 +2,7 @@ import { toast } from '@/composables/useToast';
 import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import { invokeCommand } from '../utils/ipc';
+import { loadMainUiSettings } from '../utils/mainUi';
 
 export const useSshStore = defineStore('ssh', () => {
   const TERMINAL_READY_EVENT = 'terminal-ready';
@@ -325,10 +326,14 @@ export const useSshStore = defineStore('ssh', () => {
       const config = await invokeCommand('get_decrypted_session', { id });
       console.log("Connecting to:", config.host);
 
-      // Update last_connected so recent sessions sort correctly
-      config.last_connected = Date.now();
-      await invokeCommand('save_session', { session: config });
-      await loadSavedSessions();
+      const recentSessionSettings = loadMainUiSettings().recentSessions;
+      if (recentSessionSettings.enabled) {
+        // Update and cap recent-session metadata without deleting saved sessions.
+        config.last_connected = Date.now();
+        await invokeCommand('save_session', { session: config });
+        await invokeCommand('trim_recent_sessions', { limit: recentSessionSettings.limit });
+        await loadSavedSessions();
+      }
 
       // Connect using existing logic
       const connectConfig = { ...config };

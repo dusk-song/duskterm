@@ -73,6 +73,8 @@ export const useSftpTransfersStore = defineStore('sftpTransfers', () => {
       sessionId: task.sessionId,
       name: task.fileName,
       direction: task.direction,
+      localPath: task.localPath || '',
+      remotePath: task.remotePath || '',
       loaded: Number(task.current || 0),
       total: Number(task.total || 0),
       progress: Number(task.percent || 0),

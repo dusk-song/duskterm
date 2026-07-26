@@ -18,8 +18,7 @@ import {
   Server,
   Upload,
   X,
-  Usb,
-  FolderOpen
+  Usb
 } from '@lucide/vue';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { v4 as uuidv4 } from 'uuid';
@@ -33,11 +32,9 @@ const props = defineProps({
   width: {
     type: [String, Number],
     default: '100%'
-  },
-  sftpActive: Boolean,
-  sftpDisabled: Boolean
+  }
 });
-const emit = defineEmits(['open-create', 'open-edit', 'toggle-sftp', 'close']);
+const emit = defineEmits(['open-create', 'open-edit', 'close']);
 
 const sshStore = useSshStore();
 const expandedKeys = ref([]);
@@ -559,9 +556,6 @@ const handleImportSessions = async () => {
       <div class="search-bar">
         <Input v-model="searchKeyword" placeholder="搜索…" size="sm" class="session-search-input" />
         <div class="search-actions">
-          <IconButton :icon="FolderOpen" size="sm" aria-label="切换 SFTP 文件面板"
-            :active="props.sftpActive" :disabled="props.sftpDisabled"
-            :action="() => emit('toggle-sftp')" />
           <IconButton :icon="Plus" size="sm" aria-label="新建会话" :action="() => $emit('open-create')" />
           <IconButton :icon="Upload" size="sm" aria-label="导入" :action="handleImportSessions" />
           <IconButton :icon="Download" size="sm" aria-label="导出" :action="handleExportSessions" />

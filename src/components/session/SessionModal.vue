@@ -103,7 +103,7 @@ const formState = reactive({
   term_type: 'xterm-256color',
   encoding: 'UTF-8', // Added to requirements
   font_size: 14,
-  font_family: 'Consolas', // Simplified for now
+  font_family: 'Maple Mono',
 
   // Connection
   connect_timeout: 10,
@@ -292,7 +292,7 @@ function getNewSessionState() {
     term_type: 'xterm-256color',
     encoding: 'UTF-8',
     font_size: 14,
-    font_family: 'Consolas',
+    font_family: 'Maple Mono',
     connect_timeout: 10,
     keep_alive_interval: 0,
     local_forward: '',
@@ -785,6 +785,7 @@ const groupOptions = computed(() => {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent :side-offset="4">
+                      <SelectItem value="Maple Mono">Maple Mono</SelectItem>
                       <SelectItem value="Consolas">Consolas</SelectItem>
                       <SelectItem value="'Courier New'">Courier New</SelectItem>
                       <SelectItem value="'Fira Code'">Fira Code</SelectItem>

@@ -97,6 +97,7 @@ const keybindingItems = [
   { key: 'sessionList', label: '会话列表', placeholder: 'Ctrl+Alt+1' },
   { key: 'sftpPanel', label: '文件管理', placeholder: 'Ctrl+Alt+2' },
   { key: 'commandKnowledge', label: '命令知识库', placeholder: 'Ctrl+Alt+3' },
+  { key: 'transferList', label: '传输列表', placeholder: 'Ctrl+Alt+4' },
   { key: 'overview', label: '总览模式', placeholder: 'Ctrl+`' },
   { key: 'copySession', label: '复制当前会话', placeholder: 'Ctrl+P' },
   { key: 'toggleLineNumbers', label: '切换行号', placeholder: 'Ctrl+Alt+L' },
@@ -214,6 +215,14 @@ const handleSave = async () => {
     toast.error('主界面设置保存失败');
   }
   if (!mainUiSaved) return;
+  const normalizedRecentSessions = normalizeMainUiSettings(mainUiSettings.value).recentSessions;
+  if (normalizedRecentSessions.enabled) {
+    try {
+      await invokeCommand('trim_recent_sessions', { limit: normalizedRecentSessions.limit });
+    } catch (e) {
+      toast.error('最近会话数量应用失败');
+    }
+  }
   const currentBackgroundId = mainUiSettings.value.background?.resourceId || '';
   await Promise.all([...temporaryBackgroundIds]
     .filter((resourceId) => resourceId !== currentBackgroundId)

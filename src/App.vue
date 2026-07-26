@@ -23,6 +23,7 @@ import GlobalBackground from './components/app-shell/GlobalBackground.vue';
 import { useInputRouter } from './composables/useInputRouter';
 const DesktopPet = defineAsyncComponent(() => import('./components/misc/DesktopPet.vue'));
 const FileManager = defineAsyncComponent(() => import('./components/sftp/FileManager.vue'));
+const TransferPanel = defineAsyncComponent(() => import('./components/app-shell/TransferPanel.vue'));
 const LockScreen = defineAsyncComponent(() => import('./components/app-shell/LockScreen.vue'));
 // ResponsiveMenuBar removed — native OS menu handles all menu bar functionality
 const CommandKnowledgePanel = defineAsyncComponent(() => import('./components/knowledge/CommandKnowledgePanel.vue'));
@@ -85,14 +86,14 @@ onApp('app:open-tunnel', () => {
 });
 onApp('app:open-tool-panels', () => {
   showSessionPanel.value = true;
-  showSftpPanel.value = true;
+  openSftpPanel();
 });
 onApp('app:open-tool-sessions', () => {
   showSessionPanel.value = true;
   sshStore.loadSavedSessions();
 });
 onApp('app:open-tool-sftp', () => {
-  showSftpPanel.value = true;
+  openSftpPanel();
 });
 onApp('app:toggle-tool-sessions', () => {
   showSessionPanel.value = !showSessionPanel.value;
@@ -101,7 +102,13 @@ onApp('app:toggle-tool-sessions', () => {
   }
 });
 onApp('app:toggle-tool-sftp', () => {
-  showSftpPanel.value = !showSftpPanel.value;
+  toggleSftpPanel();
+});
+onApp('app:toggle-tool-knowledge', () => {
+  toggleCommandKnowledgePanel();
+});
+onApp('app:toggle-transfer-panel', () => {
+  toggleTransferPanelVisibility();
 });
 onApp('app:refresh-sessions', () => {
   sshStore.loadSavedSessions();
@@ -191,8 +198,35 @@ const currentEditSession = ref(null);
 const showSessionPanel = ref(false);
 const sftpPanelVisibility = createSessionBooleanState(false);
 let getActiveSftpWorkspaceId = () => '';
-const showSftpPanel = ref(false);
-const showCommandKnowledgePanel = ref(false);
+const activeToolPanel = ref(null);
+const transferPanelVisible = ref(false);
+const transferPanelExpanded = ref(false);
+const toggleTransferPanelVisibility = () => {
+  transferPanelVisible.value = !transferPanelVisible.value;
+  if (transferPanelVisible.value) {
+    transferPanelExpanded.value = true;
+  } else {
+    transferPanelExpanded.value = false;
+  }
+};
+const closeTransferPanel = () => {
+  transferPanelVisible.value = false;
+  transferPanelExpanded.value = false;
+};
+const showSftpPanel = computed({
+  get: () => activeToolPanel.value === 'sftp',
+  set: (visible) => {
+    if (visible) activeToolPanel.value = 'sftp';
+    else if (activeToolPanel.value === 'sftp') activeToolPanel.value = null;
+  }
+});
+const showCommandKnowledgePanel = computed({
+  get: () => activeToolPanel.value === 'knowledge',
+  set: (visible) => {
+    if (visible) activeToolPanel.value = 'knowledge';
+    else if (activeToolPanel.value === 'knowledge') activeToolPanel.value = null;
+  }
+});
 const SFTP_PANEL_TRANSITION_MS = 220;
 let sftpPanelTransitionTimer = null;
 
@@ -207,41 +241,6 @@ const notifyTerminalLayoutDragging = (dragging, options = {}) => {
 
 const notifyTerminalLayoutResize = () => {
   window.dispatchEvent(new CustomEvent('terminal-layout-resize'));
-};
-
-// ── SFTP bottom panel resize ──
-const sftpPanelHeightRatio = ref(0.35);
-const isSftpResizing = ref(false);
-
-const startSftpResize = (event) => {
-  const startY = event.clientY;
-  const startRatio = sftpPanelHeightRatio.value;
-
-  isSftpResizing.value = true;
-  notifyTerminalLayoutDragging(true, { source: 'sftp-resize' });
-  document.body.style.cursor = 'row-resize';
-  document.body.style.userSelect = 'none';
-
-  const onMove = (e) => {
-    const mainBody = document.querySelector('.main-panel-body');
-    if (!mainBody) return;
-    const totalHeight = mainBody.getBoundingClientRect().height;
-    if (totalHeight <= 0) return;
-    const delta = e.clientY - startY;
-    const newRatio = Math.min(0.6, Math.max(0.15, startRatio - delta / totalHeight));
-    sftpPanelHeightRatio.value = newRatio;
-  };
-  const onUp = () => {
-    document.removeEventListener('mousemove', onMove);
-    document.removeEventListener('mouseup', onUp);
-    document.body.style.cursor = '';
-    document.body.style.userSelect = '';
-    isSftpResizing.value = false;
-    notifyTerminalLayoutDragging(false, { source: 'sftp-resize' });
-    notifyTerminalLayoutResize();
-  };
-  document.addEventListener('mousemove', onMove);
-  document.addEventListener('mouseup', onUp);
 };
 
 watch(showSftpPanel, () => {
@@ -268,20 +267,15 @@ watch(showSftpPanel, () => {
 
 const workspaceRef = ref(null);
 const workspaceWidth = ref(0);
-const workspaceHeight = ref(0);
 const leftColumnWidth = ref(360);
-const commandKnowledgePanelWidth = ref(360);
-const sessionPanelHeight = ref(320);
+const toolPanelWidth = ref(440);
 const isDraggingColumn = ref(false);
-const isDraggingRow = ref(false);
 const workspaceSeparatorSize = 4;
 const workspaceGridGap = 3;
 const workspaceGridPaddingX = 24;
 const leftColumnMinWidth = 280;
 const rightColumnMinWidth = 320;
-const commandKnowledgePanelMinWidth = ref(320);
-const sessionPanelMinHeight = 220;
-const sftpPanelMinHeight = 220;
+const toolPanelMinWidth = ref(360);
 const workspaceLeftPanelBreakpoint = 800;
 const workspaceRightPanelBreakpoint = 1120;
 
@@ -294,7 +288,6 @@ const measureWorkspace = () => {
     if (!element) return;
     const rect = element.getBoundingClientRect();
     workspaceWidth.value = Math.max(0, rect.width);
-    workspaceHeight.value = Math.max(0, rect.height);
     clampWorkspaceLayout();
   });
 };
@@ -310,7 +303,10 @@ const isRightPanelHiddenByWidth = computed(() => {
 });
 
 const hasWorkspaceLeftPanels = computed(() => showSessionPanel.value && !isNarrow.value);
-const hasWorkspaceRightPanel = computed(() => showCommandKnowledgePanel.value && !isRightPanelHiddenByWidth.value);
+const hasWorkspaceRightPanel = computed(() => (
+  (showCommandKnowledgePanel.value || showActiveSftpPanel.value)
+  && !isRightPanelHiddenByWidth.value
+));
 
 const workspaceContentWidth = (width = workspaceWidth.value) => {
   const trackCount = 1 + (hasWorkspaceLeftPanels.value ? 2 : 0) + (hasWorkspaceRightPanel.value ? 2 : 0);
@@ -320,11 +316,10 @@ const workspaceContentWidth = (width = workspaceWidth.value) => {
 
 const clampWorkspaceLayout = () => {
   const availableWidth = workspaceContentWidth();
-  const availableHeight = workspaceHeight.value || 0;
 
   if (availableWidth > 0 && hasWorkspaceLeftPanels.value) {
     const rightReserve = hasWorkspaceRightPanel.value
-      ? commandKnowledgePanelWidth.value + workspaceSeparatorSize
+      ? toolPanelWidth.value + workspaceSeparatorSize
       : 0;
     const maxLeftWidth = Math.max(
       leftColumnMinWidth,
@@ -339,53 +334,38 @@ const clampWorkspaceLayout = () => {
       ? leftColumnWidth.value + workspaceSeparatorSize
       : 0;
     const maxRightWidth = Math.max(
-      commandKnowledgePanelMinWidth.value,
+      toolPanelMinWidth.value,
       availableWidth - leftReserve - rightColumnMinWidth - workspaceSeparatorSize
     );
-    commandKnowledgePanelWidth.value = Math.min(
+    toolPanelWidth.value = Math.min(
       maxRightWidth,
-      Math.max(commandKnowledgePanelMinWidth.value, commandKnowledgePanelWidth.value)
+      Math.max(toolPanelMinWidth.value, toolPanelWidth.value)
     );
   }
 
-  if (availableHeight > 0 && showSessionPanel.value && showSftpPanel.value) {
-    const maxSessionHeight = Math.max(sessionPanelMinHeight, availableHeight - sftpPanelMinHeight - workspaceSeparatorSize);
-    sessionPanelHeight.value = Math.min(maxSessionHeight, Math.max(sessionPanelMinHeight, sessionPanelHeight.value));
-  }
 };
 
 const startWorkspaceResize = (axis, event) => {
   if (axis === 'columns' && !hasWorkspaceLeftPanels.value) return;
-  if (axis === 'knowledge' && !hasWorkspaceRightPanel.value) return;
-  if (axis === 'rows' && !(showSessionPanel.value && showSftpPanel.value)) return;
+  if (axis === 'tool' && !hasWorkspaceRightPanel.value) return;
 
   const startX = event.clientX;
-  const startY = event.clientY;
   const startLeftWidth = leftColumnWidth.value;
-  const startKnowledgeWidth = commandKnowledgePanelWidth.value;
-  const startSessionHeight = sessionPanelHeight.value;
+  const startToolWidth = toolPanelWidth.value;
   let rafId = null;
   let pendingLeftWidth = startLeftWidth;
-  let pendingKnowledgeWidth = startKnowledgeWidth;
-  let pendingSessionHeight = startSessionHeight;
+  let pendingToolWidth = startToolWidth;
   const workspaceEl = workspaceRef.value;
 
-  if (axis === 'columns' || axis === 'knowledge') {
-    isDraggingColumn.value = true;
-    document.body.style.cursor = 'col-resize';
-  } else {
-    isDraggingRow.value = true;
-    document.body.style.cursor = 'row-resize';
-  }
+  isDraggingColumn.value = true;
+  document.body.style.cursor = 'col-resize';
   document.body.style.userSelect = 'none';
 
   const updateLayout = () => {
     if (axis === 'columns') {
       leftColumnWidth.value = pendingLeftWidth;
-    } else if (axis === 'knowledge') {
-      commandKnowledgePanelWidth.value = pendingKnowledgeWidth;
-    } else {
-      sessionPanelHeight.value = pendingSessionHeight;
+    } else if (axis === 'tool') {
+      toolPanelWidth.value = pendingToolWidth;
     }
     rafId = null;
   };
@@ -395,10 +375,8 @@ const startWorkspaceResize = (axis, event) => {
 
     if (axis === 'columns') {
       workspaceEl.style.setProperty('--drag-left-width', `${pendingLeftWidth}px`);
-    } else if (axis === 'knowledge') {
-      workspaceEl.style.setProperty('--drag-knowledge-width', `${pendingKnowledgeWidth}px`);
-    } else {
-      workspaceEl.style.setProperty('--drag-session-height', `${pendingSessionHeight}px`);
+    } else if (axis === 'tool') {
+      workspaceEl.style.setProperty('--drag-tool-width', `${pendingToolWidth}px`);
     }
     rafId = null;
   };
@@ -407,30 +385,26 @@ const startWorkspaceResize = (axis, event) => {
     if (axis === 'columns') {
       const availableWidth = workspaceContentWidth(workspaceWidth.value || workspaceRef.value?.getBoundingClientRect().width || 0);
       const rightReserve = hasWorkspaceRightPanel.value
-        ? commandKnowledgePanelWidth.value + workspaceSeparatorSize
+        ? toolPanelWidth.value + workspaceSeparatorSize
         : 0;
       const maxLeftWidth = Math.max(
         leftColumnMinWidth,
         availableWidth - rightColumnMinWidth - rightReserve - workspaceSeparatorSize
       );
       pendingLeftWidth = Math.min(maxLeftWidth, Math.max(leftColumnMinWidth, startLeftWidth + (moveEvent.clientX - startX)));
-    } else if (axis === 'knowledge') {
+    } else if (axis === 'tool') {
       const availableWidth = workspaceContentWidth(workspaceWidth.value || workspaceRef.value?.getBoundingClientRect().width || 0);
       const leftReserve = hasWorkspaceLeftPanels.value
         ? leftColumnWidth.value + workspaceSeparatorSize
         : 0;
-      const maxKnowledgeWidth = Math.max(
-        commandKnowledgePanelMinWidth.value,
+      const maxToolWidth = Math.max(
+        toolPanelMinWidth.value,
         availableWidth - leftReserve - rightColumnMinWidth - workspaceSeparatorSize
       );
-      pendingKnowledgeWidth = Math.min(
-        maxKnowledgeWidth,
-        Math.max(commandKnowledgePanelMinWidth.value, startKnowledgeWidth - (moveEvent.clientX - startX))
+      pendingToolWidth = Math.min(
+        maxToolWidth,
+        Math.max(toolPanelMinWidth.value, startToolWidth - (moveEvent.clientX - startX))
       );
-    } else {
-      const availableHeight = workspaceHeight.value || workspaceRef.value?.getBoundingClientRect().height || 0;
-      const maxSessionHeight = Math.max(sessionPanelMinHeight, availableHeight - sftpPanelMinHeight - workspaceSeparatorSize);
-      pendingSessionHeight = Math.min(maxSessionHeight, Math.max(sessionPanelMinHeight, startSessionHeight + (moveEvent.clientY - startY)));
     }
 
     if (rafId === null) {
@@ -444,7 +418,6 @@ const startWorkspaceResize = (axis, event) => {
     document.body.style.cursor = '';
     document.body.style.userSelect = '';
     isDraggingColumn.value = false;
-    isDraggingRow.value = false;
 
     if (rafId !== null) {
       cancelAnimationFrame(rafId);
@@ -453,8 +426,7 @@ const startWorkspaceResize = (axis, event) => {
 
     if (workspaceEl) {
       workspaceEl.style.removeProperty('--drag-left-width');
-      workspaceEl.style.removeProperty('--drag-knowledge-width');
-      workspaceEl.style.removeProperty('--drag-session-height');
+      workspaceEl.style.removeProperty('--drag-tool-width');
     }
 
     updateLayout();
@@ -479,8 +451,8 @@ const workspaceGridStyle = computed(() => {
   const availableWidth = workspaceContentWidth();
   const separatorCount = Number(hasLeft) + Number(hasRight);
   const minLeft = hasLeft ? leftColumnMinWidth : 0;
-  const minKnowledge = hasRight ? commandKnowledgePanelMinWidth.value : 0;
-  const requiredMin = minLeft + minKnowledge + rightColumnMinWidth + separatorCount * workspaceSeparatorSize;
+  const minTool = hasRight ? toolPanelMinWidth.value : 0;
+  const requiredMin = minLeft + minTool + rightColumnMinWidth + separatorCount * workspaceSeparatorSize;
 
   if (availableWidth > 0 && availableWidth < requiredMin) {
     return {
@@ -491,7 +463,7 @@ const workspaceGridStyle = computed(() => {
 
   const columns = [];
   if (hasLeft) {
-    const rightReserve = hasRight ? commandKnowledgePanelWidth.value + workspaceSeparatorSize : 0;
+    const rightReserve = hasRight ? toolPanelWidth.value + workspaceSeparatorSize : 0;
     const maxLeftWidth = Math.max(
       leftColumnMinWidth,
       availableWidth - rightColumnMinWidth - rightReserve - workspaceSeparatorSize
@@ -508,14 +480,14 @@ const workspaceGridStyle = computed(() => {
   if (hasRight) {
     const leftReserve = hasLeft ? leftColumnWidth.value + workspaceSeparatorSize : 0;
     const maxRightWidth = Math.max(
-      commandKnowledgePanelMinWidth.value,
+      toolPanelMinWidth.value,
       availableWidth - leftReserve - rightColumnMinWidth - workspaceSeparatorSize
     );
-    const knowledgeWidth = Math.max(
-      commandKnowledgePanelMinWidth.value,
-      Math.min(commandKnowledgePanelWidth.value, maxRightWidth)
+    const currentToolWidth = Math.max(
+      toolPanelMinWidth.value,
+      Math.min(toolPanelWidth.value, maxRightWidth)
     );
-    columns.push(`${workspaceSeparatorSize}px`, `var(--drag-knowledge-width, ${knowledgeWidth}px)`);
+    columns.push(`${workspaceSeparatorSize}px`, `var(--drag-tool-width, ${currentToolWidth}px)`);
   }
 
   return {
@@ -530,10 +502,18 @@ const workspaceLeftStackStyle = computed(() => {
   };
 });
 
-const openPanel = (panel) => {
-  if (panel === 'session') showSessionPanel.value = true;
-  if (panel === 'sftp') showSftpPanel.value = true;
-};
+function openSftpPanel() {
+  if (!activeSessionSupportsSftp.value || visibleSessions.value.length === 0) return;
+  showSftpPanel.value = true;
+}
+
+function toggleSftpPanel() {
+  if (showSftpPanel.value) {
+    showSftpPanel.value = false;
+    return;
+  }
+  openSftpPanel();
+}
 
 function toggleCommandKnowledgePanel() {
   showCommandKnowledgePanel.value = !showCommandKnowledgePanel.value;
@@ -664,10 +644,12 @@ if (typeof requestIdleCallback === 'function') {
 }
 
 const { activeKey, visibleSessions, setActivePanel, movePanel } = useTerminalPanels(sshStore);
+const recentSessionSettings = computed(() => mainUiSettings.value.recentSessions);
 const recentSessions = computed(() => {
+  if (!recentSessionSettings.value.enabled) return [];
   const list = (sshStore.savedSessions || []).filter((session) => Number(session?.last_connected || 0) > 0);
   list.sort((a, b) => (b.last_connected || 0) - (a.last_connected || 0));
-  return list.slice(0, 6);
+  return list.slice(0, recentSessionSettings.value.limit);
 });
 
 const openRecentSession = (session) => {
@@ -885,9 +867,9 @@ const keybindingActions = {
     showSessionPanel.value = !showSessionPanel.value;
     if (showSessionPanel.value) sshStore.loadSavedSessions();
   },
-  sftpPanel: () => { showSftpPanel.value = !showSftpPanel.value; },
-  // Default shortcut: Ctrl+Alt+3
+  sftpPanel: () => { toggleSftpPanel(); },
   commandKnowledge: () => { toggleCommandKnowledgePanel(); },
+  transferList: () => { toggleTransferPanelVisibility(); },
   overview: () => { isOverviewVisible.value = !isOverviewVisible.value; },
   copySession: () => {
     const active = sshStore.getSession(activeKey.value);
@@ -1092,20 +1074,6 @@ const handleTabContext = (key, session) => {
   }
 };
 
-// --- Toolbar (fixed layout) ---
-const defaultToolbarItems = [
-  { id: 'command-knowledge' }
-];
-const toolbarItems = ref([...defaultToolbarItems]);
-const toolbarRightIds = new Set(['command-knowledge']);
-const toolbarLeftItems = computed(() => toolbarItems.value
-  .map((item, index) => ({ ...item, _index: index }))
-  .filter((item) => !toolbarRightIds.has(item.id)));
-const toolbarRightItems = computed(() => toolbarItems.value
-  .map((item, index) => ({ ...item, _index: index }))
-  .filter((item) => toolbarRightIds.has(item.id)));
-
-
 </script>
 
 <template>
@@ -1137,7 +1105,14 @@ const toolbarRightItems = computed(() => toolbarItems.value
     </AlertDialog>
     <div class="app-shell has-floating-surfaces" :class="{ 'has-global-background': backgroundActive }">
       <GlobalBackground :settings="mainUiSettings.background" @availability-change="backgroundAvailable = $event" />
-      <CustomTitlebar />
+      <CustomTitlebar :sftp-active="showActiveSftpPanel"
+        :sftp-disabled="visibleSessions.length === 0 || !activeSessionSupportsSftp"
+        :knowledge-active="showCommandKnowledgePanel"
+        :session-panel-active="showSessionPanel"
+        :transfer-visible="transferPanelVisible"
+        :keybindings="keybindings"
+        @toggle-sftp="toggleSftpPanel"
+        @toggle-transfer="toggleTransferPanelVisibility" />
       <div class="global-toast-layer" aria-live="polite" aria-atomic="false">
         <ToastContainer />
       </div>
@@ -1147,10 +1122,9 @@ const toolbarRightItems = computed(() => toolbarItems.value
         <!-- Left: Session List (inline panel, not overlay) -->
         <div v-if="hasWorkspaceLeftPanels" class="workspace-left-stack" :style="workspaceLeftStackStyle">
           <TiledPanel class="workspace-panel workspace-panel-session" :dense="true" :padded="false">
-            <SessionList :width="'100%'" :sftp-active="showActiveSftpPanel"
-              :sftp-disabled="visibleSessions.length === 0 || !activeSessionSupportsSftp"
+            <SessionList :width="'100%'"
               @open-create="() => { showSessionModal(null); }" @open-edit="(s) => { openSavedSessionEditor(s); }"
-              @toggle-sftp="showSftpPanel = !showSftpPanel" @close="showSessionPanel = false" />
+              @close="showSessionPanel = false" />
           </TiledPanel>
         </div>
 
@@ -1159,10 +1133,10 @@ const toolbarRightItems = computed(() => toolbarItems.value
           @mousedown="startWorkspaceResize('columns', $event)" />
 
         <TiledPanel class="workspace-panel workspace-panel-main" :dense="true" :padded="false" aria-label="主界面面板">
-          <div class="main-panel-body" :class="{ 'has-sftp-panel': showActiveSftpPanel }">
+          <div class="main-panel-body">
             <div v-if="visibleSessions.length === 0" class="empty-state">
               <div class="empty-left">
-                <div class="recent-sessions-tree-container">
+                <div v-if="recentSessionSettings.enabled" class="recent-sessions-tree-container">
                   <div class="tree-header">
                     <span>最近会话</span>
                     <button v-if="recentSessions.length" type="button" class="recent-clear-button"
@@ -1187,33 +1161,30 @@ const toolbarRightItems = computed(() => toolbarItems.value
               :on-split-drag="startSplitDrag" :on-set-focused="setFocused" @activate="setActivePanel"
               @close-panel="removePanelRoot" @tab-drop="onPanelDrop" @tab-context="onPanelContext" />
 
-            <!-- SFTP bottom sliding panel (v-show keeps FileManager alive to preserve path) -->
-            <Transition name="sftp-slide">
-              <div v-show="showActiveSftpPanel" class="sftp-bottom-panel"
-                :style="{ height: `${sftpPanelHeightRatio * 100}vh` }">
-                <div class="sftp-resize-handle" :class="{ 'is-dragging': isSftpResizing }"
-                  @mousedown="startSftpResize" />
-                <FileManager :sessionId="activeSftpWorkspaceId" :follow-session-id="focusedTerminalRuntimeId"
-                  :visible="showActiveSftpPanel"
-                  @close="showSftpPanel = false" />
-              </div>
-            </Transition>
-
             <DesktopPet :settings="desktopPetSettings" :suspend="isAnyModalOpen || hasWorkspaceRightPanel"
               @settings-change="handleDesktopPetSettingsChange" />
           </div>
         </TiledPanel>
 
         <div v-if="hasWorkspaceRightPanel" class="workspace-separator workspace-separator-vertical"
-          @mousedown="startWorkspaceResize('knowledge', $event)" />
+          @mousedown="startWorkspaceResize('tool', $event)" />
 
-        <TiledPanel v-if="hasWorkspaceRightPanel" class="workspace-panel workspace-panel-command-knowledge" :dense="true"
-          :padded="false" aria-label="命令知识库">
-          <CommandKnowledgePanel @close="showCommandKnowledgePanel = false"
-            @insert-command="(detail) => dispatchCommandKnowledgeToActiveTerminal('insert', detail)"
-            @execute-command="(detail) => dispatchCommandKnowledgeToActiveTerminal('execute', detail)" />
+        <TiledPanel v-show="hasWorkspaceRightPanel" class="workspace-panel workspace-panel-tool" :dense="true"
+          :padded="false" :aria-label="showActiveSftpPanel ? 'SFTP 文件管理' : '命令知识库'">
+          <KeepAlive>
+            <FileManager v-if="showActiveSftpPanel"
+              :sessionId="activeSftpWorkspaceId" :follow-session-id="focusedTerminalRuntimeId"
+              :visible="showActiveSftpPanel" @close="showSftpPanel = false" />
+            <CommandKnowledgePanel v-else-if="showCommandKnowledgePanel" @close="showCommandKnowledgePanel = false"
+              @insert-command="(detail) => dispatchCommandKnowledgeToActiveTerminal('insert', detail)"
+              @execute-command="(detail) => dispatchCommandKnowledgeToActiveTerminal('execute', detail)" />
+          </KeepAlive>
         </TiledPanel>
       </div>
+
+      <TransferPanel v-if="transferPanelVisible" :expanded="transferPanelExpanded"
+        @toggle="transferPanelExpanded = !transferPanelExpanded"
+        @close="closeTransferPanel" />
 
       <!-- Session Modal -->
       <SessionModal v-model:visible="isSessionModalVisible" :sessionData="currentEditSession" />
@@ -1331,26 +1302,15 @@ const toolbarRightItems = computed(() => toolbarItems.value
   padding: 0;
 }
 .app-shell.has-floating-surfaces .workspace-panel-session,
-.app-shell.has-floating-surfaces .workspace-panel-command-knowledge {
+.app-shell.has-floating-surfaces .workspace-panel-tool {
   margin-top: var(--workspace-side-panel-top-offset);
   height: calc(100% - var(--workspace-side-panel-top-offset));
 }
 .app-shell.has-floating-surfaces .file-manager,
 .app-shell.has-floating-surfaces .fm-table-header,
-.app-shell.has-floating-surfaces .fm-load-more,
-.app-shell.has-floating-surfaces .fm-bottom-scrollbar {
+.app-shell.has-floating-surfaces .fm-load-more {
   background: color-mix(in srgb, var(--app-bg-dialog) 80%, transparent) !important;
 }
-.app-shell.has-floating-surfaces .sftp-bottom-panel .file-manager,
-.app-shell.has-floating-surfaces .sftp-bottom-panel .fm-table-header,
-.app-shell.has-floating-surfaces .sftp-bottom-panel .fm-table-body,
-.app-shell.has-floating-surfaces .sftp-bottom-panel .fm-bottom-scrollbar {
-  background: var(--terminal-surface-bg, var(--app-bg-dialog)) !important;
-}
-.app-shell.has-floating-surfaces .sftp-bottom-panel .fm-load-more {
-  background: var(--terminal-surface-bg, var(--app-bg-dialog)) !important;
-}
-
 /* will-change removed: triggers excessive GPU layering on iGPU,
    causing re-rasterization of the entire tiled workspace on every drag frame */
 
@@ -1390,23 +1350,21 @@ const toolbarRightItems = computed(() => toolbarItems.value
   overflow: hidden;
 }
 
-.workspace-panel-command-knowledge {
+.workspace-panel-tool {
   min-width: 300px;
   overflow: hidden;
   position: relative;
   z-index: 30;
 }
 
-.workspace-panel-command-knowledge :deep(.tiled-panel__body) {
+.workspace-panel-tool :deep(.tiled-panel__body) {
   padding: 0;
   overflow: hidden;
 }
 
 .workspace-panel-session :deep(.session-panel),
-.workspace-panel-command-knowledge :deep(.command-knowledge-panel),
-.workspace-panel-file :deep(.file-manager),
-.workspace-panel-file :deep(.file-manager-root),
-.workspace-panel-file :deep(.sftp-file-manager) {
+.workspace-panel-tool :deep(.command-knowledge-panel),
+.workspace-panel-tool :deep(.file-manager) {
   width: 100% !important;
   height: 100%;
 }
@@ -1452,21 +1410,6 @@ const toolbarRightItems = computed(() => toolbarItems.value
   min-width: 0;
   min-height: 0;
   height: 100%;
-}
-
-.main-panel-body.has-sftp-panel {
-  overflow: hidden;
-  border-radius: var(--niri-radius-lg, 14px);
-  background: var(--terminal-surface-bg, var(--app-bg-dialog));
-}
-
-.main-panel-body.has-sftp-panel .terminal-panel-manager {
-  border-bottom-left-radius: 0;
-  border-bottom-right-radius: 0;
-}
-
-.main-panel-body.has-sftp-panel .sftp-bottom-panel {
-  background: var(--terminal-surface-bg, var(--app-bg-dialog));
 }
 
 .empty-state {
@@ -1825,200 +1768,6 @@ html.dark .h-resize-handle:hover {
   justify-content: space-between;
   gap: 12px;
   min-width: 260px;
-}
-
-.cmd-left {
-  font-size: var(--app-font-size);
-  flex: 1;
-  min-width: 0;
-  max-width: 240px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.cmd-right {
-  font-size: var(--app-font-size);
-  flex-shrink: 0;
-  color: var(--app-text-muted);
-}
-
-.cmd-gear-btn {
-  color: var(--app-text-muted) !important;
-  padding: 0 6px !important;
-  height: 22px !important;
-  min-width: 26px;
-  border: none !important;
-  box-shadow: none !important;
-  background: transparent !important;
-}
-
-.cmd-gear-btn:deep(.ant-btn),
-.cmd-gear-btn:deep(.ant-btn-default),
-.cmd-gear-btn:deep(.ant-btn-text) {
-  background: transparent !important;
-  box-shadow: none !important;
-  border: none !important;
-}
-
-.cmd-gear-btn:deep(.ant-btn::before) {
-  display: none !important;
-}
-
-.cmd-gear-btn:hover,
-.cmd-gear-btn:focus {
-  color: var(--app-text) !important;
-  background: transparent !important;
-}
-
-.cmd-gear-icon {
-  width: 14px;
-  height: 14px;
-  display: block;
-  filter: brightness(0) invert(1);
-  opacity: 0.9;
-}
-
-.cmd-gear-btn:hover .cmd-gear-icon,
-.cmd-gear-btn:focus .cmd-gear-icon {
-  opacity: 1;
-}
-
-.modal-class {
-  background-color: var(--app-input-bg);
-}
-
-@media (max-width: 1100px) {
-
-  .toolbar-item-split-h,
-  .toolbar-item-merge,
-  .toolbar-item-sep-2 {
-    display: none;
-  }
-}
-
-@media (max-width: 980px) {
-  .toolbar-item-split-v {
-    display: none;
-  }
-}
-
-@media (max-width: 860px) {
-
-  .toolbar-item-toggle-sftp,
-  .toolbar-item-sep-3 {
-    display: none;
-  }
-}
-
-/* Toolbar Styles */
-.toolbar-item-wrapper {
-  display: inline-flex;
-  align-items: center;
-}
-
-/* FLIP Animation */
-.toolbar-list-move {
-  transition: transform 0.3s ease;
-}
-
-/* ── SFTP bottom panel ── */
-
-.sftp-bottom-panel {
-  --sftp-resize-bg: transparent;
-  --sftp-resize-hover-bg: color-mix(in srgb, var(--app-text) 6%, transparent);
-  --sftp-resize-active-bg: color-mix(in srgb, var(--color-primary) 14%, transparent);
-  --sftp-resize-line: color-mix(in srgb, var(--app-text) 20%, transparent);
-  --sftp-resize-hover-line: color-mix(in srgb, var(--app-text) 54%, transparent);
-  --sftp-resize-active-line: var(--color-primary);
-  flex: 0 0 auto;
-  min-height: 120px;
-  display: flex;
-  flex-direction: column;
-  border-top: 0;
-  background: transparent;
-  overflow: hidden;
-}
-
-.sftp-resize-handle {
-  position: relative;
-  height: 10px;
-  cursor: row-resize;
-  background: var(--sftp-resize-bg);
-  flex-shrink: 0;
-  border: 0;
-  margin: 0;
-  transition: background var(--app-motion-control, 120ms ease);
-  touch-action: none;
-}
-
-.sftp-resize-handle::before {
-  content: '';
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 50%;
-  border-top: 1px solid var(--sftp-resize-line);
-  transform: translateY(-50%);
-  transition: border-color var(--app-motion-control, 120ms ease), opacity var(--app-motion-control, 120ms ease);
-  opacity: 0.76;
-}
-
-.sftp-resize-handle::after {
-  content: '';
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 46px;
-  height: 3px;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--app-text) 18%, transparent);
-  transform: translate(-50%, -50%);
-  opacity: 0;
-  transition: opacity var(--app-motion-control, 120ms ease), background var(--app-motion-control, 120ms ease);
-}
-
-.sftp-resize-handle:hover {
-  background: var(--sftp-resize-hover-bg);
-  cursor: row-resize;
-}
-
-.sftp-resize-handle:hover::before {
-  border-top-color: var(--sftp-resize-hover-line);
-  opacity: 1;
-}
-
-.sftp-resize-handle:hover::after,
-.sftp-resize-handle.is-dragging::after {
-  opacity: 1;
-  background: color-mix(in srgb, var(--color-primary) 54%, var(--app-text) 18%);
-}
-
-.sftp-resize-handle.is-dragging {
-  background: var(--sftp-resize-active-bg);
-  cursor: row-resize;
-}
-
-.sftp-resize-handle.is-dragging::before {
-  border-top-color: var(--sftp-resize-active-line);
-  opacity: 1;
-}
-
-.sftp-bottom-panel> :not(.sftp-resize-handle) {
-  flex: 1;
-  min-height: 0;
-}
-
-/* Slide transition */
-.sftp-slide-enter-active,
-.sftp-slide-leave-active {
-  transition: all 200ms cubic-bezier(0.4, 0, 0.2, 1);
-}
-
-.sftp-slide-enter-from,
-.sftp-slide-leave-to {
-  transform: translateY(100%);
-  opacity: 0;
 }
 
 /* ── Workspace panel session (left sidebar) ── */

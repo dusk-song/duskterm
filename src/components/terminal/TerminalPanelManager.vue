@@ -175,7 +175,6 @@ const dividerStyle = (divider) => divider.direction === 'vertical'
   min-height: 0;
   overflow: hidden;
   box-sizing: border-box;
-  border: var(--niri-border-width, 1px) solid var(--app-panel-border);
   border-radius: var(--niri-radius-lg, 14px);
   background: var(--terminal-surface-bg, var(--app-bg-dialog));
 }

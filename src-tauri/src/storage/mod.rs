@@ -526,6 +526,27 @@ pub fn clear_recent_sessions(state: tauri::State<'_, SharedStorageState>) -> Res
 }
 
 #[tauri::command]
+pub fn trim_recent_sessions(
+    state: tauri::State<'_, SharedStorageState>,
+    limit: usize,
+) -> Result<(), String> {
+    let state = state.lock().unwrap();
+    let mut data = load_storage_data(&state)?;
+    let limit = limit.clamp(1, 100);
+    let mut recent = data
+        .sessions
+        .iter()
+        .enumerate()
+        .filter_map(|(index, session)| session.last_connected.map(|timestamp| (index, timestamp)))
+        .collect::<Vec<_>>();
+    recent.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+    for (index, _) in recent.into_iter().skip(limit) {
+        data.sessions[index].last_connected = None;
+    }
+    save_storage_data(&state, &data)
+}
+
+#[tauri::command]
 pub fn save_session(
     state: tauri::State<'_, SharedStorageState>,
     mut session: SessionConfig,

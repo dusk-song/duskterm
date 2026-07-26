@@ -28,6 +28,8 @@ const menuHandlers = {
   'view_zoom_reset': () => window.dispatchEvent(new CustomEvent('term:zoom-reset')),
   'view_tool_sessions': () => window.dispatchEvent(new CustomEvent('app:toggle-tool-sessions')),
   'view_tool_sftp': () => window.dispatchEvent(new CustomEvent('app:toggle-tool-sftp')),
+  'view_tool_knowledge': () => window.dispatchEvent(new CustomEvent('app:toggle-tool-knowledge')),
+  'view_transfer_list': () => window.dispatchEvent(new CustomEvent('app:toggle-transfer-panel')),
   'view_refresh': () => window.dispatchEvent(new CustomEvent('app:refresh-current-view')),
   'view_fullscreen': () => toggleFullscreen().catch(() => { }),
 

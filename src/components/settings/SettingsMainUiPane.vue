@@ -230,6 +230,22 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
+    <div class="settings-section idea-panel">
+      <div class="settings-section-title-wrap">
+        <div class="settings-section-title">最近会话</div>
+      </div>
+      <div class="setting-row">
+        <div class="setting-label">显示列表</div>
+        <Switch v-model="mainUiSettings.recentSessions.enabled" />
+      </div>
+      <div class="setting-row">
+        <div class="setting-label">保留数量</div>
+        <Input v-model="mainUiSettings.recentSessions.limit" inputmode="numeric" class="recent-session-limit"
+          :disabled="!mainUiSettings.recentSessions.enabled" />
+        <span class="setting-value">最多 100</span>
+      </div>
+    </div>
+
     <div class="settings-section idea-panel background-settings">
       <div class="settings-section-title-wrap"><div class="settings-section-title">全局背景图片</div></div>
       <div class="background-preview" :class="{ empty: !backgroundPreview }"
@@ -477,6 +493,10 @@ onBeforeUnmount(() => {
 
 <style scoped>
 @import './settingsPaneShared.css';
+
+.recent-session-limit {
+  @apply w-20;
+}
 
 .background-preview { height: 120px; margin: 8px 0 12px; border: 1px solid var(--app-border-shadow); border-radius: 8px; background-position: center; background-size: cover; }
 .background-preview.empty { display: flex; align-items: center; justify-content: center; color: var(--app-text-muted); background: var(--app-input-bg); }

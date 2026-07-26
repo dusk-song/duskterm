@@ -20,6 +20,7 @@ const PREFERENCE_DEFINITIONS = {
       sessionList: 'Ctrl+Alt+1',
       sftpPanel: 'Ctrl+Alt+2',
       commandKnowledge: 'Ctrl+Alt+3',
+      transferList: 'Ctrl+Alt+4',
       overview: 'Ctrl+`',
       copySession: 'Ctrl+P',
       toggleLineNumbers: 'Ctrl+Alt+L',
@@ -53,7 +54,11 @@ const PREFERENCE_DEFINITIONS = {
     storageKey: 'main-ui-settings-v1',
     defaults: {
       background: defaultBackgroundSettings,
-      desktopPet: defaultDesktopPetSettings
+      desktopPet: defaultDesktopPetSettings,
+      recentSessions: {
+        enabled: true,
+        limit: 6
+      }
     }
   }
 };

@@ -62,7 +62,7 @@
     --app-text-muted: hsl(var(--muted-foreground));
     --app-text-title: hsl(var(--foreground));
 
-    --app-font-family: 'Consolas', 'Microsoft YaHei', monospace;
+    --app-font-family: 'Maple Mono', 'Microsoft YaHei', monospace;
     --app-font-title-size: 16px;
     --app-font-body-size: 13px;
     --app-font-caption-size: 12px;

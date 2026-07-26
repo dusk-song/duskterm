@@ -88,6 +88,7 @@ pub fn run() {
             ssh::close_ssh_shell_channel,
             storage::load_sessions,
             storage::clear_recent_sessions,
+            storage::trim_recent_sessions,
             storage::save_session,
             storage::delete_session,
             storage::get_decrypted_session,

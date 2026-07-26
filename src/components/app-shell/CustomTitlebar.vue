@@ -1,5 +1,5 @@
 <script setup>
-import { Copy, Minus, Moon, Square, Sun, X } from '@lucide/vue';
+import { Copy, FolderOpen, Minus, Moon, Square, Sun, X } from '@lucide/vue';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 import { executeMenuAction } from '@/composables/useMenu';
@@ -12,6 +12,18 @@ import SessionDock from './SessionDock.vue';
 import TransferDock from './TransferDock.vue';
 
 const { isDark, toggleTheme } = useTheme();
+const props = defineProps({
+  sftpActive: Boolean,
+  sftpDisabled: Boolean,
+  knowledgeActive: Boolean,
+  sessionPanelActive: Boolean,
+  transferVisible: Boolean,
+  keybindings: {
+    type: Object,
+    default: () => ({})
+  },
+});
+const emit = defineEmits(['toggle-sftp', 'toggle-transfer']);
 const menus = [
   { key: 'file', label: '会话', items: [
     { key: 'file_new_conn', label: '新建连接', shortcut: 'Ctrl+N' },
@@ -24,11 +36,13 @@ const menus = [
     { key: 'edit_paste', label: '粘贴', shortcut: 'Ctrl+Shift+V' },
     { key: 'edit_select_all', label: '全选', shortcut: 'Ctrl+A' }, { type: 'divider' },
     { key: 'edit_clear', label: '清空屏幕', shortcut: 'Ctrl+Shift+L' },
-    { key: 'edit_find', label: '查找...', shortcut: 'Ctrl+F' },
+    { key: 'edit_find', label: '查找...', bindingKey: 'toggleFind' },
   ] },
   { key: 'view', label: '视图', items: [
-    { key: 'view_tool_sessions', label: '切换会话列表', shortcut: 'F8' },
-    { key: 'view_tool_sftp', label: '切换文件管理', shortcut: 'F9' },
+    { key: 'view_tool_sessions', label: '切换会话列表', bindingKey: 'sessionList' },
+    { key: 'view_tool_sftp', label: '切换文件管理', bindingKey: 'sftpPanel' },
+    { key: 'view_tool_knowledge', label: '命令知识库', bindingKey: 'commandKnowledge' },
+    { key: 'view_transfer_list', label: '传输列表', bindingKey: 'transferList' },
     { key: 'view_fullscreen', label: '切换全屏', shortcut: 'F11' },
   ] },
   { key: 'connection', label: '连接', items: [
@@ -58,7 +72,18 @@ let titlebarResizeFrame = null;
 let pendingTitlebarWidth = Math.round(window.innerWidth);
 
 const closeMenu = () => { openKey.value = ''; };
-const handleClick = (key) => { closeMenu(); executeMenuAction(key); };
+const itemChecked = (key) => ({
+  view_tool_sessions: props.sessionPanelActive,
+  view_tool_sftp: props.sftpActive,
+  view_tool_knowledge: props.knowledgeActive,
+  view_transfer_list: props.transferVisible,
+}[key] === true);
+const itemDisabled = (key) => key === 'view_tool_sftp' && props.sftpDisabled;
+const handleClick = (key) => {
+  if (itemDisabled(key)) return;
+  closeMenu();
+  executeMenuAction(key);
+};
 function openMenu(key, event) {
   if (openKey.value === key) return closeMenu();
   const rect = event.currentTarget.getBoundingClientRect();
@@ -72,6 +97,9 @@ function hoverMenu(key, event) {
   openKey.value = key;
 }
 const dropdownStyle = () => ({ position: 'fixed', top: `${dropdownPos.value.top}px`, left: `${dropdownPos.value.left}px` });
+const itemShortcut = (item) => item?.bindingKey
+  ? String(props.keybindings[item.bindingKey] || '')
+  : String(item?.shortcut || '');
 const syncMaximized = () => {
   clearTimeout(syncTimer);
   syncTimer = setTimeout(async () => { if (win) isMaximized.value = await win.isMaximized(); }, 60);
@@ -85,7 +113,11 @@ async function initWindow() {
 const winMax = async () => { await win?.toggleMaximize(); syncMaximized(); };
 const onDoubleClick = (event) => { if (!event.target.closest('button')) winMax(); };
 const shortcuts = {};
-menus.forEach((menu) => menu.items.forEach((item) => { if (item.key && item.shortcut) shortcuts[item.shortcut.replace(/\s+/g, '').toLowerCase()] = item.key; }));
+menus.forEach((menu) => menu.items.forEach((item) => {
+  if (item.key && item.shortcut) {
+    shortcuts[item.shortcut.replace(/\s+/g, '').toLowerCase()] = item.key;
+  }
+}));
 function onKeydown(event) {
   if (['input', 'textarea', 'select'].includes(document.activeElement?.tagName?.toLowerCase())) return;
   const parts = [];
@@ -140,7 +172,10 @@ onUnmounted(() => {
     <div class="titlebar-right">
       <MonitorDock v-if="visibility.monitor" />
       <DuskDock class="utility-dock" interactive>
-        <TransferDock v-show="visibility.transfer" embedded />
+        <TransferDock v-show="visibility.transfer" embedded :expanded="props.transferVisible"
+          @toggle="emit('toggle-transfer')" />
+        <button class="tb-btn" :class="{ active: props.sftpActive }" :disabled="props.sftpDisabled"
+          title="文件管理（F9）" @click="emit('toggle-sftp')"><FolderOpen :size="14" /></button>
         <button class="tb-btn" @click="toggleTheme" :title="isDark ? '切换亮色主题' : '切换暗色主题'"><Sun v-if="isDark" :size="15" /><Moon v-else :size="15" /></button>
         <button class="tb-btn" @click="win?.minimize()" title="最小化"><Minus :size="13" /></button>
         <button class="tb-btn" @click="winMax" :title="isMaximized ? '还原' : '最大化'"><Copy v-if="isMaximized" :size="12" /><Square v-else :size="12" /></button>
@@ -151,7 +186,11 @@ onUnmounted(() => {
       <div v-if="openKey" class="tb-dropdown" :style="dropdownStyle()" @click.stop>
         <template v-for="(item, index) in menus.find((menu) => menu.key === openKey)?.items" :key="item.key || index">
           <div v-if="item.type === 'divider'" class="tb-divider" />
-          <button v-else class="tb-entry" @click="handleClick(item.key)"><span>{{ item.label }}</span><span class="tb-shortcut">{{ item.shortcut }}</span></button>
+          <button v-else class="tb-entry" :class="{ checked: itemChecked(item.key) }"
+            :disabled="itemDisabled(item.key)" @click="handleClick(item.key)">
+            <span class="tb-entry-label"><span class="tb-check">{{ itemChecked(item.key) ? '✓' : '' }}</span>{{ item.label }}</span>
+            <span v-if="itemShortcut(item)" class="tb-shortcut">{{ itemShortcut(item) }}</span>
+          </button>
         </template>
       </div>
     </Teleport>
@@ -169,7 +208,9 @@ onUnmounted(() => {
 .tb-menu-item, .tb-btn { height: 24px; border: 0; border-radius: 999px; color: var(--tb-text, var(--app-text)); background: transparent; cursor: default; }
 .tb-menu-item { padding: 0 7px; font-size: 12px; }
 .tb-btn { display: inline-flex; width: 29px; align-items: center; justify-content: center; padding: 0; opacity: .78; }
-.tb-menu-item:hover, .tb-menu-item.open, .tb-btn:hover { background: var(--tb-hover-bg, color-mix(in srgb, var(--app-text) 8%, transparent)); opacity: 1; }
+.tb-menu-item:hover, .tb-menu-item.open, .tb-btn:hover, .tb-btn.active { background: var(--tb-hover-bg, color-mix(in srgb, var(--app-text) 8%, transparent)); opacity: 1; }
+.tb-btn.active { color: var(--color-primary); }
+.tb-btn:disabled { opacity: .3; cursor: not-allowed; }
 .tb-btn.close:hover { color: #fff; background: var(--tb-close-hover, var(--color-danger)); }
 .utility-dock,
 .window-dock { padding: 0 4px; }
@@ -179,6 +220,9 @@ onUnmounted(() => {
 .tb-dropdown { min-width: 220px; padding: 5px; border: 1px solid var(--tb-dropdown-border, var(--app-border-shadow)); border-radius: 9px; background: color-mix(in srgb, var(--tb-dropdown-bg, var(--app-bg-dialog)) 95%, transparent); box-shadow: var(--niri-shadow-dialog); backdrop-filter: blur(12px); z-index: var(--z-dropdown); }
 .tb-entry { display: flex; width: 100%; min-height: 28px; align-items: center; justify-content: space-between; padding: 0 9px; border: 0; border-radius: 6px; color: var(--tb-text, var(--app-text)); background: transparent; font-size: 12px; }
 .tb-entry:hover { background: var(--tb-entry-hover, color-mix(in srgb, var(--app-text) 8%, transparent)); }
+.tb-entry:disabled { opacity: .38; }
+.tb-entry-label { display: inline-flex; align-items: center; }
+.tb-check { display: inline-block; width: 16px; color: var(--color-primary); }
 .tb-shortcut { margin-left: 22px; color: var(--tb-text-muted, var(--app-text-muted)); font-size: 11px; }
 .tb-divider { height: 1px; margin: 3px 7px; background: var(--tb-divider, var(--app-border-shadow)); }
 </style>

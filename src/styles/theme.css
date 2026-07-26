@@ -1,21 +1,10 @@
-/*@font-face {
-  font-family: 'Dusk Noto Sans SC';
-  src: url('/fonts/NotoSansSC-Medium.ttf') format('truetype');
+@font-face {
+  font-family: 'Maple Mono';
+  src: url('/fonts/MapleMono-NF-CN-Light.ttf') format('truetype');
   font-weight: 500;
   font-style: normal;
   font-display: swap;
-  unicode-range:
-    U+2E80-2EFF,
-    U+2F00-2FDF,
-    U+3000-303F,
-    U+31C0-31EF,
-    U+3400-4DBF,
-    U+4E00-9FFF,
-    U+F900-FAFF,
-    U+FE10-FE1F,
-    U+FE30-FE4F,
-    U+FF00-FFEF;
-}*/
+}
 
 /* ================================================================
    DuskTerm — Non-color tokens & global utilities
@@ -24,8 +13,8 @@
 
 :root {
   /* ===== Typography ===== */
-  --font-sans: 'Consolas', 'Microsoft YaHei', monospace;
-  --font-mono: 'Consolas', 'Cascadia Mono', 'SF Mono', 'Microsoft YaHei Mono', monospace;
+  --font-sans: 'Maple Mono', 'Microsoft YaHei', monospace;
+  --font-mono: 'Maple Mono', 'Microsoft YaHei Mono', 'SimSun', monospace;
   --font-size-base: 0.8125rem;
   /* 13px */
   --font-size-sm: 0.75rem;
@@ -146,17 +135,6 @@ body,
 .dialog-enter-from .\[_\>_div\]:nth-child(2),
 .dialog-leave-to .\[_\>_div\]:nth-child(2) {
   transform: scale(0.95);
-  opacity: 0;
-}
-
-.sftp-slide-enter-active,
-.sftp-slide-leave-active {
-  transition: height 250ms cubic-bezier(0.4, 0, 0.2, 1), opacity 200ms ease;
-  overflow: hidden;
-}
-
-.sftp-slide-enter-from,
-.sftp-slide-leave-to {
   opacity: 0;
 }
 

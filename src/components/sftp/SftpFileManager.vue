@@ -1,5 +1,6 @@
 ﻿<script setup>
 import Button from '@/components/ui/button/Button.vue';
+import Checkbox from '@/components/ui/checkbox/Checkbox.vue';
 import ContextMenu from '@/components/ui/context-menu/ContextMenu.vue';
 import ContextMenuContent from '@/components/ui/context-menu/ContextMenuContent.vue';
 import ContextMenuItem from '@/components/ui/context-menu/ContextMenuItem.vue';
@@ -20,6 +21,7 @@ import {
   RefreshCw,
   RotateCcw,
   Save as SaveIcon,
+  SlidersHorizontal,
   Upload,
   X
 } from '@lucide/vue';
@@ -59,47 +61,54 @@ const initializing = ref(false);
 const netError = ref('');
 const followTerminalPath = ref(false);
 const lastObservedTerminalCwd = ref('');
-const showBatchActions = ref(false);
-const showSelectionColumn = ref(false);
+const showColumnSettings = ref(false);
+const COLUMN_VISIBILITY_KEY = 'duskterm-sftp-columns-v1';
+const loadColumnVisibility = () => {
+  try {
+    return {
+      size: false,
+      modified: false,
+      permissions: false,
+      ownerGroup: false,
+      ...(JSON.parse(localStorage.getItem(COLUMN_VISIBILITY_KEY) || '{}')),
+    };
+  } catch {
+    return { size: false, modified: false, permissions: false, ownerGroup: false };
+  }
+};
+const visibleColumns = reactive(loadColumnVisibility());
+watch(visibleColumns, (value) => {
+  localStorage.setItem(COLUMN_VISIBILITY_KEY, JSON.stringify(value));
+}, { deep: true });
+const renderedColumns = computed(() => {
+  let remaining = Math.max(0, containerWidth.value - 170);
+  const widths = { size: 76, modified: 122, permissions: 92, ownerGroup: 104 };
+  const result = { size: false, modified: false, permissions: false, ownerGroup: false };
+  for (const key of ['size', 'modified', 'permissions', 'ownerGroup']) {
+    if (!visibleColumns[key] || remaining < widths[key]) continue;
+    result[key] = true;
+    remaining -= widths[key];
+  }
+  return result;
+});
+const fileListColumns = computed(() => [
+  'minmax(0, 1fr)',
+  renderedColumns.value.size ? '76px' : '',
+  renderedColumns.value.modified ? '122px' : '',
+  renderedColumns.value.permissions ? '92px' : '',
+  renderedColumns.value.ownerGroup ? '104px' : '',
+].filter(Boolean).join(' '));
 
-const headerScrollRef = ref(null);
 const bodyScrollRef = ref(null);
-const bottomScrollRef = ref(null);
 const viewportRef = ref(null);
 const fileManagerRef = ref(null);
 const nativeDragCapabilities = ref(null);
 
-// Direct pixel column widths — simple and reliable for drag resize
-const colPx = reactive({
-  select: 0,
-  name: 280,
-  modified: 180,
-  size: 90,
-  permissions: 180,
-  ownerGroup: 120,
-});
-
-// Container width tracking for auto-fit
+// Container width drives responsive optional-column visibility.
 const containerWidth = ref(800);
-let _colResizeObserver = null;
-let _colResizeFrame = null;
+let columnLayoutObserver = null;
+let columnLayoutFrame = null;
 let _pendingContainerWidth = 800;
-
-// Recompute column widths when container resizes
-function recalcColumnWidths() {
-  const cw = containerWidth.value;
-  if (cw < 100) return;
-  const selectW = showSelectionColumn.value ? 44 : 0;
-  const avail = Math.max(200, cw - selectW);
-  const totalFlex = 3 + 2 + 1 + 2 + 1.5; // name:3 modified:2 size:1 permissions:2 ownerGroup:1.5
-  const u = avail / totalFlex;
-  colPx.select = selectW;
-  colPx.name = Math.round(3 * u);
-  colPx.modified = Math.round(2 * u);
-  colPx.size = Math.round(1 * u);
-  colPx.permissions = Math.round(2 * u);
-  colPx.ownerGroup = Math.round(1.5 * u);
-}
 
 const pager = useSftpPager({
   sessionIdRef: computed(() => props.sessionId),
@@ -138,18 +147,10 @@ const listItems = computed(() => {
 });
 
 const selection = useFileSelection(listItems);
-const batchState = reactive({
-  running: false,
-  action: '',
-  total: 0,
-  success: 0,
-  failed: 0
-});
 
 const ctxRecord = ref(null);
 
 const navigatingDir = ref(false);
-const resizingColumnKey = ref('');
 const reconnectingSftp = ref(false);
 
 const editorVisible = ref(false);
@@ -192,6 +193,33 @@ const visibleRows = computed(() => listVirtual.visibleItems.value.map((item, idx
 })));
 
 const selectedRecords = computed(() => selection.selectedList.value.filter(item => !item.__parent));
+const selectedInfoTitle = computed(() => {
+  if (selectedRecords.value.length === 1) return selectedRecords.value[0].name;
+  if (selectedRecords.value.length > 1) return `已选择 ${selectedRecords.value.length} 项`;
+  return currentPath.value;
+});
+const selectedInfoMeta = computed(() => {
+  if (selectedRecords.value.length === 1) {
+    const item = selectedRecords.value[0];
+    const parts = [
+      item.is_dir ? '目录' : formatEntrySize(item),
+      localTime(item),
+      permissionText(item),
+      `${item.owner || '-'}/${item.group || '-'}`,
+    ];
+    return parts.filter(Boolean).join(' · ');
+  }
+  if (selectedRecords.value.length > 1) {
+    const bytes = selectedRecords.value.reduce((sum, item) => (
+      sum + (item.is_dir ? 0 : Number(item.size || 0))
+    ), 0);
+    const directoryCount = selectedRecords.value.filter((item) => item.is_dir).length;
+    return `${formatSize(bytes)}${directoryCount ? ` · ${directoryCount} 个目录` : ''}`;
+  }
+  const entries = listItems.value.filter((item) => !item.__parent && !item.__draftFolder);
+  const directoryCount = entries.filter((item) => item.is_dir).length;
+  return `${entries.length} 项 · ${directoryCount} 个目录`;
+});
 const panelStateCache = new Map();
 let sessionSyncGeneration = 0;
 const initializingSessionIds = new Set();
@@ -218,13 +246,13 @@ function isCurrentSessionSync(sessionId, generation) {
   return props.sessionId === sessionId && sessionSyncGeneration === generation;
 }
 
-function scheduleColumnWidthRecalc(width) {
+function scheduleColumnLayout(width) {
   const nextWidth = Math.round(Number(width) || 0);
   if (nextWidth <= 0) return;
   _pendingContainerWidth = nextWidth;
-  if (_colResizeFrame) return;
-  _colResizeFrame = requestAnimationFrame(() => {
-    _colResizeFrame = null;
+  if (columnLayoutFrame) return;
+  columnLayoutFrame = requestAnimationFrame(() => {
+    columnLayoutFrame = null;
     if (containerWidth.value !== _pendingContainerWidth) {
       containerWidth.value = _pendingContainerWidth;
       recalcColumnWidths();
@@ -770,7 +798,6 @@ async function loadFirstPage() {
     if (loaded === false || props.sessionId !== sessionId || currentPath.value !== path) return false;
     netError.value = '';
     await nextTick();
-    syncBottomScrollbar();
     cachePanelState();
     return true;
   } catch (err) {
@@ -889,7 +916,6 @@ function closeEditorState() {
 
 const onBodyScroll = throttle(async (event) => {
   listVirtual.onScroll(event);
-  syncXFromBody();
   const el = event.target;
   const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 120;
   if (nearBottom && pager.canLoadMore.value) {
@@ -904,68 +930,6 @@ const onBodyScroll = throttle(async (event) => {
   }
   cachePanelState();
 }, 80);
-
-function onTableWheel(event) {
-  const horizontalDelta = Math.abs(event.deltaX) > 0 ? event.deltaX : (event.shiftKey ? event.deltaY : 0);
-  if (!horizontalDelta || !bodyScrollRef.value) return;
-  const maxScrollLeft = bodyScrollRef.value.scrollWidth - bodyScrollRef.value.clientWidth;
-  if (maxScrollLeft <= 0) return;
-
-  const nextScrollLeft = Math.max(0, Math.min(maxScrollLeft, bodyScrollRef.value.scrollLeft + horizontalDelta));
-  bodyScrollRef.value.scrollLeft = nextScrollLeft;
-  syncXFromBody();
-
-  if (event.cancelable) event.preventDefault();
-}
-
-function syncXFromBody() {
-  const left = bodyScrollRef.value?.scrollLeft || 0;
-  if (headerScrollRef.value) headerScrollRef.value.scrollLeft = left;
-  if (bottomScrollRef.value) bottomScrollRef.value.scrollLeft = left;
-}
-
-function syncXFromBottom() {
-  const left = bottomScrollRef.value?.scrollLeft || 0;
-  if (bodyScrollRef.value) bodyScrollRef.value.scrollLeft = left;
-  if (headerScrollRef.value) headerScrollRef.value.scrollLeft = left;
-}
-
-function syncBottomScrollbar() {
-  // No-op: flex columns fill the panel width, no horizontal scrollbar needed
-}
-
-function startColumnResize(key, event) {
-  event.preventDefault();
-  event.stopPropagation();
-  if (!(key in colPx)) return;
-
-  // Find the next column for bidirectional resize
-  const order = ['name', 'modified', 'size', 'permissions', 'ownerGroup'];
-  const idx = order.indexOf(key);
-  if (idx < 0 || idx >= order.length - 1) return;
-  const nextKey = order[idx + 1];
-
-  const startX = event.clientX;
-  const startA = colPx[key];
-  const startB = colPx[nextKey];
-  resizingColumnKey.value = key;
-
-  const onMove = (e) => {
-    const d = e.clientX - startX;
-    colPx[key] = Math.max(40, startA + d);
-    colPx[nextKey] = Math.max(40, startB - d);
-  };
-  const onUp = () => {
-    document.removeEventListener('mousemove', onMove);
-    document.removeEventListener('mouseup', onUp);
-    document.body.style.cursor = '';
-    resizingColumnKey.value = '';
-  };
-
-  document.body.style.cursor = 'col-resize';
-  document.addEventListener('mousemove', onMove);
-  document.addEventListener('mouseup', onUp);
-}
 
 function rowClass(record) {
   const classes = ['fm-row'];
@@ -1117,28 +1081,6 @@ async function manualRefresh() {
   await loadFirstPage();
 }
 
-async function runBatch(action, targets, worker) {
-  if (!targets.length) return;
-  batchState.running = true;
-  batchState.action = action;
-  batchState.total = targets.length;
-  batchState.success = 0;
-  batchState.failed = 0;
-
-  for (const item of targets) {
-    try {
-      await worker(item);
-      batchState.success += 1;
-    } catch {
-      batchState.failed += 1;
-    }
-  }
-
-  toast.info(`${action} 完成：成功 ${batchState.success}，失败 ${batchState.failed}`);
-  batchState.running = false;
-  await loadFirstPage();
-}
-
 async function uploadLocalFiles(files, uploadDirectory = currentPath.value) {
   const sessionId = props.sessionId;
   if (!sessionId || !files.length) return;
@@ -1268,78 +1210,6 @@ async function handleDownload(records = selectedRecords.value) {
   ));
   await runDownloadTasksWithConcurrency(tasks);
   notifyTransferSummary('下载', tasks);
-}
-
-async function batchDelete() {
-  const targets = selectedRecords.value;
-  if (!targets.length) {
-    toast.warning('请先选择要删除的文件/目录');
-    return;
-  }
-
-  confirm({
-    title: '确认删除',
-    content: `将删除 ${targets.length} 个项目（目录需为空），是否继续？`,
-    okText: '删除',
-    okType: 'danger',
-    cancelText: '取消',
-    async onOk() {
-      await runBatch('删除', targets, async (item) => {
-        await invokeCommand('sftp_remove', {
-          sessionId: props.sessionId,
-          path: joinRemotePath(currentPath.value, item.name),
-          isDir: !!item.is_dir
-        });
-      });
-      selection.clearSelection();
-    }
-  });
-}
-
-async function batchRename() {
-  const targets = selectedRecords.value;
-  if (!targets.length) {
-    toast.warning('请先选择项目');
-    return;
-  }
-
-  const template = window.prompt('输入重命名模板，支持 {name} 和 {index}，例：bak_{index}_{name}', '{name}');
-  if (!template) return;
-
-  await runBatch('重命名', targets, async (item) => {
-    const i = targets.findIndex(it => it.name === item.name);
-    const nextName = template.replaceAll('{name}', item.name).replaceAll('{index}', String(i + 1));
-    if (!nextName || nextName === item.name) return;
-    await invokeCommand('sftp_rename', {
-      sessionId: props.sessionId,
-      fromPath: joinRemotePath(currentPath.value, item.name),
-      toPath: joinRemotePath(currentPath.value, nextName)
-    });
-  });
-}
-
-async function batchChmod() {
-  const targets = selectedRecords.value;
-  if (!targets.length) {
-    toast.warning('请先选择项目');
-    return;
-  }
-
-  const modeInput = window.prompt('输入权限（八进制），例如 755 或 644', '644');
-  if (!modeInput) return;
-  const mode = Number.parseInt(modeInput, 8);
-  if (Number.isNaN(mode)) {
-    toast.error('权限格式错误');
-    return;
-  }
-
-  await runBatch('权限修改', targets, async (item) => {
-    await invokeCommand('sftp_chmod', {
-      sessionId: props.sessionId,
-      path: joinRemotePath(currentPath.value, item.name),
-      permissions: mode
-    });
-  });
 }
 
 async function showProperties(record) {
@@ -1774,7 +1644,6 @@ watch(activeSessionStatus, async (status, prevStatus) => {
 watch([() => pager.items.value.length, () => connected.value], () => nextTick(() => {
   listVirtual.clampScroll();
   syncListScrollTop(listVirtual.scrollTop.value);
-  syncBottomScrollbar();
 }));
 
 let resizeHandler = null;
@@ -1811,8 +1680,6 @@ onMounted(() => {
   };
   sftpLayoutRefreshHandler = () => nextTick(() => {
     resizeHandler?.();
-    syncBottomScrollbar();
-    recalcColumnWidths();
   });
   window.addEventListener('resize', scheduleResizeHandler);
   window.addEventListener('app:sftp-refresh-active', activeSftpRefreshHandler);
@@ -1821,12 +1688,12 @@ onMounted(() => {
 
   // Track container width for auto-fit column widths
   if (viewportRef.value) {
-    _colResizeObserver = new ResizeObserver((entries) => {
+    columnLayoutObserver = new ResizeObserver((entries) => {
       const w = entries[0]?.contentRect?.width;
-      scheduleColumnWidthRecalc(w);
+      scheduleColumnLayout(w);
     });
-    _colResizeObserver.observe(viewportRef.value);
-    recalcColumnWidths();
+    columnLayoutObserver.observe(viewportRef.value);
+    scheduleColumnLayout(viewportRef.value.clientWidth);
   }
   if (bodyScrollRef.value) {
     bodyResizeObserver = new ResizeObserver(scheduleResizeHandler);
@@ -1855,18 +1722,18 @@ onUnmounted(() => {
     sftpLayoutRefreshHandler = null;
   }
   window.removeEventListener('keydown', onEditorKeydown);
-  if (_colResizeFrame) {
-    cancelAnimationFrame(_colResizeFrame);
-    _colResizeFrame = null;
+  if (columnLayoutFrame) {
+    cancelAnimationFrame(columnLayoutFrame);
+    columnLayoutFrame = null;
   }
-  if (_colResizeObserver) { _colResizeObserver.disconnect(); _colResizeObserver = null; }
+  if (columnLayoutObserver) { columnLayoutObserver.disconnect(); columnLayoutObserver = null; }
   if (bodyResizeObserver) { bodyResizeObserver.disconnect(); bodyResizeObserver = null; }
 });
 </script>
 
 <template>
   <div ref="fileManagerRef" class="file-manager" :class="{ 'is-native-drop-active': nativeDropActive }"
-    @click="closeContextMenu">
+    @click="closeContextMenu(); showColumnSettings = false">
     <div v-if="nativeDropActive" class="fm-native-drop-banner">
       <Upload :size="16" />
       <span>释放以上传 {{ nativeDropPathCount ? `${nativeDropPathCount} 个项目` : '文件' }} 到 {{ nativeDropTargetPath }}</span>
@@ -1882,25 +1749,36 @@ onUnmounted(() => {
           :action="manualRefresh" />
         <IconButton :icon="Upload" size="sm" aria-label="上传" :action="handleUpload" />
         <IconButton :icon="Download" size="sm" aria-label="下载" :action="() => handleDownload()" />
+        <div class="fm-column-options" @click.stop>
+          <IconButton :icon="SlidersHorizontal" size="sm" aria-label="设置显示列"
+            :active="showColumnSettings" :action="() => { showColumnSettings = !showColumnSettings; }" />
+          <div v-if="showColumnSettings" class="fm-column-menu">
+            <strong>显示附加信息</strong>
+            <label for="sftp-column-size">
+              <Checkbox id="sftp-column-size" v-model="visibleColumns.size" class="fm-column-check" />
+              <span>大小</span>
+            </label>
+            <label for="sftp-column-modified">
+              <Checkbox id="sftp-column-modified" v-model="visibleColumns.modified" class="fm-column-check" />
+              <span>修改时间</span>
+            </label>
+            <label for="sftp-column-permissions">
+              <Checkbox id="sftp-column-permissions" v-model="visibleColumns.permissions" class="fm-column-check" />
+              <span>权限</span>
+            </label>
+            <label for="sftp-column-owner">
+              <Checkbox id="sftp-column-owner" v-model="visibleColumns.ownerGroup" class="fm-column-check" />
+              <span>所有者</span>
+            </label>
+          </div>
+        </div>
         <IconButton :icon="X" size="sm" aria-label="关闭面板" :action="handleClosePanel" />
       </div>
     </div>
 
-    <div class="fm-toolbar" v-if="false">
-      <Button v-if="showBatchActions" size="sm" variant="outline" @click="batchDelete"
-        :disabled="batchState.running">批量删除</Button>
-      <Button v-if="showBatchActions" size="sm" variant="outline" @click="batchRename"
-        :disabled="batchState.running">批量重命名</Button>
-      <Button v-if="showBatchActions" size="sm" variant="outline" @click="batchChmod"
-        :disabled="batchState.running">批量权限</Button>
-      <Button v-if="showBatchActions" size="sm" variant="outline" @click="createFolder"
-        :disabled="batchState.running">新建文件夹</Button>
-      <span class="fm-stat" v-if="batchState.running">
-        {{ batchState.action }}中 {{ batchState.success + batchState.failed }}/{{ batchState.total }}
-      </span>
-      <span class="fm-stat" v-else>
-        {{ pager.totalKnown.value ? `共 ${pager.items.value.length}/${pager.total.value} 条` : `已加载 ${pager.items.value.length} 条` }}
-      </span>
+    <div class="fm-selection-info">
+      <strong :title="selectedInfoTitle">{{ selectedInfoTitle }}</strong>
+      <span :title="selectedInfoMeta">{{ selectedInfoMeta }}</span>
     </div>
 
     <div class="fm-content" ref="viewportRef" @contextmenu="onPanelContextMenu">
@@ -1910,49 +1788,27 @@ onUnmounted(() => {
       </div>
 
       <div v-else class="fm-table">
-        <div class="fm-table-header" ref="headerScrollRef">
-          <div class="fm-grid"
-            :style="{ width: (colPx.select + colPx.name + colPx.modified + colPx.size + colPx.permissions + colPx.ownerGroup) + 'px' }">
-            <div class="fm-cell fm-head" :class="{ 'fm-cell-hidden': !showSelectionColumn }"
-              :style="{ width: colPx.select + 'px' }"></div>
-            <div class="fm-cell fm-head fm-head-resizable" :style="{ width: colPx.name + 'px' }">
-              文件名
-              <span class="fm-col-resizer" :class="{ 'is-active': resizingColumnKey === 'name' }"
-                @mousedown="(event) => startColumnResize('name', event)"></span>
-            </div>
-            <div class="fm-cell fm-head fm-head-resizable" :style="{ width: colPx.modified + 'px' }">
-              修改时间
-              <span class="fm-col-resizer" :class="{ 'is-active': resizingColumnKey === 'modified' }"
-                @mousedown="(event) => startColumnResize('modified', event)"></span>
-            </div>
-            <div class="fm-cell align-right fm-head-resizable" :style="{ width: colPx.size + 'px' }">
-              大小
-              <span class="fm-col-resizer" :class="{ 'is-active': resizingColumnKey === 'size' }"
-                @mousedown="(event) => startColumnResize('size', event)"></span>
-            </div>
-            <div class="fm-cell fm-head fm-head-resizable" :style="{ width: colPx.permissions + 'px' }">
-              权限
-              <span class="fm-col-resizer" :class="{ 'is-active': resizingColumnKey === 'permissions' }"
-                @mousedown="(event) => startColumnResize('permissions', event)"></span>
-            </div>
-            <div class="fm-cell fm-head" :style="{ width: colPx.ownerGroup + 'px' }">
-              用户/组
-            </div>
+        <div class="fm-table-header">
+          <div class="fm-grid" :style="{ gridTemplateColumns: fileListColumns }">
+            <div class="fm-cell fm-head">文件名</div>
+            <div v-if="renderedColumns.size" class="fm-cell fm-head align-right">大小</div>
+            <div v-if="renderedColumns.modified" class="fm-cell fm-head">修改时间</div>
+            <div v-if="renderedColumns.permissions" class="fm-cell fm-head">权限</div>
+            <div v-if="renderedColumns.ownerGroup" class="fm-cell fm-head">用户/组</div>
           </div>
         </div>
 
-        <div class="fm-table-body" ref="bodyScrollRef" @scroll="onBodyScroll" @wheel="onTableWheel">
+        <div class="fm-table-body" ref="bodyScrollRef" @scroll="onBodyScroll">
           <div v-if="navigatingDir" class="fm-nav-loading-mask">
             <LoadingSpinner tip="正在加载目录..." />
           </div>
           <div v-else-if="netError" class="fm-list-state fm-list-error">{{ netError }}</div>
           <div v-else-if="!pager.loading.value && listItems.length === 0" class="fm-list-state">目录为空</div>
-          <div class="fm-body-inner"
-            :style="{ width: (colPx.select + colPx.name + colPx.modified + colPx.size + colPx.permissions + colPx.ownerGroup) + 'px', height: listVirtual.totalHeight.value + 'px' }">
+          <div class="fm-body-inner" :style="{ height: listVirtual.totalHeight.value + 'px' }">
             <div class="fm-virtual" :style="{ transform: `translateY(${listVirtual.translateY.value}px)` }">
               <ContextMenu v-for="row in visibleRows" :key="row.item.__draftFolder ? '__draft-folder-row' : (row.item.name + '-' + row.index)">
                 <ContextMenuTrigger as-child>
-                  <div :class="rowClass(row.item)"
+                  <div :class="rowClass(row.item)" :style="{ gridTemplateColumns: fileListColumns }"
                     :data-sftp-drop-path="dropTargetPathForRecord(row.item) || null"
                     @pointerdown="(event) => onFilePointerDown(event, row.item)"
                     @pointermove="onFilePointerMove"
@@ -1961,13 +1817,7 @@ onUnmounted(() => {
                     @lostpointercapture="onFilePointerEnd"
                     @click="(e) => handleRowClick(row.item, row.index, e)"
                     @dblclick="() => handleRowDoubleClick(row.item)">
-                    <div class="fm-cell" :class="{ 'fm-cell-hidden': !showSelectionColumn }"
-                      :style="{ width: colPx.select + 'px' }">
-                      <input v-if="showSelectionColumn" type="checkbox" :checked="selection.isSelected(row.item)"
-                        :disabled="row.item.__parent" @click.stop
-                        @change="(e) => handleRowClick(row.item, row.index, e)" />
-                    </div>
-                    <div class="fm-cell" :style="{ width: colPx.name + 'px' }">
+                    <div class="fm-cell">
                       <div class="fm-file-name">
                         <FileIcon :name="row.item.name" :path="joinRemotePath(currentPath, row.item.name)"
                           :is-directory="!!row.item.is_dir" :expanded="false" :size="16" />
@@ -1977,19 +1827,19 @@ onUnmounted(() => {
                             @click.stop @keydown="onDraftFolderKeydown"
                             @blur="() => submitCreateFolderDraft({ cancelIfEmpty: true })" />
                         </template>
-                        <span v-else class="fm-file-label">{{ row.item.__parent ? '..' : row.item.name }}</span>
+                        <span v-else class="fm-file-label" :title="row.item.name">{{ row.item.__parent ? '..' : row.item.name }}</span>
                       </div>
                     </div>
-                    <div class="fm-cell" :style="{ width: colPx.modified + 'px' }">
-                      {{ row.item.__draftFolder ? '' : localTime(row.item) }}
-                    </div>
-                    <div class="fm-cell align-right" :style="{ width: colPx.size + 'px' }">
+                    <div v-if="renderedColumns.size" class="fm-cell align-right">
                       {{ row.item.__draftFolder ? '' : formatEntrySize(row.item) }}
                     </div>
-                    <div class="fm-cell fm-mono" :style="{ width: colPx.permissions + 'px' }">
+                    <div v-if="renderedColumns.modified" class="fm-cell">
+                      {{ row.item.__draftFolder ? '' : localTime(row.item) }}
+                    </div>
+                    <div v-if="renderedColumns.permissions" class="fm-cell fm-mono">
                       {{ row.item.__draftFolder ? '' : permissionText(row.item) }}
                     </div>
-                    <div class="fm-cell" :style="{ width: colPx.ownerGroup + 'px' }">
+                    <div v-if="renderedColumns.ownerGroup" class="fm-cell">
                       {{ row.item.__draftFolder ? '' : ((row.item.owner || '-') + '/' + (row.item.group || '-')) }}
                     </div>
                   </div>
@@ -2017,11 +1867,6 @@ onUnmounted(() => {
         </div>
       </div>
     </div>
-
-    <div class="fm-bottom-scrollbar" ref="bottomScrollRef" @scroll="syncXFromBottom" style="display:none">
-      <div class="fm-bottom-scrollbar-inner"></div>
-    </div>
-
 
     <Dialog :open="editorVisible" @update:open="(v) => { if (!v) handleEditorModalCancel(); }">
       <DialogContent :show-close-button="false"
@@ -2133,8 +1978,7 @@ onUnmounted(() => {
   transform: translateX(-50%);
 }
 
-.fm-address,
-.fm-toolbar {
+.fm-address {
   flex-shrink: 0;
   padding: 6px 16px 8px;
 }
@@ -2154,7 +1998,7 @@ onUnmounted(() => {
   /* allow the input to grow and match session-list top behavior */
   flex: 1 1 auto;
   width: auto;
-  min-width: 140px;
+  min-width: 80px;
   max-width: none;
   height: 30px;
   border: 1px solid color-mix(in srgb, var(--app-border-shadow) 82%, transparent) !important;
@@ -2170,6 +2014,79 @@ onUnmounted(() => {
   display: flex;
   gap: 4px;
   align-items: center;
+}
+
+.fm-column-options {
+  position: relative;
+}
+
+.fm-column-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  display: flex;
+  width: 156px;
+  flex-direction: column;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid var(--app-border-shadow);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--app-bg-dialog) 96%, transparent);
+  box-shadow: var(--niri-shadow-dialog);
+  color: var(--app-text);
+  font-size: 11px;
+}
+
+.fm-column-menu strong {
+  font-size: 11px;
+}
+
+.fm-column-menu label {
+  display: flex;
+  min-height: 20px;
+  align-items: center;
+  gap: 6px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.fm-column-menu .fm-column-check {
+  width: 13px;
+  height: 13px;
+  border-radius: 3px;
+}
+
+.fm-column-menu .fm-column-check :deep(svg) {
+  width: 10px;
+  height: 10px;
+}
+
+.fm-selection-info {
+  display: flex;
+  min-width: 0;
+  flex: 0 0 38px;
+  flex-direction: column;
+  justify-content: center;
+  padding: 3px 10px 5px;
+  border-bottom: 1px solid color-mix(in srgb, var(--app-border-shadow) 62%, transparent);
+}
+
+.fm-selection-info strong,
+.fm-selection-info span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fm-selection-info strong {
+  color: var(--app-text);
+  font-size: 12px;
+}
+
+.fm-selection-info span {
+  color: var(--app-text-secondary);
+  font-size: 10px;
 }
 
 .fm-actions {
@@ -2221,24 +2138,10 @@ onUnmounted(() => {
   box-shadow: none !important;
 }
 
-.fm-toolbar {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  border-bottom: 1px solid var(--app-border-shadow);
-  flex-wrap: wrap;
-}
-
-.fm-stat {
-  color: var(--app-text);
-  opacity: 0.85;
-  font-size: 12px;
-}
-
 .fm-content {
   flex: 1;
   min-height: 0;
-  margin: 0 16px 12px;
+  margin: 0 8px 8px;
   display: flex;
   background: transparent;
 }
@@ -2276,8 +2179,9 @@ onUnmounted(() => {
 
 .fm-grid,
 .fm-row {
-  display: flex;
+  display: grid;
   align-items: center;
+  width: 100%;
 }
 
 .fm-head {
@@ -2285,39 +2189,6 @@ onUnmounted(() => {
   font-size: 13px;
   font-weight: 500;
   height: 28px;
-}
-
-.fm-head-resizable {
-  position: relative;
-}
-
-.fm-col-resizer {
-  position: absolute;
-  top: 0;
-  right: -3px;
-  width: 6px;
-  height: 100%;
-  cursor: col-resize;
-  z-index: 2;
-}
-
-.fm-col-resizer::before {
-  content: '';
-  position: absolute;
-  left: 2px;
-  top: 6px;
-  bottom: 6px;
-  width: 1px;
-  background: var(--app-border-shadow);
-  opacity: 0.9;
-}
-
-.fm-head-resizable:hover .fm-col-resizer::before,
-.fm-col-resizer.is-active::before {
-  background: var(--app-selection-bg);
-  width: 2px;
-  left: 1px;
-  opacity: 1;
 }
 
 .fm-table-body {
@@ -2430,12 +2301,6 @@ onUnmounted(() => {
   min-width: 0;
 }
 
-.fm-cell-hidden {
-  padding: 0;
-  min-width: 0;
-  overflow: hidden;
-}
-
 .fm-row,
 .fm-cell {
   transition: none;
@@ -2451,6 +2316,7 @@ onUnmounted(() => {
 
 .fm-file-name {
   display: flex;
+  width: 100%;
   align-items: center;
   gap: 6px;
   min-width: 0;
@@ -2491,21 +2357,6 @@ onUnmounted(() => {
   background: color-mix(in srgb, var(--app-bg-dialog) 42%, transparent);
   color: var(--app-text-muted);
   font-size: 12px;
-}
-
-.fm-bottom-scrollbar {
-  height: 14px;
-  margin: 0 8px 8px;
-  overflow-x: auto;
-  overflow-y: hidden;
-  background: transparent;
-  flex-shrink: 0;
-  scrollbar-width: thin;
-  scrollbar-color: var(--app-btn-border) transparent;
-}
-
-.fm-bottom-scrollbar-inner {
-  height: 1px;
 }
 
 .big-file-loading {

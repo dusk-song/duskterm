@@ -341,7 +341,7 @@ onMounted(async () => {
     theme: aceTheme(),
     readOnly: props.readonly,
     fontSize: 14,
-    fontFamily: "'Consolas', 'Cascadia Code', 'Fira Code', monospace",
+    fontFamily: "'Maple Mono', 'Microsoft YaHei Mono', 'SimSun', monospace",
     tabSize: 2,
     useSoftTabs: true,
     wrap: false,

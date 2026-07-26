@@ -462,7 +462,7 @@ const PHYSICAL_LINE_THRESHOLD_LARGE = 100000;
 const PHYSICAL_LINE_THRESHOLD_HUGE = 200000;
 const terminalThemeSettings = ref(loadTerminalThemeSettings());
 const CJK_MONO_FALLBACK_FONTS = '"Sarasa Mono SC", "Microsoft YaHei Mono", "SimSun", monospace';
-const TERMINAL_DEFAULT_FONT = '"Consolas"';
+const TERMINAL_DEFAULT_FONT = '"Maple Mono"';
 const TERMINAL_FONT_FALLBACKS = '"Cascadia Mono", "Courier New", ' + CJK_MONO_FALLBACK_FONTS;
 let metricsDirty = false;
 let metricsRafId = null;
@@ -560,7 +560,9 @@ const onTerminalThemeChanged = () => {
 
 const normalizeTerminalFontFamily = (configuredFontFamily) => {
   const value = String(configuredFontFamily || '').trim();
-  if (!value) return TERMINAL_DEFAULT_FONT;
+  if (!value || value === 'Consolas' || value === '"Consolas"' || value === "'Consolas'") {
+    return TERMINAL_DEFAULT_FONT;
+  }
   if (value.includes(',') || value.startsWith('"') || value.startsWith("'")) return value;
   return /\s/.test(value) ? `"${value.replace(/"/g, '\\"')}"` : value;
 };
