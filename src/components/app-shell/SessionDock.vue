@@ -57,9 +57,11 @@ const switchSession = (direction) => {
 <style scoped>
 .session-dock-wrap { display: flex; width: 100%; align-items: center; min-width: 0; pointer-events: none; }
 .session-current {
-  width: min(320px, 100%);
-  max-width: min(320px, 100%);
-  gap: 4px;
+  width: min(260px, 100%);
+  max-width: min(260px, 100%);
+  gap: 2px;
+  padding-right: 4px;
+  padding-left: 4px;
   font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
@@ -67,8 +69,8 @@ const switchSession = (direction) => {
 }
 .session-nav {
   display: inline-flex;
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
@@ -86,15 +88,17 @@ const switchSession = (direction) => {
 .session-nav:disabled { opacity: 0.32; }
 .session-drag-region { cursor: default; }
 .session-center {
+  position: relative;
   min-width: 0;
   flex: 1 1 auto;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  gap: 7px;
-  padding: 0 6px;
+  padding: 0 3px;
 }
 .session-state {
+  position: absolute;
+  left: 3px;
   width: 6px;
   height: 6px;
   border-radius: 50%;
@@ -105,6 +109,7 @@ const switchSession = (direction) => {
 .session-state.failed { background: var(--color-danger); }
 .session-identity {
   min-width: 0;
+  max-width: calc(100% - 22px);
   overflow: hidden;
   color: var(--app-text);
   text-align: center;

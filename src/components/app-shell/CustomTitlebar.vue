@@ -57,6 +57,18 @@ const menus = [
 
 const openKey = ref('');
 const dropdownPos = ref({ top: 0, left: 0 });
+const titlebarLeftRef = ref(null);
+const titlebarRightRef = ref(null);
+const titlebarSideClearance = ref(480);
+let titlebarSidesObserver = null;
+
+const updateTitlebarSideClearance = () => {
+  const leftWidth = titlebarLeftRef.value?.getBoundingClientRect().width || 0;
+  const rightWidth = titlebarRightRef.value?.getBoundingClientRect().width || 0;
+  // Includes the 5px titlebar edge padding and the 6px gap around the centered dock.
+  const next = Math.ceil((Math.max(leftWidth, rightWidth) + 11) * 2);
+  if (next > 0 && next !== titlebarSideClearance.value) titlebarSideClearance.value = next;
+};
 
 const closeMenu = () => { openKey.value = ''; };
 const itemChecked = (key) => ({
@@ -110,17 +122,24 @@ function onDocumentClick(event) {
 onMounted(() => {
   document.addEventListener('keydown', onKeydown, true);
   document.addEventListener('click', onDocumentClick, true);
+  titlebarSidesObserver = new ResizeObserver(updateTitlebarSideClearance);
+  if (titlebarLeftRef.value) titlebarSidesObserver.observe(titlebarLeftRef.value);
+  if (titlebarRightRef.value) titlebarSidesObserver.observe(titlebarRightRef.value);
+  updateTitlebarSideClearance();
 });
 onUnmounted(() => {
   document.removeEventListener('keydown', onKeydown, true);
   document.removeEventListener('click', onDocumentClick, true);
+  titlebarSidesObserver?.disconnect();
+  titlebarSidesObserver = null;
 });
 </script>
 
 <template>
   <header class="dusk-titlebar window-drag-region"
+    :style="{ '--titlebar-side-clearance': `${titlebarSideClearance}px` }"
     :data-tauri-drag-region="tauriDragRegion">
-    <div class="titlebar-left">
+    <div ref="titlebarLeftRef" class="titlebar-left">
       <DuskDock class="menu-dock" interactive>
         <img src="/tauri.svg" class="app-icon" alt="DuskTerm" draggable="false" />
         <button v-for="menu in menus" :key="menu.key" class="tb-menu-item" :class="{ open: openKey === menu.key }"
@@ -130,7 +149,7 @@ onUnmounted(() => {
     <div class="titlebar-center">
       <SessionDock />
     </div>
-    <div class="titlebar-right">
+    <div ref="titlebarRightRef" class="titlebar-right">
       <DuskDock class="utility-dock" interactive>
         <TransferDock embedded :expanded="props.transferVisible"
           @toggle="emit('toggle-transfer')" />
@@ -162,7 +181,7 @@ onUnmounted(() => {
 .titlebar-left, .titlebar-right { position: relative; z-index: 1; display: flex; align-items: center; min-width: max-content; gap: 6px; }
 .titlebar-left { justify-content: flex-start; }
 .titlebar-right { justify-content: flex-end; }
-.titlebar-center { position: absolute; z-index: 0; left: 50%; display: flex; width: min(320px, max(72px, calc(100% - 480px))); align-items: center; overflow: hidden; transform: translateX(-50%); pointer-events: none; min-width: 0; }
+.titlebar-center { position: absolute; z-index: 0; left: 50%; display: flex; width: min(260px, max(0px, calc(100% - var(--titlebar-side-clearance, 480px)))); min-width: 0; align-items: center; justify-content: center; overflow: hidden; transform: translateX(-50%); pointer-events: none; }
 .menu-dock { width: auto; max-width: none; flex: 0 0 auto; padding: 0 8px; }
 .app-icon { width: 17px; height: 17px; margin-right: 4px; flex: 0 0 auto; }
 .tb-menu-item, .tb-btn { height: 24px; border: 0; border-radius: 999px; color: var(--tb-text, var(--app-text)); background: transparent; cursor: default; }

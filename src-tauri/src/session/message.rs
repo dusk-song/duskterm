@@ -8,6 +8,7 @@ use crate::{
     },
     ssh::SshConfig,
     storage::SharedStorageState,
+    terminal_transfer::TerminalTransferControl,
     tunnel::{TunnelInfo, TunnelRequest, TunnelState},
 };
 
@@ -48,6 +49,10 @@ pub enum SessionMessage {
     CloseShellChannel {
         channel_id: String,
         respond_to: oneshot::Sender<Result<(), String>>,
+    },
+    ControlTerminalTransfer {
+        channel_id: Option<String>,
+        control: TerminalTransferControl,
     },
     Disconnect {
         sftp_state: SftpAppState,

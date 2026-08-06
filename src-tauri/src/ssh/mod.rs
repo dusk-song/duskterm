@@ -2,6 +2,7 @@ use std::future::Future;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -11,7 +12,7 @@ use crate::sftp::SftpAppState;
 use crate::ssh_algorithms::{
     self, ConnectAttemptError, NegotiationProfile, NegotiationProfileCache,
 };
-use crate::terminal_transfer::{TerminalTransferProbe, ZmodemDetector};
+use crate::terminal_transfer::{TerminalTransferControl, TerminalTransferRuntime};
 use crate::tunnel::TunnelState;
 use russh::keys::{check_known_hosts_path, HashAlg, PublicKey};
 use russh::Pty;
@@ -20,7 +21,9 @@ use russh::{client, ChannelMsg, Disconnect};
 use serialport::{available_ports, DataBits, FlowControl, Parity, StopBits};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
-use tokio::sync::mpsc::{channel, unbounded_channel, Receiver, Sender, UnboundedSender};
+use tokio::sync::mpsc::{
+    channel, unbounded_channel, Receiver, Sender, UnboundedReceiver, UnboundedSender,
+};
 use tokio::sync::{oneshot, Mutex as AsyncMutex};
 use zeroize::Zeroize;
 
@@ -77,6 +80,8 @@ pub struct TerminalRuntimeHandle {
     pub window_size_tx: UnboundedSender<(u32, u32)>,
     pub close_tx: UnboundedSender<()>,
     pub shared_session: SharedSshSessionSlot,
+    pub(crate) transfer_control_tx: Option<UnboundedSender<TerminalTransferControl>>,
+    pub(crate) transfer_owned: Arc<AtomicBool>,
     channel_lifecycle: SharedChannelLifecycle,
 }
 
@@ -102,6 +107,8 @@ pub(crate) fn create_terminal_runtime_channels() -> (
             window_size_tx,
             close_tx,
             shared_session,
+            transfer_control_tx: None,
+            transfer_owned: Arc::new(AtomicBool::new(false)),
             channel_lifecycle,
         },
         rx,
@@ -286,24 +293,6 @@ fn terminate_channel(
         emit_session_closed(app_handle, session_id, reason);
     }
     first
-}
-
-fn handle_terminal_transfer_probe(
-    app_handle: &AppHandle,
-    session_id: &str,
-    detector: &mut ZmodemDetector,
-    data: &[u8],
-) -> Option<Vec<u8>> {
-    match detector.inspect(data) {
-        TerminalTransferProbe::TerminalData(data) => Some(data),
-        TerminalTransferProbe::Detected(request, data) => {
-            let _ = app_handle.emit(
-                &format!("terminal-transfer-request-{}", session_id),
-                request,
-            );
-            Some(data)
-        }
-    }
 }
 
 fn default_terminal_modes() -> Vec<(Pty, u32)> {
@@ -1693,6 +1682,8 @@ async fn run_ssh_session_task(
     mut rx: SessionIoReceiver,
     mut resize_rx: SessionResizeReceiver,
     mut close_rx: SessionCloseReceiver,
+    mut transfer_rx: UnboundedReceiver<TerminalTransferControl>,
+    transfer_owned: Arc<AtomicBool>,
 ) {
     let started_at = Instant::now();
     let term_type = config.term_type.clone();
@@ -1867,7 +1858,10 @@ async fn run_ssh_session_task(
             started_at.elapsed().as_millis()
         ),
     );
-    let mut zmodem_detector = ZmodemDetector::new();
+    let mut transfer_runtime =
+        TerminalTransferRuntime::new(session_id.clone(), None, transfer_owned.clone());
+    let mut transfer_tick = tokio::time::interval(Duration::from_millis(50));
+    transfer_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut sent_packets = 0u64;
     let mut sent_bytes = 0u64;
     let mut received_packets = 0u64;
@@ -1876,6 +1870,9 @@ async fn run_ssh_session_task(
     loop {
         tokio::select! {
             Some(data) = rx.recv() => {
+                if transfer_owned.load(Ordering::Acquire) {
+                    continue;
+                }
                 if data.len() > 64 * 1024 {
                     let _ = app_handle.emit(
                         &format!("ssh-error-{}", session_id),
@@ -1914,13 +1911,15 @@ async fn run_ssh_session_task(
                     Some(ChannelMsg::Data { data }) => {
                         received_packets = received_packets.saturating_add(1);
                         received_bytes = received_bytes.saturating_add(data.len() as u64);
-                        if let Some(terminal_data) = handle_terminal_transfer_probe(
-                            &app_handle,
-                            &session_id,
-                            &mut zmodem_detector,
-                            data.as_ref(),
-                        ) {
-                            let _ = app_handle.emit(&format!("ssh-data-{}", session_id), terminal_data);
+                        match transfer_runtime.handle_remote(&app_handle, &channel, data.as_ref()).await {
+                            Ok(chunks) => {
+                                for terminal_data in chunks {
+                                    let _ = app_handle.emit(&format!("ssh-data-{}", session_id), terminal_data);
+                                }
+                            }
+                            Err(error) => {
+                                connection_log::append(&session_id, format!("ZMODEM runtime error: {}", error));
+                            }
                         }
                     }
                     Some(ChannelMsg::ExtendedData { data, ext }) => {
@@ -1977,6 +1976,21 @@ async fn run_ssh_session_task(
                     }
                 }
             }
+            Some(control) = transfer_rx.recv() => {
+                transfer_runtime.handle_control(&app_handle, &channel, control).await;
+            }
+            _ = transfer_tick.tick() => {
+                match transfer_runtime.on_tick(&app_handle, &channel).await {
+                    Ok(chunks) => {
+                        for terminal_data in chunks {
+                            let _ = app_handle.emit(&format!("ssh-data-{}", session_id), terminal_data);
+                        }
+                    }
+                    Err(error) => {
+                        connection_log::append(&session_id, format!("ZMODEM timer error: {}", error));
+                    }
+                }
+            }
             Some(_) = close_rx.recv() => {
                 connection_log::append(&session_id, "close requested by application");
                 let _ = channel.close().await;
@@ -1992,6 +2006,12 @@ async fn run_ssh_session_task(
                 break;
             },
         }
+    }
+
+    let terminal_tail = transfer_runtime.flush_terminal_data();
+    transfer_runtime.shutdown(&app_handle).await;
+    if !terminal_tail.is_empty() {
+        let _ = app_handle.emit(&format!("ssh-data-{}", session_id), terminal_tail);
     }
 
     connection_log::append(
@@ -2022,11 +2042,14 @@ pub async fn connect_ssh_legacy(
     config: SshConfig,
 ) -> Result<TerminalRuntimeHandle, String> {
     let session_id_clone = session_id.clone();
+    let supports_terminal_transfer = normalized_protocol(config.protocol.as_deref()) == "ssh";
 
     // Channels for communication with the SSH task
     let (tx, rx) = channel::<Vec<u8>>(SSH_INPUT_QUEUE_CAPACITY);
     let (resize_tx, resize_rx) = unbounded_channel::<(u32, u32)>();
     let (close_tx, close_rx) = unbounded_channel::<()>();
+    let (transfer_control_tx, transfer_rx) = unbounded_channel::<TerminalTransferControl>();
+    let transfer_owned = Arc::new(AtomicBool::new(false));
     let shared_session_slot: SharedSshSessionSlot = Arc::new(Mutex::new(None));
     let channel_lifecycle = Arc::new(Mutex::new(channel_state::ChannelLifecycle::default()));
     let runtime_handle = TerminalRuntimeHandle {
@@ -2034,6 +2057,8 @@ pub async fn connect_ssh_legacy(
         window_size_tx: resize_tx,
         close_tx,
         shared_session: shared_session_slot.clone(),
+        transfer_control_tx: supports_terminal_transfer.then_some(transfer_control_tx),
+        transfer_owned: transfer_owned.clone(),
         channel_lifecycle: channel_lifecycle.clone(),
     };
 
@@ -2087,6 +2112,8 @@ pub async fn connect_ssh_legacy(
             rx,
             resize_rx,
             close_rx,
+            transfer_rx,
+            transfer_owned,
         ));
     });
 
@@ -2100,9 +2127,12 @@ pub async fn connect_ssh_runtime(
     session_id: String,
     config: SshConfig,
 ) -> Result<crate::session::state::ManagedSshRuntime, String> {
+    let supports_terminal_transfer = normalized_protocol(config.protocol.as_deref()) == "ssh";
     let (tx, rx) = channel::<Vec<u8>>(SSH_INPUT_QUEUE_CAPACITY);
     let (resize_tx, resize_rx) = unbounded_channel::<(u32, u32)>();
     let (close_tx, close_rx) = unbounded_channel::<()>();
+    let (transfer_control_tx, transfer_rx) = unbounded_channel::<TerminalTransferControl>();
+    let transfer_owned = Arc::new(AtomicBool::new(false));
     let shared_session_slot: SharedSshSessionSlot = Arc::new(Mutex::new(None));
     let channel_lifecycle = Arc::new(Mutex::new(channel_state::ChannelLifecycle::default()));
     let handle = TerminalRuntimeHandle {
@@ -2110,6 +2140,8 @@ pub async fn connect_ssh_runtime(
         window_size_tx: resize_tx,
         close_tx,
         shared_session: shared_session_slot.clone(),
+        transfer_control_tx: supports_terminal_transfer.then_some(transfer_control_tx),
+        transfer_owned: transfer_owned.clone(),
         channel_lifecycle: channel_lifecycle.clone(),
     };
 
@@ -2133,6 +2165,8 @@ pub async fn connect_ssh_runtime(
             rx,
             resize_rx,
             close_rx,
+            transfer_rx,
+            transfer_owned,
         ))),
     };
 
@@ -2141,6 +2175,7 @@ pub async fn connect_ssh_runtime(
 
 async fn run_shared_shell_channel_task(
     app_handle: AppHandle,
+    workspace_session_id: String,
     channel_id: String,
     shared_session: SharedSshSession,
     term_type: Option<String>,
@@ -2148,6 +2183,8 @@ async fn run_shared_shell_channel_task(
     mut rx: SessionIoReceiver,
     mut resize_rx: SessionResizeReceiver,
     mut close_rx: SessionCloseReceiver,
+    mut transfer_rx: UnboundedReceiver<TerminalTransferControl>,
+    transfer_owned: Arc<AtomicBool>,
     channel_lifecycle: SharedChannelLifecycle,
     ready_tx: oneshot::Sender<Result<(), String>>,
 ) {
@@ -2240,7 +2277,13 @@ async fn run_shared_shell_channel_task(
             started_at.elapsed().as_millis()
         ),
     );
-    let mut zmodem_detector = ZmodemDetector::new();
+    let mut transfer_runtime = TerminalTransferRuntime::new(
+        workspace_session_id,
+        Some(channel_id.clone()),
+        transfer_owned.clone(),
+    );
+    let mut transfer_tick = tokio::time::interval(Duration::from_millis(50));
+    transfer_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut sent_packets = 0u64;
     let mut sent_bytes = 0u64;
     let mut received_packets = 0u64;
@@ -2248,6 +2291,9 @@ async fn run_shared_shell_channel_task(
     loop {
         tokio::select! {
             Some(data) = rx.recv() => {
+                if transfer_owned.load(Ordering::Acquire) {
+                    continue;
+                }
                 if data.len() > 64 * 1024 { continue; }
                 let write_len = data.len();
                 let write_kind = connection_log::describe_payload(&data);
@@ -2267,8 +2313,15 @@ async fn run_shared_shell_channel_task(
                 Some(ChannelMsg::Data { data }) => {
                     received_packets = received_packets.saturating_add(1);
                     received_bytes = received_bytes.saturating_add(data.len() as u64);
-                    if let Some(terminal_data) = handle_terminal_transfer_probe(&app_handle, &channel_id, &mut zmodem_detector, data.as_ref()) {
-                        let _ = app_handle.emit(&format!("ssh-data-{}", channel_id), terminal_data);
+                    match transfer_runtime.handle_remote(&app_handle, &channel, data.as_ref()).await {
+                        Ok(chunks) => {
+                            for terminal_data in chunks {
+                                let _ = app_handle.emit(&format!("ssh-data-{}", channel_id), terminal_data);
+                            }
+                        }
+                        Err(error) => {
+                            connection_log::append(&channel_id, format!("ZMODEM runtime error: {}", error));
+                        }
                     }
                 }
                 Some(ChannelMsg::ExtendedData { data, ext }) => {
@@ -2304,6 +2357,21 @@ async fn run_shared_shell_channel_task(
                     break;
                 }
             },
+            Some(control) = transfer_rx.recv() => {
+                transfer_runtime.handle_control(&app_handle, &channel, control).await;
+            }
+            _ = transfer_tick.tick() => {
+                match transfer_runtime.on_tick(&app_handle, &channel).await {
+                    Ok(chunks) => {
+                        for terminal_data in chunks {
+                            let _ = app_handle.emit(&format!("ssh-data-{}", channel_id), terminal_data);
+                        }
+                    }
+                    Err(error) => {
+                        connection_log::append(&channel_id, format!("ZMODEM timer error: {}", error));
+                    }
+                }
+            }
             Some(_) = close_rx.recv() => {
                 connection_log::append(&channel_id, "shared channel close requested by application");
                 let _ = channel.close().await;
@@ -2315,6 +2383,11 @@ async fn run_shared_shell_channel_task(
                 break;
             },
         }
+    }
+    let terminal_tail = transfer_runtime.flush_terminal_data();
+    transfer_runtime.shutdown(&app_handle).await;
+    if !terminal_tail.is_empty() {
+        let _ = app_handle.emit(&format!("ssh-data-{}", channel_id), terminal_tail);
     }
     connection_log::append(
         &channel_id,
@@ -2335,6 +2408,7 @@ async fn run_shared_shell_channel_task(
 pub async fn open_shared_shell_channel_runtime(
     app_handle: AppHandle,
     root_handle: &TerminalRuntimeHandle,
+    workspace_session_id: String,
     channel_id: String,
     term_type: Option<String>,
     login_script: Option<String>,
@@ -2348,17 +2422,22 @@ pub async fn open_shared_shell_channel_runtime(
     let (tx, rx) = channel::<Vec<u8>>(SSH_INPUT_QUEUE_CAPACITY);
     let (resize_tx, resize_rx) = unbounded_channel::<(u32, u32)>();
     let (close_tx, close_rx) = unbounded_channel::<()>();
+    let (transfer_control_tx, transfer_rx) = unbounded_channel::<TerminalTransferControl>();
+    let transfer_owned = Arc::new(AtomicBool::new(false));
     let channel_lifecycle = Arc::new(Mutex::new(channel_state::ChannelLifecycle::default()));
     let handle = TerminalRuntimeHandle {
         tx,
         window_size_tx: resize_tx,
         close_tx,
         shared_session: root_handle.shared_session.clone(),
+        transfer_control_tx: Some(transfer_control_tx),
+        transfer_owned: transfer_owned.clone(),
         channel_lifecycle: channel_lifecycle.clone(),
     };
     let (ready_tx, ready_rx) = oneshot::channel();
     let task = tokio::spawn(run_shared_shell_channel_task(
         app_handle,
+        workspace_session_id,
         channel_id,
         shared_session,
         term_type,
@@ -2366,6 +2445,8 @@ pub async fn open_shared_shell_channel_runtime(
         rx,
         resize_rx,
         close_rx,
+        transfer_rx,
+        transfer_owned,
         channel_lifecycle,
         ready_tx,
     ));
@@ -2452,6 +2533,9 @@ pub fn write_ssh_legacy(handle: &TerminalRuntimeHandle, data: String) -> Result<
 }
 
 pub fn write_ssh_runtime(handle: &TerminalRuntimeHandle, data: String) -> Result<(), String> {
+    if handle.transfer_owned.load(Ordering::Acquire) {
+        return Err("ZMODEM 传输期间终端输入已暂停".to_string());
+    }
     {
         let lifecycle = handle.channel_lifecycle.lock().unwrap();
         if !lifecycle.can_write() {

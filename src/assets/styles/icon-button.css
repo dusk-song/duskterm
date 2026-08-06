@@ -202,13 +202,13 @@ html.dark .icon-button img {
   max-width: min(260px, calc(100vw - 16px));
   padding: 5px 8px;
 
-  border: 0;
+  border: 1px solid var(--app-border-shadow);
   border-radius: 6px;
 
   background: var(--app-bg-dialog);
   color: var(--app-text);
 
-  box-shadow: var(--niri-shadow-dialog);
+  box-shadow: none;
 
   font-size: 12px;
   line-height: 1.35;

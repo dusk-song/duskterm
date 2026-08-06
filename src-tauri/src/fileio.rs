@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct LocalDropEntry {
+pub struct LocalPathEntry {
     pub path: String,
     pub name: String,
     pub is_file: bool,
@@ -15,7 +15,7 @@ pub struct LocalDropEntry {
 }
 
 #[tauri::command]
-pub fn inspect_local_drop_paths(paths: Vec<String>) -> Result<Vec<LocalDropEntry>, String> {
+pub fn inspect_local_paths(paths: Vec<String>) -> Result<Vec<LocalPathEntry>, String> {
     paths
         .into_iter()
         .map(|raw_path| {
@@ -28,7 +28,7 @@ pub fn inspect_local_drop_paths(paths: Vec<String>) -> Result<Vec<LocalDropEntry
                 .filter(|value| !value.is_empty())
                 .ok_or_else(|| format!("无法识别本地路径名称：{}", path.display()))?
                 .to_string();
-            Ok(LocalDropEntry {
+            Ok(LocalPathEntry {
                 path: path_to_string(&path)?,
                 name,
                 is_file: metadata.is_file(),

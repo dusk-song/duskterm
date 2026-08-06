@@ -1,0 +1,11 @@
+[package]
+name = "duskterm-terminal-transfer"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[lib]
+path = "src/lib.rs"
+
+[dev-dependencies]
+zmodem2 = { path = "../zmodem2" }

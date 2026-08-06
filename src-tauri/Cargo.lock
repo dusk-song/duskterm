@@ -1276,6 +1276,7 @@ dependencies = [
  "crossbeam-channel",
  "dirs",
  "drag",
+ "duskterm-terminal-transfer",
  "image",
  "libc",
  "portable-pty",
@@ -1296,7 +1297,12 @@ dependencies = [
  "windows 0.52.0",
  "windows-sys 0.61.2",
  "zeroize",
+ "zmodem2",
 ]
+
+[[package]]
+name = "duskterm-terminal-transfer"
+version = "0.1.0"
 
 [[package]]
 name = "dyn-clone"
@@ -7078,6 +7084,15 @@ name = "zmij"
 version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
+
+[[package]]
+name = "zmodem2"
+version = "0.7.2"
+dependencies = [
+ "bitflags 2.13.0",
+ "hex",
+ "thiserror 1.0.69",
+]
 
 [[package]]
 name = "zune-core"

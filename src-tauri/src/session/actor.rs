@@ -138,6 +138,7 @@ pub fn spawn_session_actor(
                         ssh::open_shared_shell_channel_runtime(
                             app_handle,
                             &root_runtime.handle,
+                            session_id.clone(),
                             channel_id.clone(),
                             term_type,
                             login_script,
@@ -192,6 +193,30 @@ pub fn spawn_session_actor(
                         Ok(())
                     };
                     let _ = respond_to.send(result);
+                }
+                SessionMessage::ControlTerminalTransfer {
+                    channel_id,
+                    control,
+                } => {
+                    let transfer_tx = match channel_id.as_deref() {
+                        Some(channel_id) => runtime_state
+                            .shell_channels
+                            .get(channel_id)
+                            .and_then(|runtime| runtime.handle.transfer_control_tx.clone()),
+                        None => runtime_state
+                            .ssh
+                            .as_ref()
+                            .and_then(|runtime| runtime.handle.transfer_control_tx.clone()),
+                    };
+                    if let Some(transfer_tx) = transfer_tx {
+                        if let Err(error) = transfer_tx.send(control) {
+                            error
+                                .0
+                                .respond(Err("ZMODEM 传输控制通道已关闭".to_string()));
+                        }
+                    } else {
+                        control.respond(Err("当前终端类型不支持 ZMODEM 传输".to_string()));
+                    }
                 }
                 SessionMessage::Disconnect {
                     sftp_state,

@@ -35,6 +35,7 @@ import { useSftpTransfersStore } from '@/stores/sftpTransfers';
 import { useSshStore } from '@/stores/ssh';
 import { formatLocalTime, formatPermissions, formatSize, joinRemotePath } from '@/types/sftp';
 import { invokeCommand } from '@/utils/ipc';
+import { classifyLocalUploadEntries, normalizeLocalUploadPaths } from '@/utils/sftpUpload';
 import {
   getNativeFileDragCapabilities,
   startNativeSftpFileDrag
@@ -152,6 +153,7 @@ const ctxRecord = ref(null);
 
 const navigatingDir = ref(false);
 const reconnectingSftp = ref(false);
+let sftpUploadQueue = Promise.resolve();
 
 const editorVisible = ref(false);
 const editorLoading = ref(false);
@@ -275,9 +277,11 @@ const createTransferTask = (sessionId, direction, fileName, localPath, remotePat
   transferStore.createTask({ sessionId, direction, fileName, localPath, remotePath })
 );
 
-const createUploadTask = (sessionId, filePath, remotePath) => {
-  const fileName = filePath.split(/[/\\]/).pop() || 'unknown';
-  return createTransferTask(sessionId, 'upload', fileName, filePath, remotePath);
+const createUploadTask = (sessionId, file, remotePath) => {
+  const fileName = file.name || file.path.split(/[/\\]/).pop() || 'unknown';
+  const task = createTransferTask(sessionId, 'upload', fileName, file.path, remotePath);
+  task.total = Number(file.size || 0);
+  return task;
 };
 
 const createDownloadTask = (sessionId, remotePath, localPath, fileName) => (
@@ -1081,10 +1085,29 @@ async function manualRefresh() {
   await loadFirstPage();
 }
 
-async function uploadLocalFiles(files, uploadDirectory = currentPath.value) {
-  const sessionId = props.sessionId;
-  if (!sessionId || !files.length) return;
+async function runSftpUploadBatch({ sources, uploadDirectory, sessionId }) {
+  const paths = normalizeLocalUploadPaths(sources);
+  if (!sessionId || props.sessionId !== sessionId || !paths.length) return;
+
+  let entries;
+  try {
+    entries = await invokeCommand('inspect_local_paths', { paths });
+  } catch (error) {
+    toast.error(`无法读取本地文件：${String(error)}`);
+    return;
+  }
+  if (props.sessionId !== sessionId) return;
+  const { files, directoryCount, unsupportedCount } = classifyLocalUploadEntries(entries);
+  if (directoryCount > 0) {
+    toast.info(`已忽略 ${directoryCount} 个文件夹，文件夹上传将在下一阶段支持`);
+  }
+  if (unsupportedCount > 0) {
+    toast.info(`已忽略 ${unsupportedCount} 个不支持的本地项目`);
+  }
+  if (!files.length) return;
+
   const ready = await ensureSftpReady();
+  if (props.sessionId !== sessionId) return;
   if (!ready) {
     toast.error('SFTP 会话不可用，请重试连接');
     return;
@@ -1092,11 +1115,7 @@ async function uploadLocalFiles(files, uploadDirectory = currentPath.value) {
 
   const tasks = [];
   for (const file of files) {
-    const path = typeof file === 'string' ? file : file.path;
-    const name = typeof file === 'string'
-      ? (file.split(/[/\\]/).pop() || 'unknown')
-      : (file.name || path.split(/[/\\]/).pop() || 'unknown');
-    const remotePath = joinRemotePath(uploadDirectory, name);
+    const remotePath = joinRemotePath(uploadDirectory, file.name);
 
     let shouldUpload = true;
     try {
@@ -1112,7 +1131,7 @@ async function uploadLocalFiles(files, uploadDirectory = currentPath.value) {
     }
 
     if (!shouldUpload) continue;
-    tasks.push(createUploadTask(sessionId, path, remotePath));
+    tasks.push(createUploadTask(sessionId, file, remotePath));
   }
 
   if (!tasks.length) {
@@ -1128,14 +1147,24 @@ async function uploadLocalFiles(files, uploadDirectory = currentPath.value) {
   }
 }
 
+function scheduleSftpUpload(sources, uploadDirectory = currentPath.value) {
+  const request = {
+    sources,
+    uploadDirectory,
+    sessionId: props.sessionId,
+  };
+  const scheduled = sftpUploadQueue.then(
+    () => runSftpUploadBatch(request),
+    () => runSftpUploadBatch(request),
+  );
+  sftpUploadQueue = scheduled.catch(() => {});
+  return scheduled;
+}
+
 async function handleUpload() {
   const selected = await open({ multiple: true, directory: false });
   if (!selected) return;
-  const filePaths = Array.isArray(selected) ? selected : [selected];
-  const files = filePaths
-    .map(item => (typeof item === 'string' ? item : item?.path))
-    .filter(Boolean);
-  await uploadLocalFiles(files);
+  await scheduleSftpUpload(selected);
 }
 
 function parentSftpPath(path) {
@@ -1161,14 +1190,7 @@ function resolveNativeDropTarget(position) {
 }
 
 async function handleNativeFileDrop({ paths, targetPath }) {
-  const entries = await invokeCommand('inspect_local_drop_paths', { paths });
-  const files = entries.filter(entry => entry.isFile);
-  const directoryCount = entries.filter(entry => entry.isDir).length;
-  if (directoryCount > 0) {
-    toast.info(`已忽略 ${directoryCount} 个文件夹，文件夹拖拽将在下一阶段支持`);
-  }
-  if (!files.length) return;
-  await uploadLocalFiles(files, targetPath);
+  await scheduleSftpUpload(paths, targetPath);
 }
 
 async function handleDownload(records = selectedRecords.value) {

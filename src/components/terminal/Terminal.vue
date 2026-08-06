@@ -32,6 +32,7 @@ import { useTheme } from '@/composables/useTheme';
 import { useCommandKnowledgeStore } from '@/stores/commandKnowledge';
 import { useSecurityStore } from '@/stores/security';
 import { useSshStore } from '@/stores/ssh';
+import { useTransfersStore } from '@/stores/transfers';
 import { invokeCommand, listenEvent } from '@/utils/ipc';
 import { findMatchedCommandInPayload, matchSensitiveCommand } from '@/utils/sensitiveCommand';
 import { getSessionSyncBadgeState, SYNC_INPUT_CHANNELS_STORAGE_KEY } from '@/utils/syncInputChannels';
@@ -64,12 +65,12 @@ const _termSettings = loadTerminalThemeSettings();
 const lineNumbersEnabled = ref(_termSettings.showLineNumbers !== false); // default true unless explicitly false
 const reconnectingAfterDisconnect = ref(false);
 const reconnectPromptShown = ref(false);
-const terminalTransferRequest = ref(null);
 const lineNumberRows = ref([]);
 const lineNumberGutterWidth = ref('4ch');
 const lineNumberRowHeightPx = ref(18);
 const showLineNumberGutter = computed(() => lineNumbersEnabled.value);
 const sshStore = useSshStore();
+const transferStore = useTransfersStore();
 const commandKnowledgeStore = useCommandKnowledgeStore();
 const securityStore = useSecurityStore();
 const { isDark } = useTheme();
@@ -151,6 +152,7 @@ const currentSession = computed(() => sshStore.sessions.find(s => s.id === props
 const sessionName = computed(() => currentSession.value?.name || 'Unknown');
 const isSerialSession = computed(() => String(currentSession.value?.config?.protocol || '').toLowerCase() === 'serial');
 const isLocalSession = computed(() => String(currentSession.value?.config?.protocol || '').toLowerCase() === 'local');
+const terminalTransferOwned = computed(() => transferStore.isTerminalOwned(props.sessionId));
 
 const serialPreferenceKey = () => {
   const config = currentSession.value?.config || {};
@@ -245,6 +247,7 @@ const openSecurityModal = (matched, data) => {
 };
 
 function sendData(data) {
+  if (terminalTransferOwned.value) return;
   const session = currentSession.value;
   if (session && (session.status === 'connected' || session.status === 'connecting')) {
     const command = session.isSplitChild ? 'write_ssh_shell_channel' : 'write_ssh';
@@ -261,17 +264,6 @@ const formatCloseReason = (reason) => {
     return text || '本地 Shell 已关闭。';
   }
   return text ? `Connection closed by remote host (${text}).` : 'Connection closed by remote host.';
-};
-
-const handleTerminalTransferRequest = (request) => {
-  terminalTransferRequest.value = request || null;
-  if (request?.protocol === 'zmodem') {
-    toast.info('暂不支持 ZMODEM，请使用 SFTP 文件面板上传或下载文件');
-  }
-};
-
-const dismissTerminalTransferUnsupported = () => {
-  terminalTransferRequest.value = null;
 };
 
 async function reconnectAfterDisconnect() {
@@ -431,7 +423,6 @@ let unlistenDebug = null;
 let unlistenConnected = null;
 let unlistenClosed = null;
 let unlistenError = null;
-let unlistenTerminalTransferRequest = null;
 let unlistenSerialDataSent = null;
 let resizeObserver = null;
 let textDecoder = new TextDecoder('utf-8'); // Default
@@ -2112,6 +2103,7 @@ onMounted(async () => {
   const config = session?.config || {};
 
   if (cached) {
+    safeUnlisten(cached.unlistenTerminalTransferRequest);
     term = cached.term;
     fitAddon = cached.fitAddon;
     searchAddon = cached.searchAddon;
@@ -2126,7 +2118,6 @@ onMounted(async () => {
     unlistenConnected = cached.unlistenConnected;
     unlistenClosed = cached.unlistenClosed;
     unlistenError = cached.unlistenError;
-    unlistenTerminalTransferRequest = cached.unlistenTerminalTransferRequest;
     unlistenSerialDataSent = cached.unlistenSerialDataSent;
     textDecoder = cached.textDecoder || textDecoder;
 
@@ -2248,6 +2239,7 @@ onMounted(async () => {
     // Handle user input
     termDataDisposable = term.onData((data) => {
       try {
+        if (terminalTransferOwned.value) return;
         const session = sshStore.sessions.find(s => s.id === props.sessionId);
         const isConnected = session?.status === 'connected';
 
@@ -2521,11 +2513,6 @@ onMounted(async () => {
       scheduleLineMetrics();
     });
 
-    unlistenTerminalTransferRequest = await listenEvent(
-      `terminal-transfer-request-${props.sessionId}`,
-      handleTerminalTransferRequest
-    );
-
     unlistenSerialDataSent = await listenEvent(`serial-data-sent-${props.sessionId}`, (payload) => {
       if (Array.isArray(payload)) {
         recordSerialSend(textDecoder.decode(new Uint8Array(payload)), payload.length);
@@ -2576,7 +2563,6 @@ onMounted(async () => {
       unlistenConnected,
       unlistenClosed,
       unlistenError,
-      unlistenTerminalTransferRequest,
       unlistenSerialDataSent,
       textDecoder
     });
@@ -2697,14 +2683,12 @@ onUnmounted(() => {
   safeUnlisten(unlistenConnected);
   safeUnlisten(unlistenClosed);
   safeUnlisten(unlistenError);
-  safeUnlisten(unlistenTerminalTransferRequest);
   safeUnlisten(unlistenSerialDataSent);
   unlistenData = null;
   unlistenDebug = null;
   unlistenConnected = null;
   unlistenClosed = null;
   unlistenError = null;
-  unlistenTerminalTransferRequest = null;
   unlistenSerialDataSent = null;
   // Always clear cache on unmount so next mount creates fresh bindings.
   // KeepAlive page switches use onDeactivated/onActivated, not onUnmounted.
@@ -2749,6 +2733,9 @@ onUnmounted(() => {
 <template>
   <div ref="terminalWrapperRef" class="terminal-wrapper">
     <div class="terminal-main">
+        <div v-if="terminalTransferOwned" class="terminal-transfer-overlay">
+          ZMODEM 传输中 · 终端输入已暂停
+        </div>
         <div v-if="showLineNumberGutter" ref="lineNumberGutterRef" class="line-number-gutter"
           :style="{ width: lineNumberGutterWidth }">
         <div v-for="(lineNo, index) in lineNumberRows" :key="`line-no-${index}-${lineNo || 'wrap'}`"
@@ -2822,25 +2809,6 @@ onUnmounted(() => {
         <X :size="15" stroke-width="1.9" />
       </button>
     </div>
-
-    <Dialog :open="!!terminalTransferRequest" @update:open="(v) => { if (!v) dismissTerminalTransferUnsupported(); }">
-      <DialogContent class="max-w-md">
-        <DialogHeader>
-          <DialogTitle>暂不支持 ZMODEM</DialogTitle>
-        </DialogHeader>
-        <div class="px-6 pb-4 text-sm terminal-transfer-dialog">
-          <div class="terminal-transfer-kind">
-            {{ terminalTransferRequest?.direction === 'sendToRemote' ? '检测到 rz 上传请求' : '检测到 sz 下载请求' }}
-          </div>
-          <p class="terminal-transfer-message">
-            当前版本暂不支持 ZMODEM 文件传输。请使用 SFTP 文件面板上传或下载文件。
-          </p>
-        </div>
-        <DialogFooter>
-          <Button @click="dismissTerminalTransferUnsupported">知道了</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
 
     <Dialog :open="securityModalVisible" @update:open="(v) => { if (!v) handleSecurityCancel(); }">
       <DialogContent class="max-w-lg">
@@ -2925,6 +2893,21 @@ onUnmounted(() => {
   display: flex;
   align-items: stretch;
   background: transparent;
+}
+
+.terminal-transfer-overlay {
+  position: absolute;
+  z-index: 5;
+  top: 8px;
+  right: 50px;
+  padding: 5px 9px;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 38%, var(--app-border-shadow));
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--app-bg-dialog) 92%, transparent);
+  color: var(--app-text);
+  box-shadow: var(--niri-shadow-panel);
+  font-size: 12px;
+  pointer-events: none;
 }
 
 .line-number-gutter {
@@ -3166,28 +3149,6 @@ onUnmounted(() => {
   border-color: color-mix(in srgb, var(--color-primary) 45%, transparent);
   background: color-mix(in srgb, var(--color-primary) 14%, transparent);
   color: var(--app-text);
-}
-
-.terminal-transfer-dialog {
-  color: var(--app-text);
-}
-
-.terminal-transfer-kind {
-  display: inline-flex;
-  align-items: center;
-  height: 24px;
-  padding: 0 8px;
-  border: 1px solid var(--app-border-shadow);
-  border-radius: 6px;
-  color: var(--app-text);
-  background: color-mix(in srgb, var(--app-text) 6%, transparent);
-  font-weight: 600;
-}
-
-.terminal-transfer-message {
-  margin-top: 10px;
-  color: var(--app-text-muted);
-  line-height: 1.6;
 }
 
 .quick-hint-panel {

@@ -83,6 +83,9 @@ pub fn run() {
             ssh::write_ssh_shell_channel,
             ssh::resize_ssh_shell_channel,
             ssh::close_ssh_shell_channel,
+            terminal_transfer::accept_terminal_transfer,
+            terminal_transfer::reject_terminal_transfer,
+            terminal_transfer::cancel_terminal_transfer,
             storage::load_sessions,
             storage::clear_recent_sessions,
             storage::trim_recent_sessions,
@@ -133,7 +136,7 @@ pub fn run() {
             fileio::save_text_file,
             fileio::save_binary_file,
             fileio::append_binary_file,
-            fileio::inspect_local_drop_paths,
+            fileio::inspect_local_paths,
             fileio::import_desktop_pet_asset
         ])
         .run(tauri::generate_context!())

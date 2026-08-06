@@ -1,6 +1,7 @@
 import { confirm } from '@/composables/useConfirm';
 import { toast } from '@/composables/useToast';
 import { useCommandKnowledgeStore } from '@/stores/commandKnowledge';
+import { useTransfersStore } from '@/stores/transfers';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { invokeCommand } from '../utils/ipc';
 import { matchSensitiveCommand, sanitizeCommandText } from '../utils/sensitiveCommand';
@@ -22,6 +23,7 @@ const BROADCAST_MAX_PAYLOAD_BYTES = 4096;
 
 export function useInputRouter({ sshStore }) {
   const commandKnowledgeStore = useCommandKnowledgeStore();
+  const transferStore = useTransfersStore();
   const syncChannels = ref([]);
   const selectedSyncChannelId = ref('');
   const sessionChannelMap = ref({});
@@ -354,8 +356,10 @@ export function useInputRouter({ sshStore }) {
     if (!channel?.broadcastEnabled) return;
 
     const targets = Array.isArray(explicitTargets)
-      ? explicitTargets.filter((id) => id && id !== sourceSessionId)
-      : (channel.connectedIds || []).filter((id) => id !== sourceSessionId);
+      ? explicitTargets.filter((id) => id && id !== sourceSessionId && !transferStore.isTerminalOwned(id))
+      : (channel.connectedIds || []).filter((id) => (
+        id !== sourceSessionId && !transferStore.isTerminalOwned(id)
+      ));
     if (!targets.length) return;
 
     syncStats.value = {
@@ -480,6 +484,7 @@ export function useInputRouter({ sshStore }) {
     if (!sourceSessionId || typeof payload !== 'string' || !payload.length) {
       return;
     }
+    if (transferStore.isTerminalOwned(sourceSessionId)) return;
 
     try {
       await writeSessionInput(sourceSessionId, payload);
@@ -497,12 +502,15 @@ export function useInputRouter({ sshStore }) {
 
   const routeBroadcastInput = async (sourceSessionId, payload) => {
     if (!sourceSessionId || !payload || typeof payload !== 'string') return false;
+    if (transferStore.isTerminalOwned(sourceSessionId)) return true;
 
     const channel = resolveRoutingChannel(sourceSessionId);
     if (!channel?.broadcastEnabled) return false;
     if (!canRouteSourceWithSync(sourceSessionId)) return false;
 
-    const targets = (channel.connectedIds || []).filter((id) => id !== sourceSessionId);
+    const targets = (channel.connectedIds || []).filter((id) => (
+      id !== sourceSessionId && !transferStore.isTerminalOwned(id)
+    ));
     const resolvedPayload = resolveBroadcastPayload(sourceSessionId, payload, normalizeSendMode(channel.sendMode));
 
     if (!resolvedPayload) {
@@ -515,6 +523,9 @@ export function useInputRouter({ sshStore }) {
     if (blocked) {
       return true;
     }
+    // The sensitive-command confirmation can stay open while ZMODEM claims the
+    // source terminal. Do not let that stale input reach the source or peers.
+    if (transferStore.isTerminalOwned(sourceSessionId)) return true;
 
     await writeSourceInput(sourceSessionId, payload);
 
@@ -531,6 +542,11 @@ export function useInputRouter({ sshStore }) {
     const panelId = event?.detail?.panelId;
     const payload = event?.detail?.payload;
     const respond = event?.detail?.respond;
+
+    if (transferStore.isTerminalOwned(panelId)) {
+      if (typeof respond === 'function') respond({ handled: true });
+      return;
+    }
 
     if (!canRouteSourceWithSync(panelId)) {
       if (typeof respond === 'function') respond({ handled: false });

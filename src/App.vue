@@ -37,19 +37,20 @@ const TiledPanel = defineAsyncComponent(() => import('./components/terminal/Tile
 const TunnelModal = defineAsyncComponent(() => import('./components/tunnel/TunnelModal.vue'));
 // useMenuHandler removed — CustomTitlebar handles menus directly
 import { usePanelLayout } from './composables/usePanelLayout';
+import { useTerminalTransferCoordinator } from './composables/useTerminalTransferCoordinator';
 import { useTerminalConnection } from './composables/useTerminalConnection';
 import { useTerminalPanels } from './composables/useTerminalPanels';
 import { useTheme } from './composables/useTheme';
 import { useWindowInteraction } from './composables/useWindowInteraction';
 import { createSessionBooleanState, resolveFocusedSessionId } from './utils/sftpPanelState';
-import { useSftpTransfersStore } from './stores/sftpTransfers';
+import { useTransfersStore } from './stores/transfers';
 import { useSshStore } from './stores/ssh';
 import { invokeCommand, listenEvent } from './utils/ipc';
 import { loadMainUiSettings, normalizeMainUiSettings, saveMainUiSettings } from './utils/mainUi';
 import { getPreferenceDefaults, loadPreference } from './utils/preferences';
 
 const sshStore = useSshStore();
-const sftpTransfersStore = useSftpTransfersStore();
+const transferStore = useTransfersStore();
 const { theme, setTheme } = useTheme();
 
 // Native menu handling removed — CustomTitlebar handles menus directly
@@ -214,6 +215,15 @@ const closeTransferPanel = () => {
   transferPanelVisible.value = false;
   transferPanelExpanded.value = false;
 };
+watch(
+  () => transferStore.panelOpenRequestVersion,
+  (version, previousVersion) => {
+    if (version <= previousVersion) return;
+    transferPanelVisible.value = true;
+    transferPanelExpanded.value = true;
+  },
+);
+useTerminalTransferCoordinator({ transferStore });
 const showSftpPanel = computed({
   get: () => activeToolPanel.value === 'sftp',
   set: (visible) => {
@@ -1051,7 +1061,7 @@ const refreshMainUiSettings = (event) => {
 onMounted(async () => {
   const unlistenSshHostkey = await listenEvent('ssh-hostkey-request', showHostkeyPrompt);
   const unlistenSftpHostkey = await listenEvent('sftp-hostkey-request', showHostkeyPrompt);
-  unlistenSftpProgress = await listenEvent('sftp-progress', sftpTransfersStore.applyProgress);
+  unlistenSftpProgress = await listenEvent('sftp-progress', transferStore.applyProgress);
   unlistenHostkey = () => {
     unlistenSshHostkey?.();
     unlistenSftpHostkey?.();

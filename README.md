@@ -25,12 +25,11 @@
 | 🖥️ 多协议终端 | 支持 SSH、Telnet、Serial，并可快速启动 PowerShell、CMD 等本地终端。 |
 | 🗂️ 会话管理 | 支持会话保存、搜索、导入导出、最近访问，以及嵌套分组、排序、置顶和锁定。 |
 | 🔑 SSH 连接能力 | 支持密码或私钥认证、登录脚本、SOCKS5 / HTTP 代理、跳板机和主机密钥确认。 |
-| 📂 SFTP 文件管理 | 支持目录浏览、上传下载、拖放传输、全局进度、重命名、删除、权限修改和远程文本编辑。 |
+| 📂 文件管理与传输 | 支持 SFTP 文件管理、拖放上传、ZMODEM `rz` / `sz` 传输，以及统一的全局传输列表。 |
 | 🧩 多终端工作区 | 支持多标签、水平/垂直分屏、面板拖动排序、会话总览和多会话同步输入。 |
 | 🔀 端口隧道 | 支持本地转发、远程转发和动态 SOCKS 代理，可保存配置并独立启停。 |
 | 📚 命令知识库 | 支持命令分类、搜索、导入导出、插入或执行，并可对敏感命令二次确认。 |
 | 🔐 安全与存储 | 凭据使用 AES-256-GCM 加密保存，支持 `known_hosts` 校验、敏感命令拦截和应用锁屏。 |
-| 📊 状态监控 | 提供远程 CPU、内存、磁盘和网络状态展示，以及可配置的底部状态栏。 |
 | 🎨 个性化 | 支持终端主题、字体、背景图片、快捷键和可配置桌宠。 |
 
 ### 终端与连接
@@ -41,10 +40,14 @@
 - SSH 工作区内的分屏终端共享底层连接，同时保持独立 Shell Channel、输入和尺寸状态。
 - 同步输入以频道组织多个会话，可选择目标终端并统一发送输入。
 
-### SFTP 文件传输
+### 文件管理与传输
 
-- 支持从系统文件管理器拖入本地文件进行上传，也支持通过文件选择器手动上传和下载。
-- 全局传输列表展示进度、速率、预计剩余时间及任务状态，关闭 SFTP 面板不会隐藏正在执行的任务。
+- SFTP 文件管理器支持上传、下载、重命名、删除、权限修改、属性查看和远程文本编辑。
+- 文件选择器与系统文件拖入共用同一套 SFTP 上传调度流程，统一执行路径检查、任务创建和批次上传。
+- SSH 终端支持通过远端 `rz` 选择本地文件上传，也支持通过 `sz <file>` 选择本地目录下载。
+- SFTP 与 ZMODEM 共用全局传输列表，统一展示方向、状态、进度、速率和预计剩余时间；传输开始时会自动展开面板。
+- 传输列表支持全部、进行中和失败筛选。进行中的任务可以取消，完成的下载可以在系统文件管理器中定位，完成的上传可以快速进入对应远端目录。
+- ZMODEM 文件数据由 Rust 后端直接在 SSH 字节流与本地文件之间传输；传输期间暂停对应终端输入，结束或取消后自动恢复终端。
 - 文件管理器支持分页与虚拟滚动、终端当前目录跟随、远程文件属性查看和文本编辑。
 - Windows 支持将 SFTP 面板中的远程文件直接拖到资源管理器等文件接收目标；虚拟文件内容使用系统异步拖放协议传输，放下文件后不会因大文件下载持续占用界面线程。
 - 拖出下载时，Windows 不会向源应用返回接收方最终保存路径，因此传输列表将目标显示为“系统拖放位置”；文件实际保存在用户放下文件的位置。
@@ -52,8 +55,10 @@
 
 ### 当前限制
 
-- ZMODEM 尚未开放；终端检测到相关传输请求时会提示改用 SFTP。
-- SFTP、远程监控和端口隧道仅适用于具备相应能力的 SSH 会话，本地、Telnet 和串口会话不会显示不支持的入口。
+- ZMODEM 首版仅支持 SSH 主终端和共享 SSH Shell Channel，并要求远端已经安装可用的 `rz` / `sz` 工具。
+- 传输任务暂不支持暂停、恢复、自动重试和断点续传；进行中的任务可以取消。
+- SFTP 上传当前只接收文件，选择或拖入文件夹时会忽略该文件夹。
+- SFTP、ZMODEM 和端口隧道仅适用于具备相应能力的 SSH 会话，本地、Telnet 和串口会话不会显示不支持的入口。
 - 远程文件拖出当前仅在 Windows 上可用。
 
 ## 🖼️ 界面预览
@@ -74,7 +79,7 @@
 | 前端 | Vue 3、Composition API、Pinia |
 | UI 与样式 | Tailwind CSS、shadcn-vue、reka-ui、Lucide |
 | 终端 | xterm.js、portable-pty |
-| SSH / SFTP | russh、russh-sftp |
+| SSH / SFTP / ZMODEM | russh、russh-sftp、zmodem2 |
 | 文件编辑 | Ace Editor |
 | 表格与树 | TanStack Table、he-tree |
 | 系统能力 | serialport、Windows COM / OLE |
@@ -148,6 +153,13 @@ cd src-tauri
 cargo check
 ```
 
+运行终端传输核心与 ZMODEM 协议测试：
+
+```bash
+cargo test --manifest-path src-tauri/crates/terminal-transfer-core/Cargo.toml
+cargo test --manifest-path src-tauri/crates/zmodem2/Cargo.toml
+```
+
 ## 📁 项目结构
 
 ```text
@@ -168,21 +180,24 @@ src/
   utils/               IPC、终端、主题、拖放及格式化工具
 
 src-tauri/
+  crates/
+    terminal-transfer-core/ ZMODEM 探测、终端字节流复用与恢复状态机
+    zmodem2/               隔离维护的 ZMODEM 协议实现与兼容性补丁
   src/
     native_drag/       Windows 本地文件与 SFTP 虚拟文件拖放
     session/           会话监督与运行时管理
     sftp/              SFTP 后端能力
     ssh/               SSH 连接、Shell Channel 与会话管理
     storage/           本地加密存储与数据持久化
+    terminal_transfer/ ZMODEM 运行时、文件落盘与同名处理
     tunnel/            端口隧道能力
     background.rs      背景图片导入与缓存
     local_terminal.rs  本地 PTY 终端
-    terminal_transfer.rs 终端文件传输请求探测
+    terminal_transfer.rs 终端传输命令、事件与公共数据模型
   tauri.conf.json      Tauri 应用配置
 
 docs/
-  images/              README 截图与宣传图片
-
+  images/                              README 截图与宣传图片
 ```
 
 ## 🤝 贡献

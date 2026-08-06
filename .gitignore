@@ -29,6 +29,8 @@ dist-ssr
 .claude/
 .superpowers/
 tests/
+!src-tauri/crates/zmodem2/tests/
+!src-tauri/crates/zmodem2/tests/**
 .agents/
 design-system/
 landing/

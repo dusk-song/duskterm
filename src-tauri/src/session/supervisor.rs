@@ -11,6 +11,7 @@ use crate::{
     },
     ssh::SshConfig,
     storage::SharedStorageState,
+    terminal_transfer::{TerminalTransferControl, TerminalTransferSelection},
     tunnel::{self, TunnelInfo, TunnelRequest, TunnelState},
 };
 
@@ -333,6 +334,74 @@ impl SessionSupervisor {
             .map_err(|_| "Failed to send close shell channel message".to_string())?;
         rx.await
             .map_err(|_| "Session actor dropped close shell channel response".to_string())?
+    }
+
+    pub async fn accept_terminal_transfer(
+        &self,
+        workspace_session_id: String,
+        channel_id: Option<String>,
+        request_id: String,
+        selection: TerminalTransferSelection,
+    ) -> Result<(), String> {
+        let actor = self.get_actor(&workspace_session_id)?;
+        let (respond_to, rx) = oneshot::channel();
+        actor
+            .sender
+            .send(SessionMessage::ControlTerminalTransfer {
+                channel_id,
+                control: TerminalTransferControl::Accept {
+                    request_id,
+                    selection,
+                    respond_to,
+                },
+            })
+            .map_err(|_| "Failed to send ZMODEM accept message".to_string())?;
+        rx.await
+            .map_err(|_| "ZMODEM runtime dropped accept response".to_string())?
+    }
+
+    pub async fn reject_terminal_transfer(
+        &self,
+        workspace_session_id: String,
+        channel_id: Option<String>,
+        request_id: String,
+    ) -> Result<(), String> {
+        let actor = self.get_actor(&workspace_session_id)?;
+        let (respond_to, rx) = oneshot::channel();
+        actor
+            .sender
+            .send(SessionMessage::ControlTerminalTransfer {
+                channel_id,
+                control: TerminalTransferControl::Reject {
+                    request_id,
+                    respond_to,
+                },
+            })
+            .map_err(|_| "Failed to send ZMODEM reject message".to_string())?;
+        rx.await
+            .map_err(|_| "ZMODEM runtime dropped reject response".to_string())?
+    }
+
+    pub async fn cancel_terminal_transfer(
+        &self,
+        workspace_session_id: String,
+        channel_id: Option<String>,
+        operation_id: String,
+    ) -> Result<(), String> {
+        let actor = self.get_actor(&workspace_session_id)?;
+        let (respond_to, rx) = oneshot::channel();
+        actor
+            .sender
+            .send(SessionMessage::ControlTerminalTransfer {
+                channel_id,
+                control: TerminalTransferControl::Cancel {
+                    operation_id,
+                    respond_to,
+                },
+            })
+            .map_err(|_| "Failed to send ZMODEM cancel message".to_string())?;
+        rx.await
+            .map_err(|_| "ZMODEM runtime dropped cancel response".to_string())?
     }
 
     pub async fn disconnect(
