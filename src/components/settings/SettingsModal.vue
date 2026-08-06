@@ -12,7 +12,6 @@ import {
   Home,
   Keyboard,
   Lock,
-  Settings2,
   Terminal
 } from '@lucide/vue';
 import { open } from '@tauri-apps/plugin-dialog';
@@ -27,7 +26,6 @@ import {
 } from '@/utils/desktopPet';
 import { invokeCommand } from '@/utils/ipc';
 import { loadMainUiSettings, normalizeMainUiSettings, saveMainUiSettings } from '@/utils/mainUi';
-import { loadMonitorSettings, saveMonitorSettings } from '@/utils/monitor';
 import { getPreferenceDefaults, loadPreference, savePreference } from '@/utils/preferences';
 import { loadTerminalThemeSettings, saveTerminalThemeSettings } from '@/utils/terminalTheme';
 
@@ -35,7 +33,6 @@ import { loadTerminalThemeSettings, saveTerminalThemeSettings } from '@/utils/te
 const SettingsKeybindingsPane = defineAsyncComponent(() => import('./SettingsKeybindingsPane.vue'));
 const SettingsMainUiPane = defineAsyncComponent(() => import('./SettingsMainUiPane.vue'));
 const SettingsSecurityPane = defineAsyncComponent(() => import('./SettingsSecurityPane.vue'));
-const SettingsStatusBarPane = defineAsyncComponent(() => import('./SettingsStatusBarPane.vue'));
 const SettingsTerminalPane = defineAsyncComponent(() => import('./SettingsTerminalPane.vue'));
 
 const props = defineProps({
@@ -55,11 +52,9 @@ const activeKey = ref('security');
 const settingsTabs = [
   { key: 'security', label: '安全锁', icon: Lock },
   { key: 'main-ui', label: '应用', icon: Home },
-  { key: 'statusbar', label: '状态栏', icon: Settings2 },
   { key: 'terminal', label: '终端', icon: Terminal },
   { key: 'keybindings', label: '快捷键', icon: Keyboard },
 ];
-const monitorSettings = ref(loadMonitorSettings());
 const terminalThemeSettings = ref(loadTerminalThemeSettings());
 const mainUiSettings = ref(loadMainUiSettings());
 let persistedBackgroundId = '';
@@ -167,7 +162,6 @@ watch(() => props.visible, (val) => {
     } catch (e) {
       keybindings.value = { ...defaultKeybindings };
     }
-    monitorSettings.value = loadMonitorSettings();
     terminalThemeSettings.value = loadTerminalThemeSettings();
     mainUiSettings.value = loadMainUiSettings();
     persistedBackgroundId = mainUiSettings.value.background?.resourceId || '';
@@ -196,13 +190,8 @@ const handleSave = async () => {
     toast.error('快捷键保存失败');
   }
   try {
-    saveMonitorSettings(monitorSettings.value);
-    window.dispatchEvent(new CustomEvent('monitor-settings-changed'));
-  } catch (e) {
-    toast.error('监控设置保存失败');
-  }
-  try {
     saveTerminalThemeSettings(terminalThemeSettings.value);
+    window.dispatchEvent(new CustomEvent('terminal-theme-changed'));
   } catch (e) {
     toast.error('终端样式保存失败');
   }
@@ -241,7 +230,14 @@ const handleCancel = async () => {
   await Promise.all([...temporaryBackgroundIds].map(deleteBackgroundResource));
   temporaryBackgroundIds.clear();
   window.dispatchEvent(new CustomEvent('main-ui-settings-changed'));
+  window.dispatchEvent(new CustomEvent('terminal-theme-changed'));
   emit('update:visible', false);
+};
+
+const previewTerminalTheme = (settings) => {
+  window.dispatchEvent(new CustomEvent('terminal-theme-changed', {
+    detail: { settings }
+  }));
 };
 
 const resolveDialogSelectionPath = (selected) => {
@@ -444,7 +440,7 @@ async function verifyAndChange() {
 
 <template>
   <Dialog v-model:open="dialogOpen" modal>
-    <DialogContent showCloseButton
+    <DialogContent showCloseButton draggable
       class="flex h-[min(500px,calc(100vh-4rem))] max-h-[calc(100vh-4rem)] w-[740px] max-w-[90vw] flex-col sm:max-w-[90vw]">
       <DialogHeader>
         <DialogTitle>首选项</DialogTitle>
@@ -482,9 +478,8 @@ async function verifyAndChange() {
             @background-preview-change="dispatchMainUiSettingsPreview"
             @background-importing="backgroundImporting = $event" />
 
-          <SettingsStatusBarPane v-if="activeKey === 'statusbar'" :monitor-settings="monitorSettings" />
-
-          <SettingsTerminalPane v-if="activeKey === 'terminal'" :terminal-theme-settings="terminalThemeSettings" />
+          <SettingsTerminalPane v-if="activeKey === 'terminal'" :terminal-theme-settings="terminalThemeSettings"
+            @preview-change="previewTerminalTheme" />
 
           <SettingsKeybindingsPane v-if="activeKey === 'keybindings'" :keybinding-items="keybindingItems"
             :keybindings="keybindings" :keybinding-conflict-map="keybindingConflictMap"

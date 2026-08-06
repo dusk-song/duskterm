@@ -53,7 +53,7 @@
     "copyright": "Copyright © 2026 xiaosong",
     "publisher": "DuskTerm",
     "shortDescription": "A cross-platform terminal tool for SSH, Telnet & Serial",
-    "longDescription": "DuskTerm is a modern, cross-platform desktop terminal tool built with Tauri 2 and Vue 3. It focuses on SSH server management while also supporting Telnet and serial port device connections. Features include multi-tab/split terminals, SFTP file manager, port tunneling, session encryption, and system monitoring.",
+    "longDescription": "DuskTerm is a modern, cross-platform desktop terminal tool built with Tauri 2 and Vue 3. It focuses on SSH server management while also supporting Telnet and serial port device connections. Features include multi-tab/split terminals, SFTP file manager, port tunneling, and session encryption.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

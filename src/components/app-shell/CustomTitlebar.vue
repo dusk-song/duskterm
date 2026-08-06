@@ -1,17 +1,15 @@
 <script setup>
 import { Copy, FolderOpen, Minus, Moon, Square, Sun, X } from '@lucide/vue';
-import { getCurrentWindow } from '@tauri-apps/api/window';
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { onMounted, onUnmounted, ref } from 'vue';
 import { executeMenuAction } from '@/composables/useMenu';
 import { useTheme } from '@/composables/useTheme';
-import { isTauriRuntime } from '@/utils/ipc';
-import { resolveTitlebarVisibility } from '@/utils/titlebarLayout';
+import { useWindowChrome } from '@/composables/useWindowChrome';
 import DuskDock from './DuskDock.vue';
-import MonitorDock from './MonitorDock.vue';
 import SessionDock from './SessionDock.vue';
 import TransferDock from './TransferDock.vue';
 
 const { isDark, toggleTheme } = useTheme();
+const { isMaximized, minimize, tauriDragRegion, toggleMaximize } = useWindowChrome();
 const props = defineProps({
   sftpActive: Boolean,
   sftpDisabled: Boolean,
@@ -57,19 +55,8 @@ const menus = [
   { key: 'help', label: '帮助', items: [{ key: 'help_github', label: 'GitHub', shortcut: 'F1' }] },
 ];
 
-const titlebarRef = ref(null);
-const width = ref(window.innerWidth);
-const visibility = computed(() => resolveTitlebarVisibility(width.value));
-const visibleMenus = computed(() => menus.filter((menu) => visibility.value.menus.includes(menu.key)));
 const openKey = ref('');
 const dropdownPos = ref({ top: 0, left: 0 });
-const isMaximized = ref(false);
-let win = null;
-let resizeObserver = null;
-let unlistenResize = null;
-let syncTimer = null;
-let titlebarResizeFrame = null;
-let pendingTitlebarWidth = Math.round(window.innerWidth);
 
 const closeMenu = () => { openKey.value = ''; };
 const itemChecked = (key) => ({
@@ -100,18 +87,6 @@ const dropdownStyle = () => ({ position: 'fixed', top: `${dropdownPos.value.top}
 const itemShortcut = (item) => item?.bindingKey
   ? String(props.keybindings[item.bindingKey] || '')
   : String(item?.shortcut || '');
-const syncMaximized = () => {
-  clearTimeout(syncTimer);
-  syncTimer = setTimeout(async () => { if (win) isMaximized.value = await win.isMaximized(); }, 60);
-};
-async function initWindow() {
-  if (!isTauriRuntime()) return;
-  win = getCurrentWindow();
-  isMaximized.value = await win.isMaximized();
-  unlistenResize = await win.onResized(syncMaximized);
-}
-const winMax = async () => { await win?.toggleMaximize(); syncMaximized(); };
-const onDoubleClick = (event) => { if (!event.target.closest('button')) winMax(); };
 const shortcuts = {};
 menus.forEach((menu) => menu.items.forEach((item) => {
   if (item.key && item.shortcut) {
@@ -132,53 +107,38 @@ function onKeydown(event) {
 function onDocumentClick(event) {
   if (!event.target.closest('.tb-menu-item') && !event.target.closest('.tb-dropdown')) closeMenu();
 }
-function scheduleTitlebarWidth(nextWidth) {
-  pendingTitlebarWidth = Math.round(nextWidth);
-  if (titlebarResizeFrame) return;
-  titlebarResizeFrame = requestAnimationFrame(() => {
-    titlebarResizeFrame = null;
-    const nextWidth = pendingTitlebarWidth;
-    if (Math.round(width.value) !== nextWidth) width.value = nextWidth;
-  });
-}
 onMounted(() => {
-  initWindow().catch((error) => console.warn('Initialize titlebar window bindings failed:', error));
-  resizeObserver = new ResizeObserver(([entry]) => { scheduleTitlebarWidth(entry.contentRect.width); });
-  if (titlebarRef.value) resizeObserver.observe(titlebarRef.value);
   document.addEventListener('keydown', onKeydown, true);
   document.addEventListener('click', onDocumentClick, true);
 });
 onUnmounted(() => {
-  resizeObserver?.disconnect(); unlistenResize?.(); clearTimeout(syncTimer);
-  if (titlebarResizeFrame) cancelAnimationFrame(titlebarResizeFrame);
   document.removeEventListener('keydown', onKeydown, true);
   document.removeEventListener('click', onDocumentClick, true);
 });
 </script>
 
 <template>
-  <header ref="titlebarRef" class="dusk-titlebar">
+  <header class="dusk-titlebar window-drag-region"
+    :data-tauri-drag-region="tauriDragRegion">
     <div class="titlebar-left">
       <DuskDock class="menu-dock" interactive>
-        <img src="/tauri.svg" class="app-icon" alt="DuskTerm" draggable="false" data-tauri-drag-region
-          @dblclick="onDoubleClick" />
-        <button v-for="menu in visibleMenus" :key="menu.key" class="tb-menu-item" :class="{ open: openKey === menu.key }"
+        <img src="/tauri.svg" class="app-icon" alt="DuskTerm" draggable="false" />
+        <button v-for="menu in menus" :key="menu.key" class="tb-menu-item" :class="{ open: openKey === menu.key }"
           @click.stop="openMenu(menu.key, $event)" @mouseenter="hoverMenu(menu.key, $event)">{{ menu.label }}</button>
       </DuskDock>
     </div>
     <div class="titlebar-center">
-      <SessionDock @dblclick="onDoubleClick" />
+      <SessionDock />
     </div>
     <div class="titlebar-right">
-      <MonitorDock v-if="visibility.monitor" />
       <DuskDock class="utility-dock" interactive>
-        <TransferDock v-show="visibility.transfer" embedded :expanded="props.transferVisible"
+        <TransferDock embedded :expanded="props.transferVisible"
           @toggle="emit('toggle-transfer')" />
         <button class="tb-btn" :class="{ active: props.sftpActive }" :disabled="props.sftpDisabled"
           title="文件管理（F9）" @click="emit('toggle-sftp')"><FolderOpen :size="14" /></button>
         <button class="tb-btn" @click="toggleTheme" :title="isDark ? '切换亮色主题' : '切换暗色主题'"><Sun v-if="isDark" :size="15" /><Moon v-else :size="15" /></button>
-        <button class="tb-btn" @click="win?.minimize()" title="最小化"><Minus :size="13" /></button>
-        <button class="tb-btn" @click="winMax" :title="isMaximized ? '还原' : '最大化'"><Copy v-if="isMaximized" :size="12" /><Square v-else :size="12" /></button>
+        <button class="tb-btn" @click="minimize" title="最小化"><Minus :size="13" /></button>
+        <button class="tb-btn" @click="toggleMaximize" :title="isMaximized ? '还原' : '最大化'"><Copy v-if="isMaximized" :size="12" /><Square v-else :size="12" /></button>
         <button class="tb-btn close" @click="executeMenuAction('file_quit')" title="关闭"><X :size="14" /></button>
       </DuskDock>
     </div>
@@ -198,25 +158,34 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
-.dusk-titlebar { position: relative; display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; height: 46px; padding: 0 5px; box-sizing: border-box; flex: 0 0 auto; background: transparent; user-select: none; z-index: var(--z-chrome); }
-.titlebar-left, .titlebar-right { position: relative; z-index: 1; display: flex; align-items: center; min-width: 0; gap: 6px; }
+.dusk-titlebar { position: relative; display: flex; align-items: center; justify-content: space-between; height: 46px; padding: 0 5px; box-sizing: border-box; flex: 0 0 auto; gap: 6px; background: transparent; user-select: none; z-index: var(--z-chrome); }
+.titlebar-left, .titlebar-right { position: relative; z-index: 1; display: flex; align-items: center; min-width: max-content; gap: 6px; }
 .titlebar-left { justify-content: flex-start; }
 .titlebar-right { justify-content: flex-end; }
-.titlebar-center { position: relative; z-index: 1; display: flex; align-items: center; justify-self: center; pointer-events: none; min-width: 0; }
-.menu-dock { padding-left: 8px; }
-.app-icon { width: 17px; height: 17px; margin-right: 4px; }
+.titlebar-center { position: absolute; z-index: 0; left: 50%; display: flex; width: min(320px, max(72px, calc(100% - 480px))); align-items: center; overflow: hidden; transform: translateX(-50%); pointer-events: none; min-width: 0; }
+.menu-dock { width: auto; max-width: none; flex: 0 0 auto; padding: 0 8px; }
+.app-icon { width: 17px; height: 17px; margin-right: 4px; flex: 0 0 auto; }
 .tb-menu-item, .tb-btn { height: 24px; border: 0; border-radius: 999px; color: var(--tb-text, var(--app-text)); background: transparent; cursor: default; }
-.tb-menu-item { padding: 0 7px; font-size: 12px; }
-.tb-btn { display: inline-flex; width: 29px; align-items: center; justify-content: center; padding: 0; opacity: .78; }
+.tb-menu-item { flex: 0 0 auto; padding: 0 7px; font-size: 12px; white-space: nowrap; }
+.tb-btn { display: inline-flex; width: 29px; flex: 0 0 29px; align-items: center; justify-content: center; padding: 0; opacity: .78; }
 .tb-menu-item:hover, .tb-menu-item.open, .tb-btn:hover, .tb-btn.active { background: var(--tb-hover-bg, color-mix(in srgb, var(--app-text) 8%, transparent)); opacity: 1; }
 .tb-btn.active { color: var(--color-primary); }
 .tb-btn:disabled { opacity: .3; cursor: not-allowed; }
-.tb-btn.close:hover { color: #fff; background: var(--tb-close-hover, var(--color-danger)); }
-.utility-dock,
+.tb-btn.close:hover { color: var(--tb-close-hover-text, var(--color-danger-foreground)); background: var(--tb-close-hover, var(--color-danger)); }
+.utility-dock { min-width: max-content; flex: 0 0 auto; padding: 0 4px; }
 .window-dock { padding: 0 4px; }
 </style>
 
 <style>
+html[data-window-drag-mode="native-region"] .window-drag-region {
+  -webkit-app-region: drag;
+  app-region: drag;
+}
+html[data-window-drag-mode="native-region"] .window-drag-region :is(button, a, input, select, textarea, label, [role="button"], [contenteditable="true"]),
+html[data-window-drag-mode="native-region"] .window-no-drag {
+  -webkit-app-region: no-drag;
+  app-region: no-drag;
+}
 .tb-dropdown { min-width: 220px; padding: 5px; border: 1px solid var(--tb-dropdown-border, var(--app-border-shadow)); border-radius: 9px; background: color-mix(in srgb, var(--tb-dropdown-bg, var(--app-bg-dialog)) 95%, transparent); box-shadow: var(--niri-shadow-dialog); backdrop-filter: blur(12px); z-index: var(--z-dropdown); }
 .tb-entry { display: flex; width: 100%; min-height: 28px; align-items: center; justify-content: space-between; padding: 0 9px; border: 0; border-radius: 6px; color: var(--tb-text, var(--app-text)); background: transparent; font-size: 12px; }
 .tb-entry:hover { background: var(--tb-entry-hover, color-mix(in srgb, var(--app-text) 8%, transparent)); }

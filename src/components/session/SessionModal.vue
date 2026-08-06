@@ -577,7 +577,7 @@ const groupOptions = computed(() => {
 
 <template>
   <Dialog v-model:open="dialogOpen" modal>
-    <DialogContent showCloseButton
+    <DialogContent showCloseButton draggable
       class="flex h-[min(500px,calc(100vh-4rem))] max-h-[calc(100vh-4rem)] w-[640px] max-w-[90vw] flex-col sm:max-w-[90vw]"
       @pointer-down-outside.prevent @interact-outside.prevent>
       <DialogHeader>
@@ -594,9 +594,9 @@ const groupOptions = computed(() => {
 
         <div layout="horizontal" class="session-compact-form" autocomplete="off" :model="formState" name="sessionForm">
           <div class="config-tabs flex">
-            <div class="config-tab-sidebar flex flex-col gap-0.5 w-24 shrink-0 pr-3 border-r border-border">
+            <div class="config-tab-sidebar flex w-[100px] shrink-0 flex-col gap-0.5 border-r border-border pr-1">
               <button v-for="tab in configTabs" :key="tab.key" type="button"
-                :class="['px-2 py-1.5 rounded text-sm text-left outline-none transition-[background,color,box-shadow]', 'focus-visible:bg-[var(--app-focus-bg)] focus-visible:text-foreground focus-visible:shadow-[var(--app-focus-shadow)]', activeConfigTab === tab.key ? 'bg-primary/15 text-primary font-semibold' : 'text-muted-foreground hover:text-foreground']"
+                :class="['whitespace-nowrap px-2 py-1.5 rounded text-sm text-left outline-none transition-[background,color,box-shadow]', 'focus-visible:bg-[var(--app-focus-bg)] focus-visible:text-foreground focus-visible:shadow-[var(--app-focus-shadow)]', activeConfigTab === tab.key ? 'bg-primary/15 text-primary font-semibold' : 'text-muted-foreground hover:text-foreground']"
                 @click="activeConfigTab = tab.key">{{ tab.label }}</button>
             </div>
             <div v-show="activeConfigTab === 'basic'">
@@ -1027,7 +1027,7 @@ const groupOptions = computed(() => {
 
 .session-textarea:focus {
   border-color: var(--color-primary) !important;
-  box-shadow: 0 0 0 1px rgba(var(--primary), 0.28) !important;
+  box-shadow: var(--app-focus-shadow) !important;
 }
 
 .session-textarea::placeholder {

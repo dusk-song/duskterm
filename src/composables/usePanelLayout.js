@@ -15,7 +15,9 @@ export function usePanelLayout({ sshStore, activeKey, ensureSplitSession, visibl
   let dragGestureActive = false;
 
   const notifyLayoutDragging = (dragging) => {
-    window.dispatchEvent(new CustomEvent('terminal-layout-dragging', { detail: { dragging } }));
+    window.dispatchEvent(new CustomEvent('terminal-layout-dragging', {
+      detail: { dragging, deferFit: true, source: 'split-layout' }
+    }));
   };
 
   const createLeaf = (sessionId) => ({ type: 'leaf', sessionId });

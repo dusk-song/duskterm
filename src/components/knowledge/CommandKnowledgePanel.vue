@@ -61,18 +61,28 @@ const tagColorPalette = [
 ];
 
 const availableTags = computed(() => {
-  const counts = new Map();
+  const tagStats = new Map();
   for (const entry of commandKnowledgeStore.entries) {
     for (const tag of entry.tags || []) {
       const normalized = String(tag || '').trim();
       if (!normalized) continue;
-      counts.set(normalized, (counts.get(normalized) || 0) + 1);
+      const key = normalized.toLowerCase();
+      const current = tagStats.get(key) || {
+        label: normalized,
+        count: 0,
+        updatedAt: 0,
+      };
+      current.count += 1;
+      current.updatedAt = Math.max(
+        current.updatedAt,
+        Number(entry.updatedAt || entry.createdAt || 0)
+      );
+      tagStats.set(key, current);
     }
   }
-  return [...counts.entries()]
-    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
-    .slice(0, 24)
-    .map(([tag]) => tag);
+  return [...tagStats.values()]
+    .sort((a, b) => b.updatedAt - a.updatedAt || b.count - a.count || a.label.localeCompare(b.label))
+    .map(({ label }) => label);
 });
 
 const hashTag = (tag) => {
@@ -398,10 +408,13 @@ onUnmounted(() => {
 
 .knowledge-tag-filters {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 5px;
   min-width: 0;
-  overflow-x: hidden;
+  padding-bottom: 2px;
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: thin;
 }
 
 .knowledge-tag-chip {

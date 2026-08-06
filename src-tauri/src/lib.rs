@@ -10,13 +10,11 @@ mod connection_log;
 mod fileio;
 mod local_terminal;
 mod native_drag;
-mod remote_monitor;
 mod session;
 mod sftp;
 mod ssh;
 mod ssh_algorithms;
 mod storage;
-mod system;
 mod terminal_transfer;
 mod tunnel;
 
@@ -48,7 +46,6 @@ pub fn run() {
         .manage(session::supervisor::SessionSupervisor::new())
         .manage(ssh::SshAppState::new())
         .manage(sftp::SftpAppState::new())
-        .manage(system::SystemState::new())
         .manage(tunnel::TunnelState::new())
         .manage(Arc::new(Mutex::new(storage::StorageState::new())))
         .setup(|app| {
@@ -133,13 +130,11 @@ pub fn run() {
             sftp::sftp_remove,
             sftp::sftp_chmod,
             sftp::sftp_stat,
-            system::get_system_stats,
             fileio::save_text_file,
             fileio::save_binary_file,
             fileio::append_binary_file,
             fileio::inspect_local_drop_paths,
-            fileio::import_desktop_pet_asset,
-            remote_monitor::get_remote_stats
+            fileio::import_desktop_pet_asset
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

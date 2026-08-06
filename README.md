@@ -77,7 +77,7 @@
 | SSH / SFTP | russh、russh-sftp |
 | 文件编辑 | Ace Editor |
 | 表格与树 | TanStack Table、he-tree |
-| 系统能力 | serialport、sysinfo、Windows COM / OLE |
+| 系统能力 | serialport、Windows COM / OLE |
 | 存储加密 | AES-256-GCM、SHA-256 |
 | 构建工具 | Vite 6、pnpm、Cargo |
 
@@ -177,7 +177,6 @@ src-tauri/
     tunnel/            端口隧道能力
     background.rs      背景图片导入与缓存
     local_terminal.rs  本地 PTY 终端
-    remote_monitor.rs  远程状态采集
     terminal_transfer.rs 终端文件传输请求探测
   tauri.conf.json      Tauri 应用配置
 

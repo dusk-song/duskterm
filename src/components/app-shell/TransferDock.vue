@@ -51,6 +51,8 @@ const transferCount = computed(() => status.value.active || status.value.total |
 .transfer-dock--embedded {
   display: inline-flex;
   min-width: 29px;
+  width: 29px;
+  flex: 0 0 29px;
   height: 24px;
   align-items: center;
   justify-content: center;
@@ -84,7 +86,7 @@ const transferCount = computed(() => status.value.active || status.value.total |
 }
 
 .transfer-badge.busy {
-  color: #fff;
+  color: var(--color-primary-foreground);
   background: var(--color-primary);
 }
 </style>

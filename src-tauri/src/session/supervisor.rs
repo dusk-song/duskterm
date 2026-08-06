@@ -5,7 +5,6 @@ use tauri::{AppHandle, Window};
 use tokio::sync::oneshot;
 
 use crate::{
-    remote_monitor::RemoteStats,
     sftp::{
         FileEntry, SftpAppState, SftpLsPagedResult, SftpOpenTextFileResult, SftpSaveTextFileResult,
         SftpStreamBridge, SshConfig as SftpConfig,
@@ -509,19 +508,6 @@ impl SessionSupervisor {
 
         rx.await
             .map_err(|_| "Session actor dropped SFTP disconnect response".to_string())?
-    }
-
-    pub async fn get_remote_stats(&self, session_id: String) -> Result<RemoteStats, String> {
-        let actor = self.get_or_spawn_actor(&session_id);
-
-        let (respond_to, rx) = oneshot::channel();
-        actor
-            .sender
-            .send(SessionMessage::GetRemoteStats { respond_to })
-            .map_err(|_| "Failed to send remote monitor request to session actor".to_string())?;
-
-        rx.await
-            .map_err(|_| "Session actor dropped remote monitor response".to_string())?
     }
 
     pub async fn is_sftp_connected(&self, session_id: String) -> Result<bool, String> {

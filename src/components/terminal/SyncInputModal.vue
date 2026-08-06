@@ -329,7 +329,7 @@ watch(() => currentChannelDraft.value?.sourceMode, (mode) => {
 
 <template>
   <Dialog v-model:open="dialogOpen" modal>
-    <DialogContent showCloseButton
+    <DialogContent showCloseButton draggable
       class="flex h-[min(620px,calc(100vh-4rem))] max-h-[calc(100vh-4rem)] w-[1020px] max-w-[94vw] flex-col sm:max-w-[94vw]">
       <DialogHeader>
         <DialogTitle>同步输入频道</DialogTitle>

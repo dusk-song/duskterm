@@ -223,7 +223,7 @@ const clearFinished = () => {
   min-width: 17px;
   padding: 1px 5px;
   border-radius: 999px;
-  color: #fff;
+  color: var(--color-primary-foreground);
   background: var(--color-primary);
   font-size: 10px;
   text-align: center;

@@ -1,4 +1,5 @@
 <script setup>
+import { X } from '@lucide/vue';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { computeSplitLayout } from '@/utils/splitTree';
 import Terminal from './Terminal.vue';
@@ -14,6 +15,10 @@ const props = defineProps({
 });
 
 const emit = defineEmits(['activate', 'close-panel', 'tab-drop', 'tab-context']);
+
+const closeActivePanel = () => {
+  if (props.activePanelId) emit('close-panel', props.activePanelId);
+};
 
 const rootRef = ref(null);
 const hasPanels = computed(() => props.panels.length > 0);
@@ -156,6 +161,11 @@ const dividerStyle = (divider) => divider.direction === 'vertical'
 
 <template>
   <div ref="rootRef" class="terminal-panel-manager">
+    <button v-if="hasPanels && activePanelId" type="button" class="terminal-session-close"
+      title="关闭当前会话（Ctrl+Shift+W）" aria-label="关闭当前会话"
+      @mousedown.stop @click.stop="closeActivePanel">
+      <X :size="15" stroke-width="1.9" />
+    </button>
     <div v-if="hasPanels" class="panel-scroll-track">
       <div class="panel-scroll-strip" :style="{ transform: `translateX(-${scrollIndex * 100}%)` }"
         :class="{ transitioning: isTransitioning }" @transitionend="onTransitionEnd">
@@ -177,6 +187,7 @@ const dividerStyle = (divider) => divider.direction === 'vertical'
 
 <style scoped>
 .terminal-panel-manager {
+  position: relative;
   height: 100%;
   display: flex;
   flex-direction: column;
@@ -185,6 +196,38 @@ const dividerStyle = (divider) => divider.direction === 'vertical'
   box-sizing: border-box;
   border-radius: var(--niri-radius-lg, 14px);
   background: var(--terminal-surface-bg, var(--app-bg-dialog));
+}
+
+.terminal-session-close {
+  position: absolute;
+  z-index: 20;
+  top: 8px;
+  right: 10px;
+  display: inline-flex;
+  width: 26px;
+  height: 26px;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid var(--app-border-shadow);
+  border-radius: 7px;
+  color: var(--app-terminal-close-color);
+  background: var(--app-terminal-close-bg);
+  box-shadow: var(--app-control-shadow);
+  opacity: .82;
+  transition: color var(--app-motion-control), background var(--app-motion-control), opacity var(--app-motion-control);
+}
+
+.terminal-session-close:hover,
+.terminal-session-close:focus-visible {
+  color: var(--app-terminal-close-hover-color);
+  background: var(--app-terminal-close-hover-bg);
+  opacity: 1;
+}
+
+.terminal-session-close:focus-visible {
+  outline: none;
+  box-shadow: var(--app-focus-shadow);
 }
 
 .panel-scroll-track {

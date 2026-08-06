@@ -2,7 +2,6 @@ use tauri::{AppHandle, Window};
 use tokio::sync::oneshot;
 
 use crate::{
-    remote_monitor::RemoteStats,
     sftp::{
         FileEntry, SftpAppState, SftpLsPagedResult, SftpOpenTextFileResult, SftpSaveTextFileResult,
         SshConfig as SftpConfig,
@@ -63,9 +62,6 @@ pub enum SessionMessage {
     },
     DisconnectSftp {
         respond_to: oneshot::Sender<Result<(), String>>,
-    },
-    GetRemoteStats {
-        respond_to: oneshot::Sender<Result<RemoteStats, String>>,
     },
     IsSftpConnected {
         respond_to: oneshot::Sender<Result<bool, String>>,

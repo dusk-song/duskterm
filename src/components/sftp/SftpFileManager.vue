@@ -1955,7 +1955,7 @@ onUnmounted(() => {
   flex-direction: column;
   height: 100%;
   min-height: 0;
-  min-width: 260px;
+  min-width: 0;
   background: var(--terminal-surface-bg, var(--app-bg-dialog));
 }
 
@@ -2153,7 +2153,9 @@ onUnmounted(() => {
 
 .fm-state {
   margin: auto;
-  min-width: 260px;
+  width: min(260px, 100%);
+  min-width: 0;
+  box-sizing: border-box;
   min-height: 92px;
   justify-content: center;
   display: flex;

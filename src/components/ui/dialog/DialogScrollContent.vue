@@ -1,5 +1,7 @@
 <script setup>
 import { XIcon } from "@lucide/vue";
+import { useDialogDrag } from '@/composables/useDialogDrag';
+import { ref } from 'vue';
 
 import { reactiveOmit } from "@vueuse/core";
 import {
@@ -22,6 +24,7 @@ const props = defineProps({
   as: { type: null, required: false },
   class: { type: null, required: false },
   closeOnOutsideInteract: { type: Boolean, required: false, default: false },
+  draggable: { type: Boolean, required: false, default: false },
 });
 const emits = defineEmits([
   "escapeKeyDown",
@@ -32,9 +35,11 @@ const emits = defineEmits([
   "closeAutoFocus",
 ]);
 
-const delegatedProps = reactiveOmit(props, "class");
+const delegatedProps = reactiveOmit(props, "class", "closeOnOutsideInteract", "draggable");
 
 const forwarded = useForwardPropsEmits(delegatedProps, emits);
+const dialogContentRef = ref(null);
+const dialogDrag = useDialogDrag(dialogContentRef, () => props.draggable);
 
 const handlePointerDownOutside = (event) => {
   if (!props.closeOnOutsideInteract) {
@@ -65,13 +70,20 @@ const handleInteractOutside = (event) => {
       class="fixed inset-0 z-[var(--z-dialog-overlay)] grid place-items-center overflow-y-auto bg-black/80 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0"
     >
       <DialogContent
+        ref="dialogContentRef"
+        :data-dialog-draggable="props.draggable ? 'true' : undefined"
         :class="
           cn(
-            'relative z-[var(--z-dialog-content)] my-4 grid w-full max-w-lg min-h-0 max-h-[calc(100vh-3rem)] gap-4 overflow-y-auto border border-border bg-background p-6 shadow-lg duration-200 sm:my-8 sm:rounded-lg md:w-full',
+            'relative z-[var(--z-dialog-content)] my-4 grid w-full max-w-lg min-h-0 max-h-[calc(100vh-3rem)] gap-4 overflow-y-auto border border-[var(--app-border-dark)] bg-popover text-popover-foreground p-6 shadow-[var(--niri-shadow-dialog)] duration-200 sm:my-8 sm:rounded-lg md:w-full',
             props.class,
           )
         "
         v-bind="{ ...$attrs, ...forwarded }"
+        @dblclick="dialogDrag.onDoubleClick"
+        @pointerdown="dialogDrag.onPointerDown"
+        @pointermove="dialogDrag.onPointerMove"
+        @pointerup="dialogDrag.onPointerUp"
+        @pointercancel="dialogDrag.onPointerCancel"
         @pointer-down-outside="handlePointerDownOutside"
         @interact-outside="handleInteractOutside"
       >

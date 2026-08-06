@@ -443,6 +443,7 @@ let shellCompletionSyncPending = false;
 let quickHintPositionRafId = null;
 let quickHintSearchToken = 0;
 let isLayoutDragging = false;
+const layoutDragSources = new Map();
 let dragFitRafId = null;
 let dragFitTimerId = null;
 let lastDragFitAt = 0;
@@ -624,9 +625,13 @@ const applyTerminalTheme = () => {
   if (!term) return;
   const themeKey = terminalThemeSettings.value.theme || 'default';
   const baseTheme = getTerminalTheme(themeKey, isDark.value);
-  const hasFloatingSurfaces = !!terminalWrapperRef.value?.closest('.has-floating-surfaces');
-  const opaqueThemeBackground = resolveCssColor('var(--app-bg-dialog)', baseTheme.background || '#1e1e1e');
-  const themeBackground = hasFloatingSurfaces ? 'rgba(0, 0, 0, 0)' : opaqueThemeBackground;
+  const appShell = terminalWrapperRef.value?.closest('.app-shell');
+  const hasGlobalBackground = !!appShell?.classList.contains('has-global-background');
+  const opaqueThemeBackground = resolveCssColor(
+    baseTheme.background || 'var(--app-bg-dialog)',
+    baseTheme.background || '#1e1e1e'
+  );
+  const themeBackground = hasGlobalBackground ? 'rgba(0, 0, 0, 0)' : opaqueThemeBackground;
   const selectionBackground = resolveCssColor(
     baseTheme.selectionBackground || 'var(--app-selection-bg)',
     'rgba(192,132,47,0.46)'
@@ -645,7 +650,7 @@ const applyTerminalTheme = () => {
     wrapper.style.setProperty('--terminal-theme-bg', themeBackground);
     wrapper.style.setProperty(
       '--terminal-surface-bg',
-      hasFloatingSurfaces
+      hasGlobalBackground
         ? 'color-mix(in srgb, var(--app-bg-dialog) 52%, transparent)'
         : opaqueThemeBackground
     );
@@ -657,8 +662,10 @@ const applyTerminalTheme = () => {
   }
 };
 
-const handleTerminalThemeChanged = () => {
-  terminalThemeSettings.value = loadTerminalThemeSettings();
+const handleTerminalThemeChanged = (event) => {
+  terminalThemeSettings.value = event?.detail?.settings
+    ? { ...event.detail.settings }
+    : loadTerminalThemeSettings();
   applyTerminalTheme();
   // Sync line-number state from global pref
   onTerminalThemeChanged();
@@ -1868,6 +1875,7 @@ function sendResizeIfNeeded(cols, rows, options = {}) {
 }
 
 let resizeTimeout = null;
+let layoutFitRafId = null;
 let needsFitOnActivation = false;
 function doFit(options = {}) {
   if (fitAddon && term?.element) {
@@ -1950,27 +1958,21 @@ function scheduleDragFit() {
   });
 }
 
-function handleResize(immediate = false) {
+function handleResize() {
   if (!props.active) {
     needsFitOnActivation = true;
     return;
   }
   if (resizeTimeout) clearTimeout(resizeTimeout);
-  if (!immediate && isLayoutDragging) {
+  if (isLayoutDragging) {
     if (deferLayoutFit) {
-      updateLineNumberRowHeight();
-      scheduleQuickHintPositionUpdate();
       return;
     }
     scheduleDragFit();
     return;
   }
-  if (immediate) {
-    doFit({ force: true });
-    return;
-  }
-
   resizeTimeout = setTimeout(() => {
+    resizeTimeout = null;
     doFit();
   }, 80);
 }
@@ -1980,12 +1982,30 @@ function handleLayoutResize() {
     needsFitOnActivation = true;
     return;
   }
-  handleResize(true);
+  if (resizeTimeout) {
+    clearTimeout(resizeTimeout);
+    resizeTimeout = null;
+  }
+  if (layoutFitRafId) return;
+  layoutFitRafId = requestAnimationFrame(() => {
+    layoutFitRafId = null;
+    if (!props.active) {
+      needsFitOnActivation = true;
+      return;
+    }
+    doFit();
+  });
 }
 
 function handleLayoutDragging(event) {
-  isLayoutDragging = !!event?.detail?.dragging;
-  deferLayoutFit = isLayoutDragging && event?.detail?.deferFit !== false;
+  const source = event?.detail?.source || 'layout';
+  if (event?.detail?.dragging) {
+    layoutDragSources.set(source, event?.detail?.deferFit !== false);
+  } else {
+    layoutDragSources.delete(source);
+  }
+  isLayoutDragging = layoutDragSources.size > 0;
+  deferLayoutFit = isLayoutDragging && [...layoutDragSources.values()].some(Boolean);
   if (!isLayoutDragging) {
     deferLayoutFit = false;
     if (dragFitRafId) {
@@ -2583,7 +2603,6 @@ onMounted(async () => {
   // Trackpad gesture detection on the terminal wrapper
   terminalWrapperRef.value?.addEventListener('wheel', handleTerminalWheel, { passive: true });
 
-  window.addEventListener('resize', handleResize);
   const readyDimensions = fitAddon?.proposeDimensions?.();
   window.dispatchEvent(
     new CustomEvent('terminal-ready', {
@@ -2617,6 +2636,13 @@ onUnmounted(() => {
   window.removeEventListener('command-knowledge-changed', loadCommandKnowledgeCatalog);
 
   if (resizeObserver) resizeObserver.disconnect();
+  layoutDragSources.clear();
+  isLayoutDragging = false;
+  deferLayoutFit = false;
+  if (layoutFitRafId) {
+    cancelAnimationFrame(layoutFitRafId);
+    layoutFitRafId = null;
+  }
   if (dragFitRafId) {
     cancelAnimationFrame(dragFitRafId);
     dragFitRafId = null;
@@ -2680,7 +2706,6 @@ onUnmounted(() => {
   unlistenError = null;
   unlistenTerminalTransferRequest = null;
   unlistenSerialDataSent = null;
-  window.removeEventListener('resize', handleResize);
   // Always clear cache on unmount so next mount creates fresh bindings.
   // KeepAlive page switches use onDeactivated/onActivated, not onUnmounted.
   terminalCache.delete(props.sessionId);
@@ -2845,8 +2870,8 @@ onUnmounted(() => {
 
           <p v-if="!(blockedCommandSeverity === 'critical' && !securityStore.hasPassword)"
             style="margin-top: 16px; color: var(--app-text-muted, #ABB2BF);">
-            当前会话: <span style="color: #fff; font-weight: bold;">{{ sessionName }}</span><br>
-            如果您确认该操作无误，请点击<span style="color: #ff4d4f">红色按钮</span>继续。
+            当前会话: <span style="color: var(--app-text); font-weight: bold;">{{ sessionName }}</span><br>
+            如果您确认该操作无误，请点击<span style="color: var(--color-danger)">红色按钮</span>继续。
           </p>
         </div>
         <DialogFooter>
@@ -3152,7 +3177,7 @@ onUnmounted(() => {
   align-items: center;
   height: 24px;
   padding: 0 8px;
-  border: 1px solid var(--app-border);
+  border: 1px solid var(--app-border-shadow);
   border-radius: 6px;
   color: var(--app-text);
   background: color-mix(in srgb, var(--app-text) 6%, transparent);

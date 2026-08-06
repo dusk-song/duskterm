@@ -48,7 +48,7 @@ const layerStyle = computed(() => ({
   opacity: config.value.opacity,
 }));
 const overlayStyle = computed(() => ({
-  background: isDark.value ? '#000' : '#fff',
+  background: isDark.value ? '#000' : '#f1ece3',
   opacity: isDark.value ? config.value.darkOverlay : config.value.lightOverlay,
 }));
 </script>

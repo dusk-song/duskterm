@@ -1,6 +1,6 @@
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
-use crate::{local_terminal, remote_monitor, sftp, ssh, tunnel};
+use crate::{local_terminal, sftp, ssh, tunnel};
 
 use super::{
     message::SessionMessage,
@@ -262,15 +262,6 @@ pub fn spawn_session_actor(
                     runtime_state.sftp = None;
                     let result =
                         sftp::disconnect_sftp_runtime(sftp_handle, session_id.clone()).await;
-                    let _ = respond_to.send(result);
-                }
-                SessionMessage::GetRemoteStats { respond_to } => {
-                    let result = if let Some(handle) = runtime_state.ssh.as_ref() {
-                        remote_monitor::get_remote_stats_runtime(&handle.handle.shared_session)
-                            .await
-                    } else {
-                        Err("SSH session not available for monitoring".to_string())
-                    };
                     let _ = respond_to.send(result);
                 }
                 SessionMessage::IsSftpConnected { respond_to } => {

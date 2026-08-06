@@ -10,21 +10,21 @@
   :root {
     /* Shadcn-Vue base (HSL) */
     --radius: 0.5rem;
-    --background: 36 31% 94%;
+    --background: 40 31% 90%;
     --foreground: 36 8% 18%;
-    --card: 0 0% 100%;
+    --card: 38 30% 92%;
     --card-foreground: 36 8% 18%;
-    --popover: 0 0% 100%;
+    --popover: 38 35% 94%;
     --popover-foreground: 36 8% 18%;
 
     --primary: 34 59% 47%;
     --primary-foreground: 30 34% 9%;
 
-    --secondary: 36 24% 89%;
+    --secondary: 36 29% 86%;
     --secondary-foreground: 36 8% 18%;
-    --muted: 36 20% 88%;
+    --muted: 36 24% 87%;
     --muted-foreground: 32 9% 48%;
-    --accent: 36 22% 90%;
+    --accent: 35 29% 89%;
     --accent-foreground: 36 8% 18%;
 
     --destructive: 5 49% 63%;
@@ -53,7 +53,7 @@
     --color-info-foreground: hsl(var(--primary-foreground));
 
     /* App UI tokens */
-    --app-bg-dialog: hsl(var(--card));
+    --app-bg-dialog: hsl(var(--popover));
     --app-bg-active: hsl(var(--primary));
     --app-bg-active-end: hsl(34 59% 42%);
     --app-terminal-bg: #111113;
@@ -81,14 +81,14 @@
     --app-border-shadow: hsl(var(--border));
     --app-border-dark: hsl(var(--border) / 0.9);
 
-    --app-btn-bg: hsl(var(--card));
+    --app-btn-bg: hsl(var(--popover));
     --app-btn-border: hsl(var(--border));
     --app-btn-hover: color-mix(in srgb, hsl(var(--foreground)) 6%, transparent);
     --app-surface-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.78);
     --app-control-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 1px 1px rgba(52, 47, 41, 0.12);
     --app-control-inset-shadow: inset 0 1px 1px rgba(52, 47, 41, 0.045);
 
-    --app-input-bg: hsl(var(--card));
+    --app-input-bg: hsl(36 24% 89%);
     --app-input-border: hsl(var(--border));
     --app-input-text: hsl(var(--foreground));
 
@@ -97,13 +97,13 @@
     --app-focus-bg: rgba(192, 132, 47, 0.08);
     --app-focus-shadow: inset 0 0 0 1px var(--app-focus-ring);
 
-    --app-workspace-bg: #ece6dc;
+    --app-workspace-bg: #e7e0d5;
     --app-workspace-gap: rgba(91, 80, 68, 0.1);
     --app-panel-bg: hsl(var(--card));
     --app-panel-border: hsl(var(--border) / 0.88);
     --app-panel-shadow: var(--niri-shadow-panel);
 
-    --app-tab-bg-active: hsl(var(--card));
+    --app-tab-bg-active: hsl(var(--popover));
     --app-tab-bg-inactive: hsl(var(--secondary));
 
     --app-sidebar-bg: hsl(var(--secondary));
@@ -118,6 +118,7 @@
     --app-status-info: #c0842f;
     --app-status-info-bg: rgba(192, 132, 47, 0.1);
     --app-status-info-border: rgba(192, 132, 47, 0.24);
+    --app-status-error: hsl(var(--destructive));
     --app-risk-warning: #b8792d;
     --app-risk-warning-bg: rgba(184, 121, 45, 0.13);
     --app-risk-warning-border: rgba(184, 121, 45, 0.28);
@@ -126,7 +127,7 @@
     --app-risk-danger-bg: hsl(var(--destructive) / 0.12);
     --app-risk-danger-border: hsl(var(--destructive) / 0.3);
     --app-risk-danger-glow: 0 0 0 4px hsl(var(--destructive) / 0.08);
-    --app-toast-bg: hsl(var(--card));
+    --app-toast-bg: hsl(var(--popover));
     --app-toast-border: hsl(var(--border) / 0.84);
     --app-toast-text: hsl(var(--foreground));
     --app-toast-shadow: 0 18px 38px rgba(52, 47, 41, 0.16), var(--app-surface-highlight);
@@ -138,11 +139,12 @@
     /* Titlebar */
     --tb-bg: hsl(36 24% 89%);
     --tb-surface-opacity: 97%;
-    --tb-dropdown-bg: hsl(var(--card));
+    --tb-dropdown-bg: hsl(var(--popover));
     --tb-dropdown-border: hsl(var(--border));
     --tb-entry-hover: hsl(var(--foreground) / 0.07);
     --tb-divider: hsl(var(--border));
-    --tb-close-hover: hsl(var(--destructive) / 0.18);
+    --tb-close-hover: hsl(var(--destructive));
+    --tb-close-hover-text: hsl(var(--destructive-foreground));
     --tb-text: hsl(var(--foreground));
     --tb-text-muted: hsl(var(--muted-foreground));
     --tb-icon-filter: none;
@@ -159,6 +161,7 @@
     --mac-text-secondary: hsl(var(--muted-foreground));
     --mac-text-muted: hsl(var(--muted-foreground));
     --mac-accent: hsl(var(--primary));
+    --mac-accent-bg: hsl(var(--primary) / 0.12);
 
     /* Niri shell tokens */
     --niri-border-width: 1px;
@@ -260,6 +263,7 @@
     --app-status-info: #c0842f;
     --app-status-info-bg: rgba(192, 132, 47, 0.14);
     --app-status-info-border: rgba(192, 132, 47, 0.28);
+    --app-status-error: hsl(var(--destructive));
     --app-risk-warning: #d1b16b;
     --app-risk-warning-bg: rgba(209, 177, 107, 0.16);
     --app-risk-warning-border: rgba(209, 177, 107, 0.34);
@@ -285,6 +289,7 @@
     --tb-entry-hover: rgba(228, 224, 216, 0.08);
     --tb-hover-bg: rgba(228, 224, 216, 0.07);
     --tb-close-hover: rgba(209, 122, 114, 0.22);
+    --tb-close-hover-text: #fffaf2;
     --tb-icon-filter: invert(1);
     --settings-icon-filter: invert(1);
 
@@ -297,6 +302,7 @@
     --mac-text-secondary: #b7afa2;
     --mac-text-muted: #8b857c;
     --mac-accent: #c0842f;
+    --mac-accent-bg: rgba(192, 132, 47, 0.16);
 
     --niri-shadow-idle: 0 1px 2px rgba(0, 0, 0, 0.28);
     --niri-shadow-focus: 0 0 0 2px rgba(192, 132, 47, 0.22), 0 10px 24px rgba(0, 0, 0, 0.28);

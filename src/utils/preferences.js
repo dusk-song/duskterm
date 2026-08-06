@@ -27,22 +27,6 @@ const PREFERENCE_DEFINITIONS = {
       toggleFind: 'Ctrl+Shift+F'
     }
   },
-  monitor: {
-    storageKey: 'monitor-settings-v1',
-    defaults: {
-      showMonitor: true,
-      showCpu: true,
-      showMemory: true,
-      showDisk: true,
-      showNet: true,
-      refreshIntervalMs: 1000,
-      diskIntervalMs: 5000,
-      localColor: '#b8a06a',
-      remoteColor: '#c0842f',
-      labelColor: '#8c8c8c',
-      valueColor: 'inherit'
-    }
-  },
   terminalTheme: {
     storageKey: 'terminal-theme-v1',
     defaults: {

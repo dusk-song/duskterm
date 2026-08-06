@@ -37,12 +37,12 @@ const switchSession = (direction) => {
 
 <template>
   <div class="session-dock-wrap">
-    <DuskDock interactive class="session-current" data-tauri-drag-region>
+    <DuskDock interactive class="session-current">
       <button class="session-nav session-nav--prev" :disabled="!canSwitchSession" title="上一个会话"
         @click.stop="switchSession(-1)">
         <ChevronLeft :size="13" />
       </button>
-      <span class="session-center session-drag-region" data-tauri-drag-region>
+      <span class="session-center session-drag-region">
         <span class="session-state" :class="active ? stateClass(active) : null" />
         <span class="session-identity">{{ sessionIdentity }}</span>
       </span>
@@ -55,10 +55,10 @@ const switchSession = (direction) => {
 </template>
 
 <style scoped>
-.session-dock-wrap { display: flex; align-items: center; min-width: 0; pointer-events: none; }
+.session-dock-wrap { display: flex; width: 100%; align-items: center; min-width: 0; pointer-events: none; }
 .session-current {
-  width: min(320px, 32vw);
-  max-width: min(320px, 32vw);
+  width: min(320px, 100%);
+  max-width: min(320px, 100%);
   gap: 4px;
   font-size: 12px;
   font-weight: 600;

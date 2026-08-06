@@ -116,8 +116,8 @@ const emit = defineEmits([
 
 .security-icon-wrap {
   @apply w-[34px] h-[34px] rounded-lg flex items-center justify-center shrink-0;
-  border: 1px solid rgba(24, 144, 255, 0.45);
-  background: rgba(24, 144, 255, 0.12);
+  border: 1px solid var(--app-status-info-border);
+  background: var(--app-status-info-bg);
 }
 
 .security-main-icon {
@@ -154,8 +154,8 @@ const emit = defineEmits([
 
 .security-tip {
   @apply flex items-center gap-2 text-[var(--color-warning)] rounded-lg px-2.5 py-2 text-xs;
-  border: 1px solid rgba(var(--warning, 250 173 20), 0.35);
-  background: rgba(var(--warning, 250 173 20), 0.08);
+  border: 1px solid var(--app-risk-warning-border);
+  background: var(--app-risk-warning-bg);
 }
 
 .password-form {

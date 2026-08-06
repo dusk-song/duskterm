@@ -661,7 +661,7 @@ const handleImportSessions = async () => {
   display: flex;
   flex-direction: column;
   height: 100%;
-  min-width: 260px;
+  min-width: 0;
   background: transparent;
   overflow: hidden;
 }

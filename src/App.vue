@@ -40,6 +40,7 @@ import { usePanelLayout } from './composables/usePanelLayout';
 import { useTerminalConnection } from './composables/useTerminalConnection';
 import { useTerminalPanels } from './composables/useTerminalPanels';
 import { useTheme } from './composables/useTheme';
+import { useWindowInteraction } from './composables/useWindowInteraction';
 import { createSessionBooleanState, resolveFocusedSessionId } from './utils/sftpPanelState';
 import { useSftpTransfersStore } from './stores/sftpTransfers';
 import { useSshStore } from './stores/ssh';
@@ -271,16 +272,20 @@ const leftColumnWidth = ref(360);
 const toolPanelWidth = ref(440);
 const isDraggingColumn = ref(false);
 const workspaceSeparatorSize = 4;
-const workspaceGridGap = 3;
-const workspaceGridPaddingX = 24;
+const workspaceGridGap = 6;
+const workspaceGridPaddingX = 8;
 const leftColumnMinWidth = 280;
 const rightColumnMinWidth = 320;
 const toolPanelMinWidth = ref(360);
-const workspaceLeftPanelBreakpoint = 800;
-const workspaceRightPanelBreakpoint = 1120;
 
 let _measureWorkspaceRaf = null;
 const measureWorkspace = () => {
+  const tracksWorkspaceWidth = (
+    showSessionPanel.value
+    || showCommandKnowledgePanel.value
+    || showActiveSftpPanel.value
+  );
+  if (workspaceWidth.value > 0 && !tracksWorkspaceWidth) return;
   if (_measureWorkspaceRaf) return;
   _measureWorkspaceRaf = requestAnimationFrame(() => {
     _measureWorkspaceRaf = null;
@@ -292,20 +297,9 @@ const measureWorkspace = () => {
   });
 };
 
-const isNarrow = computed(() => {
-  const w = workspaceWidth.value || 0;
-  return w > 0 && w <= workspaceLeftPanelBreakpoint;
-});
-
-const isRightPanelHiddenByWidth = computed(() => {
-  const w = workspaceWidth.value || 0;
-  return w > 0 && w <= workspaceRightPanelBreakpoint;
-});
-
-const hasWorkspaceLeftPanels = computed(() => showSessionPanel.value && !isNarrow.value);
+const hasWorkspaceLeftPanels = computed(() => showSessionPanel.value);
 const hasWorkspaceRightPanel = computed(() => (
-  (showCommandKnowledgePanel.value || showActiveSftpPanel.value)
-  && !isRightPanelHiddenByWidth.value
+  showCommandKnowledgePanel.value || showActiveSftpPanel.value
 ));
 
 const workspaceContentWidth = (width = workspaceWidth.value) => {
@@ -314,7 +308,34 @@ const workspaceContentWidth = (width = workspaceWidth.value) => {
   return Math.max(0, (width || 0) - workspaceGridPaddingX - gapWidth);
 };
 
+const getWorkspaceWidthState = (width = workspaceWidth.value) => {
+  const hasLeft = hasWorkspaceLeftPanels.value;
+  const hasRight = hasWorkspaceRightPanel.value;
+  const separatorCount = Number(hasLeft) + Number(hasRight);
+  const availableWidth = Math.max(
+    0,
+    workspaceContentWidth(width) - separatorCount * workspaceSeparatorSize
+  );
+  const leftWidth = hasLeft
+    ? Math.max(leftColumnMinWidth, Number.isFinite(leftColumnWidth.value) ? leftColumnWidth.value : leftColumnMinWidth)
+    : 0;
+  const toolWidth = hasRight
+    ? Math.max(toolPanelMinWidth.value, Number.isFinite(toolPanelWidth.value) ? toolPanelWidth.value : toolPanelMinWidth.value)
+    : 0;
+  const preferredWidth = leftWidth + rightColumnMinWidth + toolWidth;
+
+  return {
+    availableWidth,
+    hasLeft,
+    hasRight,
+    leftWidth,
+    proportional: availableWidth > 0 && availableWidth < preferredWidth,
+    toolWidth,
+  };
+};
+
 const clampWorkspaceLayout = () => {
+  if (getWorkspaceWidthState().proportional) return;
   const availableWidth = workspaceContentWidth();
 
   if (availableWidth > 0 && hasWorkspaceLeftPanels.value) {
@@ -358,6 +379,7 @@ const startWorkspaceResize = (axis, event) => {
   const workspaceEl = workspaceRef.value;
 
   isDraggingColumn.value = true;
+  notifyTerminalLayoutDragging(true, { source: 'workspace-column', deferFit: true });
   document.body.style.cursor = 'col-resize';
   document.body.style.userSelect = 'none';
 
@@ -373,16 +395,36 @@ const startWorkspaceResize = (axis, event) => {
   const updateCssVariable = () => {
     if (!workspaceEl) return;
 
+    const unit = getWorkspaceWidthState().proportional ? 'fr' : 'px';
+
     if (axis === 'columns') {
-      workspaceEl.style.setProperty('--drag-left-width', `${pendingLeftWidth}px`);
+      workspaceEl.style.setProperty('--drag-left-width', `${pendingLeftWidth}${unit}`);
     } else if (axis === 'tool') {
-      workspaceEl.style.setProperty('--drag-tool-width', `${pendingToolWidth}px`);
+      workspaceEl.style.setProperty('--drag-tool-width', `${pendingToolWidth}${unit}`);
     }
     rafId = null;
   };
 
   const onMouseMove = (moveEvent) => {
-    if (axis === 'columns') {
+    const widthState = getWorkspaceWidthState(
+      workspaceWidth.value || workspaceRef.value?.getBoundingClientRect().width || 0
+    );
+    if (widthState.proportional) {
+      const preferenceScale = (
+        widthState.leftWidth + rightColumnMinWidth + widthState.toolWidth
+      ) / Math.max(1, widthState.availableWidth);
+      if (axis === 'columns') {
+        pendingLeftWidth = Math.max(
+          leftColumnMinWidth,
+          startLeftWidth + (moveEvent.clientX - startX) * preferenceScale
+        );
+      } else if (axis === 'tool') {
+        pendingToolWidth = Math.max(
+          toolPanelMinWidth.value,
+          startToolWidth - (moveEvent.clientX - startX) * preferenceScale
+        );
+      }
+    } else if (axis === 'columns') {
       const availableWidth = workspaceContentWidth(workspaceWidth.value || workspaceRef.value?.getBoundingClientRect().width || 0);
       const rightReserve = hasWorkspaceRightPanel.value
         ? toolPanelWidth.value + workspaceSeparatorSize
@@ -431,6 +473,8 @@ const startWorkspaceResize = (axis, event) => {
 
     updateLayout();
     clampWorkspaceLayout();
+    notifyTerminalLayoutDragging(false, { source: 'workspace-column', deferFit: true });
+    nextTick(() => requestAnimationFrame(notifyTerminalLayoutResize));
   };
 
   document.addEventListener('mousemove', onMouseMove);
@@ -438,8 +482,8 @@ const startWorkspaceResize = (axis, event) => {
 };
 
 const workspaceGridStyle = computed(() => {
-  const hasLeft = hasWorkspaceLeftPanels.value;
-  const hasRight = hasWorkspaceRightPanel.value;
+  const widthState = getWorkspaceWidthState();
+  const { hasLeft, hasRight } = widthState;
 
   if (!hasLeft && !hasRight) {
     return {
@@ -448,19 +492,28 @@ const workspaceGridStyle = computed(() => {
     };
   }
 
-  const availableWidth = workspaceContentWidth();
-  const separatorCount = Number(hasLeft) + Number(hasRight);
-  const minLeft = hasLeft ? leftColumnMinWidth : 0;
-  const minTool = hasRight ? toolPanelMinWidth.value : 0;
-  const requiredMin = minLeft + minTool + rightColumnMinWidth + separatorCount * workspaceSeparatorSize;
-
-  if (availableWidth > 0 && availableWidth < requiredMin) {
+  if (widthState.proportional) {
+    const proportionalColumns = [];
+    if (hasLeft) {
+      proportionalColumns.push(
+        `minmax(0, var(--drag-left-width, ${widthState.leftWidth}fr))`,
+        `${workspaceSeparatorSize}px`
+      );
+    }
+    proportionalColumns.push(`minmax(0, ${rightColumnMinWidth}fr)`);
+    if (hasRight) {
+      proportionalColumns.push(
+        `${workspaceSeparatorSize}px`,
+        `minmax(0, var(--drag-tool-width, ${widthState.toolWidth}fr))`
+      );
+    }
     return {
-      gridTemplateColumns: 'minmax(0, 1fr)',
+      gridTemplateColumns: proportionalColumns.join(' '),
       gridTemplateRows: '1fr'
     };
   }
 
+  const availableWidth = workspaceContentWidth();
   const columns = [];
   if (hasLeft) {
     const rightReserve = hasRight ? toolPanelWidth.value + workspaceSeparatorSize : 0;
@@ -703,6 +756,12 @@ const activeSessionSupportsSftp = computed(() => {
 });
 const showActiveSftpPanel = computed(
   () => showSftpPanel.value && visibleSessions.value.length > 0 && activeSessionSupportsSftp.value
+);
+watch(
+  [showSessionPanel, showCommandKnowledgePanel, showActiveSftpPanel],
+  ([showLeft, showKnowledge, showSftp]) => {
+    if (showLeft || showKnowledge || showSftp) nextTick(measureWorkspace);
+  }
 );
 getActiveSftpWorkspaceId = () => activeSftpWorkspaceId.value;
 watch(activeSftpWorkspaceId, async (sessionId) => {
@@ -1032,14 +1091,7 @@ onUnmounted(() => {
   _appEvts.length = 0;
 });
 
-onMounted(() => {
-  measureWorkspace();
-  window.addEventListener('resize', measureWorkspace);
-});
-
-onUnmounted(() => {
-  window.removeEventListener('resize', measureWorkspace);
-});
+useWindowInteraction({ onResize: measureWorkspace });
 
 // --- Panel Bar DnD & Context Menu ---
 const onPanelDrop = ({ dragId, dropId }) => {
@@ -1132,7 +1184,9 @@ const handleTabContext = (key, session) => {
         <div v-if="hasWorkspaceLeftPanels" class="workspace-separator workspace-separator-vertical"
           @mousedown="startWorkspaceResize('columns', $event)" />
 
-        <TiledPanel class="workspace-panel workspace-panel-main" :dense="true" :padded="false" aria-label="主界面面板">
+        <TiledPanel class="workspace-panel workspace-panel-main"
+          :class="{ 'is-empty': visibleSessions.length === 0 }"
+          :dense="true" :padded="false" aria-label="主界面面板">
           <div class="main-panel-body">
             <div v-if="visibleSessions.length === 0" class="empty-state">
               <div class="empty-left">
@@ -1281,6 +1335,9 @@ const handleTabContext = (key, session) => {
 .app-shell.has-floating-surfaces {
   --terminal-surface-bg: color-mix(in srgb, var(--app-bg-dialog) 52%, transparent);
   --workspace-side-panel-top-offset: 0px;
+  --tb-bg: color-mix(in srgb, var(--app-bg-dialog) 78%, transparent);
+  --tb-border: var(--app-panel-border);
+  --tb-shadow: var(--app-panel-shadow);
 }
 .app-shell.has-global-background {
   background: transparent;
@@ -1295,6 +1352,10 @@ const handleTabContext = (key, session) => {
 }
 .app-shell.has-floating-surfaces .workspace-panel-main.tiled-panel {
   background: transparent;
+  border-color: var(--app-panel-border);
+  box-shadow: var(--app-panel-shadow);
+}
+.app-shell.has-floating-surfaces .workspace-panel-main.tiled-panel.is-empty {
   border-color: transparent;
   box-shadow: none;
 }
@@ -1346,12 +1407,12 @@ const handleTabContext = (key, session) => {
 }
 
 .workspace-panel-main {
-  min-width: 200px;
+  min-width: 0;
   overflow: hidden;
 }
 
 .workspace-panel-tool {
-  min-width: 300px;
+  min-width: 0;
   overflow: hidden;
   position: relative;
   z-index: 30;
@@ -1424,8 +1485,8 @@ const handleTabContext = (key, session) => {
 }
 
 .empty-left {
-  width: min(340px, 34vw);
-  min-width: 260px;
+  width: min(340px, calc(100% - 24px));
+  min-width: 0;
   height: 260px;
   background: transparent;
   border-right: none;
@@ -1433,31 +1494,6 @@ const handleTabContext = (key, session) => {
   flex-direction: column;
   padding: 0;
   overflow-y: hidden;
-}
-
-@media (max-width: 800px) {
-  .workspace-grid {
-    grid-template-columns: 1fr;
-    grid-template-rows: 1fr;
-  }
-
-  .workspace-left-stack {
-    display: none;
-  }
-
-  .workspace-separator-vertical {
-    display: none;
-  }
-
-  .workspace-separator-horizontal {
-    min-height: 4px;
-  }
-
-  /* Ensure main panel does not collapse to a hairline on small screens */
-  .workspace-panel-main {
-    min-width: 200px;
-    min-height: 150px;
-  }
 }
 
 /* Tree Styles */
@@ -1471,8 +1507,6 @@ const handleTabContext = (key, session) => {
   border-radius: var(--niri-radius-lg, 14px);
   background: color-mix(in srgb, var(--app-bg-dialog) 54%, transparent);
   box-shadow: 0 8px 28px color-mix(in srgb, var(--app-workspace-gap, #000) 18%, transparent);
-  backdrop-filter: blur(10px) saturate(112%);
-  -webkit-backdrop-filter: blur(10px) saturate(112%);
   box-sizing: border-box;
 }
 

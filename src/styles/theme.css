@@ -195,3 +195,24 @@ body,
   justify-content: flex-end;
   gap: 8px;
 }
+
+[data-dialog-draggable="true"] {
+  left: calc(50% + var(--dialog-offset-x, 0px)) !important;
+  top: calc(50% + var(--dialog-offset-y, 0px)) !important;
+}
+
+[data-dialog-draggable="true"] [data-slot="dialog-header"] {
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+[data-dialog-dragging="true"] [data-slot="dialog-header"] {
+  cursor: grabbing;
+}
+
+@media (max-width: 640px) {
+  [data-dialog-draggable="true"] [data-slot="dialog-header"] {
+    cursor: default;
+  }
+}

@@ -15,13 +15,11 @@ defineProps({ compact: Boolean, interactive: Boolean });
   min-width: 0;
   height: 26px;
   padding: 0 8px;
-  border: 1px solid color-mix(in srgb, var(--app-border-light) 42%, transparent);
+  border: 1px solid var(--tb-border, color-mix(in srgb, var(--app-border-light) 42%, transparent));
   border-radius: var(--niri-radius-md, 8px);
   color: var(--tb-text, var(--app-text));
-  background: color-mix(in srgb, var(--tb-bg, var(--app-bg-dialog)) var(--tb-surface-opacity, 98%), transparent);
-  box-shadow: 0 2px 10px color-mix(in srgb, var(--app-workspace-gap, #000) 30%, transparent);
-  backdrop-filter: blur(12px) saturate(116%);
-  -webkit-backdrop-filter: blur(12px) saturate(116%);
+  background: var(--tb-bg, var(--app-bg-dialog));
+  box-shadow: var(--tb-shadow, 0 2px 10px color-mix(in srgb, var(--app-workspace-gap, #000) 30%, transparent));
   pointer-events: none;
 }
 
@@ -34,4 +32,5 @@ defineProps({ compact: Boolean, interactive: Boolean });
   padding: 0 9px;
   border-radius: var(--niri-radius-md, 8px);
 }
+
 </style>
