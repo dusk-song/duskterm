@@ -23,6 +23,7 @@ use super::{
 };
 
 const DECISION_TIMEOUT: Duration = Duration::from_secs(30);
+const PROBE_PENDING_TIMEOUT: Duration = Duration::from_millis(50);
 const PROTOCOL_TIMEOUT: Duration = Duration::from_secs(90);
 const PROTOCOL_RETRY_INTERVAL: Duration = Duration::from_secs(10);
 const RECOVERY_DELAY: Duration = Duration::from_millis(800);
@@ -146,6 +147,11 @@ impl TerminalTransferRuntime {
         app_handle: &AppHandle,
         channel: &Channel<client::Msg>,
     ) -> Result<Vec<Vec<u8>>, String> {
+        let stale_terminal_data = self.mux.flush_stale_terminal_data(PROBE_PENDING_TIMEOUT);
+        if !stale_terminal_data.is_empty() {
+            return Ok(vec![stale_terminal_data]);
+        }
+
         if self
             .pending
             .as_ref()

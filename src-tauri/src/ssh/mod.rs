@@ -1,8 +1,10 @@
+use std::fs::{File, OpenOptions};
 use std::future::Future;
-use std::io::{Read, Write};
+use std::io::{BufReader, Read, Write};
 use std::net::{Shutdown, TcpStream, ToSocketAddrs};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{sync_channel, Receiver as StdReceiver, SyncSender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -14,11 +16,14 @@ use crate::ssh_algorithms::{
 };
 use crate::terminal_transfer::{TerminalTransferControl, TerminalTransferRuntime};
 use crate::tunnel::TunnelState;
+use encoding_rs::Encoding;
 use russh::keys::{check_known_hosts_path, HashAlg, PublicKey};
 use russh::Pty;
 use russh::{client, ChannelMsg, Disconnect};
 
-use serialport::{available_ports, DataBits, FlowControl, Parity, StopBits};
+use serialport::{
+    available_ports, ClearBuffer, DataBits, FlowControl, Parity, SerialPortType, StopBits,
+};
 use tauri::{AppHandle, Emitter, Manager};
 use tokio::io::{AsyncRead, AsyncWrite, AsyncWriteExt};
 use tokio::sync::mpsc::{
@@ -73,6 +78,63 @@ pub type SharedSshSession = Arc<AsyncMutex<client::Handle<ClientHandler>>>;
 pub type SharedSshSessionSlot = Arc<Mutex<Option<SharedSshSession>>>;
 type SharedChannelLifecycle = Arc<Mutex<channel_state::ChannelLifecycle>>;
 const SSH_INPUT_QUEUE_CAPACITY: usize = 256;
+const SERIAL_READ_TIMEOUT: Duration = Duration::from_millis(100);
+const SERIAL_MIN_BAUD_RATE: u32 = 50;
+const SERIAL_COMMAND_QUEUE_CAPACITY: usize = 256;
+const SERIAL_STATUS_INTERVAL: Duration = Duration::from_millis(250);
+const SERIAL_CONTROL_TIMEOUT: Duration = Duration::from_secs(5);
+
+#[derive(Clone, Debug)]
+pub(crate) enum SerialControlRequest {
+    WriteRaw(Vec<u8>),
+    SendFile(String),
+    SetDtr(bool),
+    SetRts(bool),
+    SetBreak(bool),
+    Clear(String),
+    StartCapture { path: String, append: bool },
+    StopCapture,
+    GetStatus,
+}
+
+#[derive(Debug)]
+enum SerialCommand {
+    Write(Vec<u8>),
+    Control {
+        request: SerialControlRequest,
+        respond_to: oneshot::Sender<Result<SerialControlResponse, String>>,
+    },
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct SerialStatus {
+    rx_bytes: u64,
+    tx_bytes: u64,
+    rx_rate: u64,
+    tx_rate: u64,
+    cts: Option<bool>,
+    dsr: Option<bool>,
+    ri: Option<bool>,
+    dcd: Option<bool>,
+    capturing: bool,
+    sending_file: bool,
+}
+
+#[derive(Debug)]
+pub(crate) enum SerialControlResponse {
+    Unit,
+    Status(SerialStatus),
+}
+
+#[derive(Clone)]
+struct SerialSharedState {
+    stop: Arc<AtomicBool>,
+    rx_bytes: Arc<AtomicU64>,
+    tx_bytes: Arc<AtomicU64>,
+    capture: Arc<Mutex<Option<File>>>,
+    file_send_active: Arc<AtomicBool>,
+}
 
 #[derive(Clone)]
 pub struct TerminalRuntimeHandle {
@@ -83,6 +145,10 @@ pub struct TerminalRuntimeHandle {
     pub(crate) transfer_control_tx: Option<UnboundedSender<TerminalTransferControl>>,
     pub(crate) transfer_owned: Arc<AtomicBool>,
     channel_lifecycle: SharedChannelLifecycle,
+    input_encoding: Option<String>,
+    input_line_ending: Option<String>,
+    serial_command_tx: Option<SyncSender<SerialCommand>>,
+    serial_file_send_active: Option<Arc<AtomicBool>>,
 }
 
 pub type SessionIoReceiver = Receiver<Vec<u8>>;
@@ -110,6 +176,10 @@ pub(crate) fn create_terminal_runtime_channels() -> (
             transfer_control_tx: None,
             transfer_owned: Arc::new(AtomicBool::new(false)),
             channel_lifecycle,
+            input_encoding: None,
+            input_line_ending: None,
+            serial_command_tx: None,
+            serial_file_send_active: None,
         },
         rx,
         window_size_rx,
@@ -129,6 +199,7 @@ pub struct SshConfig {
     pub(crate) connect_timeout: Option<u64>,
     pub(crate) keep_alive_interval: Option<u64>,
     pub(crate) term_type: Option<String>,
+    pub(crate) encoding: Option<String>,
     pub(crate) login_script: Option<String>,
     pub(crate) jump_host: Option<String>,
     pub(crate) jump_port: Option<u16>,
@@ -143,6 +214,10 @@ pub struct SshConfig {
     pub(crate) stop_bits: Option<String>,
     pub(crate) parity: Option<String>,
     pub(crate) flow_control: Option<String>,
+    pub(crate) serial_line_ending: Option<String>,
+    pub(crate) serial_device_id: Option<String>,
+    pub(crate) serial_connect_delay_ms: Option<u64>,
+    pub(crate) serial_line_delay_ms: Option<u64>,
     pub(crate) local_profile: Option<String>,
     pub(crate) local_working_directory: Option<String>,
     pub(crate) initial_cols: Option<u16>,
@@ -167,9 +242,14 @@ impl Drop for SshConfig {
 }
 
 #[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SerialPortOption {
     path: String,
     label: String,
+    stable_id: String,
+    vid: Option<u16>,
+    pid: Option<u16>,
+    serial_number: Option<String>,
 }
 
 fn normalized_protocol(value: Option<&str>) -> &'static str {
@@ -193,7 +273,27 @@ fn socket_address(host: &str, port: u16) -> Result<std::net::SocketAddr, String>
         .ok_or_else(|| "未解析到可用地址".to_string())
 }
 
-fn serial_port_path(config: &SshConfig) -> Result<String, String> {
+fn serial_port_stable_id(path: &str, port_type: &SerialPortType) -> String {
+    match port_type {
+        SerialPortType::UsbPort(info) => {
+            if let Some(serial_number) = info
+                .serial_number
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+            {
+                format!("usb:{:04x}:{:04x}:{}", info.vid, info.pid, serial_number)
+            } else {
+                format!("usb:{:04x}:{:04x}:{}", info.vid, info.pid, path)
+            }
+        }
+        SerialPortType::BluetoothPort => format!("bluetooth:{}", path),
+        SerialPortType::PciPort => format!("pci:{}", path),
+        SerialPortType::Unknown => format!("path:{}", path),
+    }
+}
+
+fn configured_serial_port_path(config: &SshConfig) -> Result<String, String> {
     config
         .serial_path
         .clone()
@@ -202,8 +302,35 @@ fn serial_port_path(config: &SshConfig) -> Result<String, String> {
         .ok_or_else(|| "串口设备路径不能为空".to_string())
 }
 
-fn serial_baud_rate(config: &SshConfig) -> u32 {
-    config.baud_rate.unwrap_or(9600)
+fn serial_port_path(config: &SshConfig) -> Result<String, String> {
+    let configured_path = configured_serial_port_path(config)?;
+    let Some(stable_id) = config
+        .serial_device_id
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    else {
+        return Ok(configured_path);
+    };
+
+    let ports = match available_ports() {
+        Ok(ports) => ports,
+        Err(_) => return Ok(configured_path),
+    };
+    Ok(ports
+        .into_iter()
+        .find(|port| serial_port_stable_id(&port.port_name, &port.port_type) == stable_id)
+        .map(|port| port.port_name)
+        .unwrap_or(configured_path))
+}
+
+fn serial_baud_rate(config: &SshConfig) -> Result<u32, String> {
+    let value = config.baud_rate.unwrap_or(9600);
+    if value >= SERIAL_MIN_BAUD_RATE {
+        Ok(value)
+    } else {
+        Err(format!("波特率不能低于 {}", SERIAL_MIN_BAUD_RATE))
+    }
 }
 
 fn serial_data_bits(config: &SshConfig) -> Result<DataBits, String> {
@@ -256,17 +383,199 @@ fn serial_flow_control(config: &SshConfig) -> Result<FlowControl, String> {
     }
 }
 
+fn serial_text_encoding(value: Option<&str>) -> Result<Option<String>, String> {
+    let label = value.unwrap_or("UTF-8").trim();
+    if label.is_empty() || label.eq_ignore_ascii_case("UTF-8") || label.eq_ignore_ascii_case("UTF8")
+    {
+        return Ok(None);
+    }
+    Encoding::for_label(label.as_bytes())
+        .map(|_| Some(label.to_string()))
+        .ok_or_else(|| format!("不支持的串口字符编码: {}", label))
+}
+
+fn serial_line_ending(value: Option<&str>) -> Result<&'static str, String> {
+    match value.unwrap_or("cr").trim().to_ascii_lowercase().as_str() {
+        "cr" => Ok("\r"),
+        "lf" => Ok("\n"),
+        "crlf" => Ok("\r\n"),
+        value => Err(format!("不支持的串口行尾: {}", value)),
+    }
+}
+
+fn serial_login_line_ending(value: Option<&str>) -> Result<&'static str, String> {
+    match value {
+        Some(value) => serial_line_ending(Some(value)),
+        None => Ok("\r\n"),
+    }
+}
+
+fn normalize_serial_line_endings(value: &str, line_ending: &str) -> String {
+    let mut result = String::with_capacity(value.len() + line_ending.len());
+    let mut chars = value.chars().peekable();
+    while let Some(ch) = chars.next() {
+        match ch {
+            '\r' => {
+                if chars.peek() == Some(&'\n') {
+                    chars.next();
+                }
+                result.push_str(line_ending);
+            }
+            '\n' => result.push_str(line_ending),
+            _ => result.push(ch),
+        }
+    }
+    result
+}
+
+fn encode_text(value: &str, encoding: Option<&str>) -> Result<Vec<u8>, String> {
+    let Some(label) = encoding else {
+        return Ok(value.as_bytes().to_vec());
+    };
+    let codec = Encoding::for_label(label.as_bytes())
+        .ok_or_else(|| format!("不支持的串口字符编码: {}", label))?;
+    let (encoded, _, had_errors) = codec.encode(value);
+    if had_errors {
+        return Err(format!("文本包含无法使用 {} 编码的字符", label));
+    }
+    Ok(encoded.into_owned())
+}
+
+fn encode_runtime_input(handle: &TerminalRuntimeHandle, value: &str) -> Result<Vec<u8>, String> {
+    let normalized = match handle.input_line_ending.as_deref() {
+        Some(line_ending) => normalize_serial_line_endings(value, line_ending),
+        None => value.to_string(),
+    };
+    encode_text(&normalized, handle.input_encoding.as_deref())
+}
+
+fn validate_serial_config(config: &SshConfig) -> Result<(), String> {
+    configured_serial_port_path(config)?;
+    serial_baud_rate(config)?;
+    serial_data_bits(config)?;
+    serial_stop_bits(config)?;
+    serial_parity(config)?;
+    serial_flow_control(config)?;
+    serial_text_encoding(config.encoding.as_deref())?;
+    serial_line_ending(config.serial_line_ending.as_deref())?;
+    if config.serial_connect_delay_ms.unwrap_or(0) > 60_000 {
+        return Err("串口连接后延迟不能超过 60000 毫秒".to_string());
+    }
+    if config.serial_line_delay_ms.unwrap_or(0) > 60_000 {
+        return Err("串口脚本行延迟不能超过 60000 毫秒".to_string());
+    }
+    Ok(())
+}
+
+fn serial_runtime_input_options(
+    config: &SshConfig,
+) -> Result<(Option<String>, Option<String>), String> {
+    validate_serial_config(config)?;
+    Ok((
+        serial_text_encoding(config.encoding.as_deref())?,
+        Some(serial_line_ending(config.serial_line_ending.as_deref())?.to_string()),
+    ))
+}
+
 fn build_serial_port(config: &SshConfig) -> Result<Box<dyn serialport::SerialPort>, String> {
+    validate_serial_config(config)?;
     let path = serial_port_path(config)?;
-    let timeout = config.connect_timeout.unwrap_or(10).clamp(1, 120);
-    serialport::new(path, serial_baud_rate(config))
+    serialport::new(path, serial_baud_rate(config)?)
         .data_bits(serial_data_bits(config)?)
         .stop_bits(serial_stop_bits(config)?)
         .parity(serial_parity(config)?)
         .flow_control(serial_flow_control(config)?)
-        .timeout(Duration::from_millis((timeout * 100).clamp(100, 2000)))
+        .timeout(SERIAL_READ_TIMEOUT)
         .open()
         .map_err(|e| format!("串口打开失败: {}", e))
+}
+
+#[cfg(test)]
+mod serial_tests {
+    use super::*;
+
+    fn serial_config() -> SshConfig {
+        SshConfig {
+            protocol: Some("serial".to_string()),
+            host: String::new(),
+            port: 0,
+            username: String::new(),
+            password: None,
+            private_key_path: None,
+            passphrase: None,
+            connect_timeout: None,
+            keep_alive_interval: None,
+            term_type: None,
+            encoding: Some("UTF-8".to_string()),
+            login_script: None,
+            jump_host: None,
+            jump_port: None,
+            jump_username: None,
+            jump_auth_type: None,
+            jump_password: None,
+            jump_private_key_path: None,
+            jump_passphrase: None,
+            serial_path: Some("COM1".to_string()),
+            baud_rate: Some(9600),
+            data_bits: Some(8),
+            stop_bits: Some("1".to_string()),
+            parity: Some("none".to_string()),
+            flow_control: Some("none".to_string()),
+            serial_line_ending: Some("cr".to_string()),
+            serial_device_id: None,
+            serial_connect_delay_ms: Some(0),
+            serial_line_delay_ms: Some(0),
+            local_profile: None,
+            local_working_directory: None,
+            initial_cols: None,
+            initial_rows: None,
+        }
+    }
+
+    #[test]
+    fn validates_serial_baud_rate_range() {
+        let mut config = serial_config();
+        config.baud_rate = Some(SERIAL_MIN_BAUD_RATE);
+        assert_eq!(serial_baud_rate(&config).unwrap(), SERIAL_MIN_BAUD_RATE);
+        config.baud_rate = Some(SERIAL_MIN_BAUD_RATE - 1);
+        assert!(serial_baud_rate(&config).is_err());
+        config.baud_rate = Some(4_000_000);
+        assert_eq!(serial_baud_rate(&config).unwrap(), 4_000_000);
+    }
+
+    #[test]
+    fn normalizes_mixed_line_endings() {
+        assert_eq!(
+            normalize_serial_line_endings("one\rtwo\nthree\r\nfour", "\r\n"),
+            "one\r\ntwo\r\nthree\r\nfour"
+        );
+        assert_eq!(serial_line_ending(None).unwrap(), "\r");
+        assert_eq!(serial_login_line_ending(None).unwrap(), "\r\n");
+    }
+
+    #[test]
+    fn encodes_serial_input_with_configured_encoding_and_line_ending() {
+        let (mut handle, _rx, _resize_rx, _close_rx) = create_terminal_runtime_channels();
+        handle.input_encoding = Some("GBK".to_string());
+        handle.input_line_ending = Some("\r\n".to_string());
+
+        let bytes = encode_runtime_input(&handle, "中文\r").unwrap();
+        let (decoded, _, had_errors) = encoding_rs::GBK.decode(&bytes);
+
+        assert!(!had_errors);
+        assert_eq!(decoded, "中文\r\n");
+    }
+
+    #[test]
+    fn rejects_missing_path_and_unknown_encoding() {
+        let mut config = serial_config();
+        config.serial_path = Some("  ".to_string());
+        assert!(validate_serial_config(&config).is_err());
+
+        config.serial_path = Some("COM1".to_string());
+        config.encoding = Some("not-an-encoding".to_string());
+        assert!(validate_serial_config(&config).is_err());
+    }
 }
 
 fn emit_session_error(app_handle: &AppHandle, session_id: &str, error: impl Into<String>) {
@@ -367,28 +676,63 @@ fn maybe_send_login_script<W: Write>(
     Ok(())
 }
 
+fn wait_serial_delay(
+    delay: Duration,
+    close_rx: &mut tokio::sync::mpsc::UnboundedReceiver<()>,
+) -> bool {
+    let deadline = Instant::now() + delay;
+    loop {
+        if close_rx.try_recv().is_ok() {
+            return true;
+        }
+        let now = Instant::now();
+        if now >= deadline {
+            return false;
+        }
+        thread::sleep((deadline - now).min(Duration::from_millis(20)));
+    }
+}
+
 fn maybe_send_serial_login_script<W: Write>(
     app_handle: &AppHandle,
     session_id: &str,
     writer: &mut W,
     login_script: Option<&String>,
-) -> Result<(), String> {
+    encoding: Option<&str>,
+    line_ending: &str,
+    line_delay: Duration,
+    close_rx: &mut tokio::sync::mpsc::UnboundedReceiver<()>,
+) -> Result<bool, String> {
     if let Some(script) = login_script {
-        let trimmed = script.trim();
+        let trimmed = script.trim_matches(|ch| ch == '\r' || ch == '\n');
         if trimmed.is_empty() {
-            return Ok(());
+            return Ok(false);
         }
-        let mut payload = trimmed.as_bytes().to_vec();
-        payload.extend_from_slice(b"\r\n");
-        writer
-            .write_all(&payload)
-            .map_err(|e| format!("发送登录脚本失败: {}", e))?;
+        let lines = trimmed.lines().collect::<Vec<_>>();
+        for (index, line) in lines.iter().enumerate() {
+            if close_rx.try_recv().is_ok() {
+                return Ok(true);
+            }
+            let payload = encode_text(
+                &format!("{}{}", line.trim_end_matches('\r'), line_ending),
+                encoding,
+            )?;
+            writer
+                .write_all(&payload)
+                .map_err(|e| format!("发送登录脚本失败: {}", e))?;
+            let _ = app_handle.emit(&format!("serial-data-sent-{}", session_id), payload);
+            if !line_delay.is_zero()
+                && index + 1 < lines.len()
+                && wait_serial_delay(line_delay, close_rx)
+            {
+                return Ok(true);
+            }
+        }
         writer
             .flush()
             .map_err(|e| format!("发送登录脚本失败: {}", e))?;
-        let _ = app_handle.emit(&format!("serial-data-sent-{}", session_id), payload);
     }
-    Ok(())
+    Ok(false)
 }
 
 fn normalize_telnet_term_type(value: Option<&str>) -> String {
@@ -856,43 +1200,277 @@ fn spawn_telnet_session(
     });
 }
 
+fn current_serial_status(
+    port: &mut dyn serialport::SerialPort,
+    rx_bytes: u64,
+    tx_bytes: u64,
+    rx_rate: u64,
+    tx_rate: u64,
+    capturing: bool,
+    sending_file: bool,
+) -> SerialStatus {
+    SerialStatus {
+        rx_bytes,
+        tx_bytes,
+        rx_rate,
+        tx_rate,
+        cts: port.read_clear_to_send().ok(),
+        dsr: port.read_data_set_ready().ok(),
+        ri: port.read_ring_indicator().ok(),
+        dcd: port.read_carrier_detect().ok(),
+        capturing,
+        sending_file,
+    }
+}
+
+fn write_serial_payload(
+    app_handle: &AppHandle,
+    session_id: &str,
+    port: &mut dyn serialport::SerialPort,
+    tx_bytes: &AtomicU64,
+    payload: Vec<u8>,
+) -> Result<(), String> {
+    if payload.is_empty() {
+        return Ok(());
+    }
+    port.write_all(&payload)
+        .map_err(|error| format!("串口写入失败: {}", error))?;
+    tx_bytes.fetch_add(payload.len() as u64, Ordering::Relaxed);
+    let _ = app_handle.emit(&format!("serial-data-sent-{}", session_id), payload);
+    Ok(())
+}
+
+fn handle_serial_control(
+    app_handle: &AppHandle,
+    session_id: &str,
+    port: &mut dyn serialport::SerialPort,
+    request: SerialControlRequest,
+    shared: &SerialSharedState,
+) -> Result<SerialControlResponse, String> {
+    match request {
+        SerialControlRequest::WriteRaw(payload) => {
+            write_serial_payload(app_handle, session_id, port, &shared.tx_bytes, payload)?;
+            Ok(SerialControlResponse::Unit)
+        }
+        SerialControlRequest::SendFile(path) => {
+            let file =
+                File::open(&path).map_err(|error| format!("打开待发送文件失败: {}", error))?;
+            let mut reader = BufReader::new(file);
+            let mut buffer = vec![0u8; 1024];
+            loop {
+                if shared.stop.load(Ordering::Acquire) {
+                    return Err("串口文件发送已取消".to_string());
+                }
+                let read = reader
+                    .read(&mut buffer)
+                    .map_err(|error| format!("读取待发送文件失败: {}", error))?;
+                if read == 0 {
+                    break;
+                }
+                write_serial_payload(
+                    app_handle,
+                    session_id,
+                    port,
+                    &shared.tx_bytes,
+                    buffer[..read].to_vec(),
+                )?;
+                while port.bytes_to_write().unwrap_or(0) > 8192 {
+                    if shared.stop.load(Ordering::Acquire) {
+                        return Err("串口文件发送已取消".to_string());
+                    }
+                    thread::sleep(Duration::from_millis(5));
+                }
+            }
+            Ok(SerialControlResponse::Unit)
+        }
+        SerialControlRequest::SetDtr(level) => port
+            .write_data_terminal_ready(level)
+            .map(|_| SerialControlResponse::Unit)
+            .map_err(|error| format!("设置 DTR 失败: {}", error)),
+        SerialControlRequest::SetRts(level) => port
+            .write_request_to_send(level)
+            .map(|_| SerialControlResponse::Unit)
+            .map_err(|error| format!("设置 RTS 失败: {}", error)),
+        SerialControlRequest::SetBreak(enabled) => {
+            let result = if enabled {
+                port.set_break()
+            } else {
+                port.clear_break()
+            };
+            result
+                .map(|_| SerialControlResponse::Unit)
+                .map_err(|error| format!("设置 BREAK 失败: {}", error))
+        }
+        SerialControlRequest::Clear(target) => {
+            let target = match target.trim().to_ascii_lowercase().as_str() {
+                "input" | "rx" => ClearBuffer::Input,
+                "output" | "tx" => ClearBuffer::Output,
+                "all" => ClearBuffer::All,
+                _ => return Err("清理目标必须为 input、output 或 all".to_string()),
+            };
+            port.clear(target)
+                .map(|_| SerialControlResponse::Unit)
+                .map_err(|error| format!("清理串口缓冲区失败: {}", error))
+        }
+        SerialControlRequest::StartCapture { path, append } => {
+            let file = OpenOptions::new()
+                .create(true)
+                .write(true)
+                .append(append)
+                .truncate(!append)
+                .open(&path)
+                .map_err(|error| format!("打开串口抓取文件失败: {}", error))?;
+            *shared.capture.lock().unwrap() = Some(file);
+            Ok(SerialControlResponse::Unit)
+        }
+        SerialControlRequest::StopCapture => {
+            *shared.capture.lock().unwrap() = None;
+            Ok(SerialControlResponse::Unit)
+        }
+        SerialControlRequest::GetStatus => {
+            Ok(SerialControlResponse::Status(current_serial_status(
+                port,
+                shared.rx_bytes.load(Ordering::Relaxed),
+                shared.tx_bytes.load(Ordering::Relaxed),
+                0,
+                0,
+                shared.capture.lock().unwrap().is_some(),
+                shared.file_send_active.load(Ordering::Acquire),
+            )))
+        }
+    }
+}
+
 fn spawn_serial_session(
     app_handle: AppHandle,
     session_id: String,
     config: SshConfig,
-    mut rx: SessionIoReceiver,
+    command_rx: StdReceiver<SerialCommand>,
     mut close_rx: tokio::sync::mpsc::UnboundedReceiver<()>,
-) {
-    thread::spawn(move || {
+    channel_lifecycle: SharedChannelLifecycle,
+    file_send_active: Arc<AtomicBool>,
+) -> tokio::task::JoinHandle<()> {
+    tokio::task::spawn_blocking(move || {
         let outcome = (|| -> Result<(), String> {
-            let mut port = build_serial_port(&config)?;
-            let _ = app_handle.emit(&format!("ssh-connected-{}", session_id), ());
+            let mut read_port = build_serial_port(&config)?;
+            let mut write_port = read_port
+                .try_clone()
+                .map_err(|error| format!("复制串口句柄失败: {}", error))?;
+            let encoding = serial_text_encoding(config.encoding.as_deref())?;
+            let line_ending = serial_login_line_ending(config.serial_line_ending.as_deref())?;
+            let connect_delay = Duration::from_millis(config.serial_connect_delay_ms.unwrap_or(0));
+            let line_delay = Duration::from_millis(config.serial_line_delay_ms.unwrap_or(0));
+            let shared = SerialSharedState {
+                stop: Arc::new(AtomicBool::new(false)),
+                rx_bytes: Arc::new(AtomicU64::new(0)),
+                tx_bytes: Arc::new(AtomicU64::new(0)),
+                capture: Arc::new(Mutex::new(None::<File>)),
+                file_send_active,
+            };
+            let writer_error = Arc::new(Mutex::new(None::<String>));
 
-            maybe_send_serial_login_script(
+            let _ = app_handle.emit(&format!("ssh-connected-{}", session_id), ());
+            if !connect_delay.is_zero() && wait_serial_delay(connect_delay, &mut close_rx) {
+                return Ok(());
+            }
+            if maybe_send_serial_login_script(
                 &app_handle,
                 &session_id,
-                &mut port,
+                &mut write_port,
                 config.login_script.as_ref(),
-            )?;
+                encoding.as_deref(),
+                line_ending,
+                line_delay,
+                &mut close_rx,
+            )? {
+                return Ok(());
+            }
+
+            let writer_app_handle = app_handle.clone();
+            let writer_session_id = session_id.clone();
+            let writer_shared = shared.clone();
+            let writer_error_slot = writer_error.clone();
+            let writer = thread::spawn(move || {
+                while !writer_shared.stop.load(Ordering::Acquire) {
+                    let command = match command_rx.recv_timeout(Duration::from_millis(100)) {
+                        Ok(command) => command,
+                        Err(std::sync::mpsc::RecvTimeoutError::Timeout) => continue,
+                        Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                    };
+                    match command {
+                        SerialCommand::Write(payload) => {
+                            if let Err(error) = write_serial_payload(
+                                &writer_app_handle,
+                                &writer_session_id,
+                                write_port.as_mut(),
+                                &writer_shared.tx_bytes,
+                                payload,
+                            ) {
+                                *writer_error_slot.lock().unwrap() = Some(error);
+                                writer_shared.stop.store(true, Ordering::Release);
+                            }
+                        }
+                        SerialCommand::Control {
+                            request,
+                            respond_to,
+                        } => {
+                            let background_operation =
+                                matches!(&request, SerialControlRequest::SendFile(_));
+                            let result = handle_serial_control(
+                                &writer_app_handle,
+                                &writer_session_id,
+                                write_port.as_mut(),
+                                request,
+                                &writer_shared,
+                            );
+                            if background_operation {
+                                writer_shared
+                                    .file_send_active
+                                    .store(false, Ordering::Release);
+                                if let Err(error) = &result {
+                                    let _ = writer_app_handle.emit(
+                                        &format!("serial-operation-error-{}", writer_session_id),
+                                        error.clone(),
+                                    );
+                                }
+                            }
+                            let _ = respond_to.send(result);
+                        }
+                    }
+                }
+            });
 
             let mut read_buf = [0u8; 4096];
-            loop {
+            let mut last_status_at = Instant::now();
+            let mut last_rx_bytes = 0u64;
+            let mut last_tx_bytes = 0u64;
+            let mut read_error = None;
+            while !shared.stop.load(Ordering::Acquire) {
                 if close_rx.try_recv().is_ok() {
                     break;
                 }
 
-                while let Ok(data) = rx.try_recv() {
-                    if !data.is_empty() {
-                        port.write_all(&data)
-                            .map_err(|e| format!("串口写入失败: {}", e))?;
-                        port.flush().map_err(|e| format!("串口写入失败: {}", e))?;
-                        let _ = app_handle.emit(&format!("serial-data-sent-{}", session_id), data);
-                    }
-                }
-
-                match port.read(&mut read_buf) {
+                match read_port.read(&mut read_buf) {
                     Ok(0) => {}
                     Ok(read) => {
+                        shared.rx_bytes.fetch_add(read as u64, Ordering::Relaxed);
+                        let capture_error = {
+                            let mut capture_guard = shared.capture.lock().unwrap();
+                            let result = capture_guard
+                                .as_mut()
+                                .map(|file| file.write_all(&read_buf[..read]));
+                            match result {
+                                Some(Err(error)) => {
+                                    *capture_guard = None;
+                                    Some(format!("写入串口抓取文件失败，已停止抓取: {}", error))
+                                }
+                                _ => None,
+                            }
+                        };
+                        if let Some(error) = capture_error {
+                            let _ = app_handle
+                                .emit(&format!("serial-operation-error-{}", session_id), error);
+                        }
                         let _ = app_handle.emit(
                             &format!("ssh-data-{}", session_id),
                             read_buf[..read].to_vec(),
@@ -901,18 +1479,65 @@ fn spawn_serial_session(
                     Err(error)
                         if error.kind() == std::io::ErrorKind::WouldBlock
                             || error.kind() == std::io::ErrorKind::TimedOut => {}
-                    Err(error) => return Err(format!("串口读取失败: {}", error)),
+                    Err(error) => {
+                        read_error = Some(format!("串口读取失败: {}", error));
+                        break;
+                    }
+                }
+
+                if last_status_at.elapsed() >= SERIAL_STATUS_INTERVAL {
+                    let current_rx = shared.rx_bytes.load(Ordering::Relaxed);
+                    let current_tx = shared.tx_bytes.load(Ordering::Relaxed);
+                    let elapsed_ms = last_status_at.elapsed().as_millis().max(1) as u64;
+                    let status = current_serial_status(
+                        read_port.as_mut(),
+                        current_rx,
+                        current_tx,
+                        (current_rx.saturating_sub(last_rx_bytes) * 1000) / elapsed_ms,
+                        (current_tx.saturating_sub(last_tx_bytes) * 1000) / elapsed_ms,
+                        shared.capture.lock().unwrap().is_some(),
+                        shared.file_send_active.load(Ordering::Acquire),
+                    );
+                    let _ = app_handle.emit(&format!("serial-status-{}", session_id), status);
+                    last_rx_bytes = current_rx;
+                    last_tx_bytes = current_tx;
+                    last_status_at = Instant::now();
                 }
             }
 
+            shared.stop.store(true, Ordering::Release);
+            let _ = writer.join();
+            if let Some(error) = read_error {
+                return Err(error);
+            }
+            if let Some(error) = writer_error.lock().unwrap().take() {
+                return Err(error);
+            }
             Ok(())
         })();
 
-        if let Err(error) = outcome {
-            emit_session_error(&app_handle, &session_id, error);
+        match outcome {
+            Ok(()) => {
+                terminate_channel(
+                    &app_handle,
+                    &session_id,
+                    &channel_lifecycle,
+                    channel_state::TerminalCause::ApplicationClosed,
+                );
+            }
+            Err(error) => {
+                emit_session_error(&app_handle, &session_id, error.clone());
+                let cause = channel_state::TerminalCause::SerialError(error);
+                let reason = cause.reason();
+                if channel_lifecycle.lock().unwrap().terminate(cause) {
+                    connection_log::append(
+                        &session_id,
+                        format!("channel terminal state reason={}", reason),
+                    );
+                }
+            }
         }
-        emit_session_closed(&app_handle, &session_id, "session closed");
-    });
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -2042,12 +2667,21 @@ pub async fn connect_ssh_legacy(
     config: SshConfig,
 ) -> Result<TerminalRuntimeHandle, String> {
     let session_id_clone = session_id.clone();
-    let supports_terminal_transfer = normalized_protocol(config.protocol.as_deref()) == "ssh";
+    let protocol = normalized_protocol(config.protocol.as_deref());
+    let supports_terminal_transfer = protocol == "ssh";
+    let (input_encoding, input_line_ending) = if protocol == "serial" {
+        serial_runtime_input_options(&config)?
+    } else {
+        (None, None)
+    };
 
     // Channels for communication with the SSH task
     let (tx, rx) = channel::<Vec<u8>>(SSH_INPUT_QUEUE_CAPACITY);
     let (resize_tx, resize_rx) = unbounded_channel::<(u32, u32)>();
     let (close_tx, close_rx) = unbounded_channel::<()>();
+    let (serial_command_tx, serial_command_rx) =
+        sync_channel::<SerialCommand>(SERIAL_COMMAND_QUEUE_CAPACITY);
+    let serial_file_send_active = Arc::new(AtomicBool::new(false));
     let (transfer_control_tx, transfer_rx) = unbounded_channel::<TerminalTransferControl>();
     let transfer_owned = Arc::new(AtomicBool::new(false));
     let shared_session_slot: SharedSshSessionSlot = Arc::new(Mutex::new(None));
@@ -2060,9 +2694,13 @@ pub async fn connect_ssh_legacy(
         transfer_control_tx: supports_terminal_transfer.then_some(transfer_control_tx),
         transfer_owned: transfer_owned.clone(),
         channel_lifecycle: channel_lifecycle.clone(),
+        input_encoding,
+        input_line_ending,
+        serial_command_tx: (protocol == "serial").then_some(serial_command_tx),
+        serial_file_send_active: (protocol == "serial").then_some(serial_file_send_active.clone()),
     };
 
-    match normalized_protocol(config.protocol.as_deref()) {
+    match protocol {
         "telnet" => {
             spawn_telnet_session(
                 app_handle,
@@ -2075,7 +2713,15 @@ pub async fn connect_ssh_legacy(
             return Ok(runtime_handle);
         }
         "serial" => {
-            spawn_serial_session(app_handle, session_id_clone, config, rx, close_rx);
+            drop(spawn_serial_session(
+                app_handle,
+                session_id_clone,
+                config,
+                serial_command_rx,
+                close_rx,
+                channel_lifecycle,
+                serial_file_send_active,
+            ));
             return Ok(runtime_handle);
         }
         _ => {}
@@ -2127,10 +2773,19 @@ pub async fn connect_ssh_runtime(
     session_id: String,
     config: SshConfig,
 ) -> Result<crate::session::state::ManagedSshRuntime, String> {
-    let supports_terminal_transfer = normalized_protocol(config.protocol.as_deref()) == "ssh";
+    let protocol = normalized_protocol(config.protocol.as_deref());
+    let supports_terminal_transfer = protocol == "ssh";
+    let (input_encoding, input_line_ending) = if protocol == "serial" {
+        serial_runtime_input_options(&config)?
+    } else {
+        (None, None)
+    };
     let (tx, rx) = channel::<Vec<u8>>(SSH_INPUT_QUEUE_CAPACITY);
     let (resize_tx, resize_rx) = unbounded_channel::<(u32, u32)>();
     let (close_tx, close_rx) = unbounded_channel::<()>();
+    let (serial_command_tx, serial_command_rx) =
+        sync_channel::<SerialCommand>(SERIAL_COMMAND_QUEUE_CAPACITY);
+    let serial_file_send_active = Arc::new(AtomicBool::new(false));
     let (transfer_control_tx, transfer_rx) = unbounded_channel::<TerminalTransferControl>();
     let transfer_owned = Arc::new(AtomicBool::new(false));
     let shared_session_slot: SharedSshSessionSlot = Arc::new(Mutex::new(None));
@@ -2143,17 +2798,26 @@ pub async fn connect_ssh_runtime(
         transfer_control_tx: supports_terminal_transfer.then_some(transfer_control_tx),
         transfer_owned: transfer_owned.clone(),
         channel_lifecycle: channel_lifecycle.clone(),
+        input_encoding,
+        input_line_ending,
+        serial_command_tx: (protocol == "serial").then_some(serial_command_tx),
+        serial_file_send_active: (protocol == "serial").then_some(serial_file_send_active.clone()),
     };
 
-    let task = match normalized_protocol(config.protocol.as_deref()) {
+    let task = match protocol {
         "telnet" => {
             spawn_telnet_session(app_handle, session_id, config, rx, resize_rx, close_rx);
             None
         }
-        "serial" => {
-            spawn_serial_session(app_handle, session_id, config, rx, close_rx);
-            None
-        }
+        "serial" => Some(spawn_serial_session(
+            app_handle,
+            session_id,
+            config,
+            serial_command_rx,
+            close_rx,
+            channel_lifecycle,
+            serial_file_send_active,
+        )),
         _ => Some(tokio::spawn(run_ssh_session_task(
             app_handle,
             sftp_state,
@@ -2433,6 +3097,10 @@ pub async fn open_shared_shell_channel_runtime(
         transfer_control_tx: Some(transfer_control_tx),
         transfer_owned: transfer_owned.clone(),
         channel_lifecycle: channel_lifecycle.clone(),
+        input_encoding: None,
+        input_line_ending: None,
+        serial_command_tx: None,
+        serial_file_send_active: None,
     };
     let (ready_tx, ready_rx) = oneshot::channel();
     let task = tokio::spawn(run_shared_shell_channel_task(
@@ -2468,11 +3136,11 @@ pub async fn open_shared_shell_channel_runtime(
 
 #[tauri::command]
 pub async fn test_ssh_connection(config: SshConfig) -> Result<String, String> {
-    let address = socket_address(&config.host, config.port)?;
     let timeout = Duration::from_secs(config.connect_timeout.unwrap_or(10).clamp(1, 120));
 
     match normalized_protocol(config.protocol.as_deref()) {
         "telnet" => {
+            let address = socket_address(&config.host, config.port)?;
             let stream = TcpStream::connect_timeout(&address, timeout)
                 .map_err(|e| format!("Telnet 连接失败: {}", e))?;
             let _ = stream.shutdown(Shutdown::Both);
@@ -2486,6 +3154,7 @@ pub async fn test_ssh_connection(config: SshConfig) -> Result<String, String> {
     }
 
     // SSH: just test TCP port reachability (like telnet/nc)
+    let address = socket_address(&config.host, config.port)?;
     let stream = TcpStream::connect_timeout(&address, timeout)
         .map_err(|e| format!("端口不可达 ({}:{})\n{}", config.host, config.port, e))?;
     let _ = stream.shutdown(Shutdown::Both);
@@ -2499,17 +3168,30 @@ pub fn list_serial_ports() -> Result<Vec<SerialPortOption>, String> {
         .into_iter()
         .map(|port| {
             let path = port.port_name;
-            let label = match port.port_type {
+            let stable_id = serial_port_stable_id(&path, &port.port_type);
+            let mut vid = None;
+            let mut pid = None;
+            let mut serial_number = None;
+            let label = match &port.port_type {
                 serialport::SerialPortType::UsbPort(info) => {
+                    vid = Some(info.vid);
+                    pid = Some(info.pid);
+                    serial_number = info.serial_number.clone();
                     let mut parts = Vec::new();
-                    if let Some(manufacturer) = info.manufacturer {
+                    if let Some(manufacturer) = info.manufacturer.as_deref() {
                         if !manufacturer.trim().is_empty() {
                             parts.push(manufacturer.trim().to_string());
                         }
                     }
-                    if let Some(product) = info.product {
+                    if let Some(product) = info.product.as_deref() {
                         if !product.trim().is_empty() {
                             parts.push(product.trim().to_string());
+                        }
+                    }
+                    parts.push(format!("VID:{:04X} PID:{:04X}", info.vid, info.pid));
+                    if let Some(serial) = info.serial_number.as_deref() {
+                        if !serial.trim().is_empty() {
+                            parts.push(format!("SN:{}", serial.trim()));
                         }
                     }
                     if parts.is_empty() {
@@ -2522,7 +3204,14 @@ pub fn list_serial_ports() -> Result<Vec<SerialPortOption>, String> {
                 serialport::SerialPortType::PciPort => format!("{} (PCI)", path),
                 _ => path.clone(),
             };
-            SerialPortOption { path, label }
+            SerialPortOption {
+                path,
+                label,
+                stable_id,
+                vid,
+                pid,
+                serial_number,
+            }
         })
         .collect())
 }
@@ -2543,21 +3232,78 @@ pub fn write_ssh_runtime(handle: &TerminalRuntimeHandle, data: String) -> Result
                 .cause()
                 .map(channel_state::TerminalCause::reason)
                 .unwrap_or_else(|| "unknown terminal state".to_string());
-            return Err(format!("SSH channel is closed: {}", reason));
+            return Err(format!("Terminal channel is closed: {}", reason));
         }
     }
 
-    handle
-        .tx
-        .try_send(data.into_bytes())
-        .map_err(|error| match error {
-            tokio::sync::mpsc::error::TrySendError::Full(_) => {
-                "SSH input queue is full; dropped to protect memory".to_string()
-            }
-            tokio::sync::mpsc::error::TrySendError::Closed(_) => {
-                "SSH session input channel is closed".to_string()
-            }
-        })
+    let bytes = encode_runtime_input(handle, &data)?;
+    if let Some(serial_tx) = handle.serial_command_tx.as_ref() {
+        if handle
+            .serial_file_send_active
+            .as_ref()
+            .is_some_and(|active| active.load(Ordering::Acquire))
+        {
+            return Err("串口文件发送期间不能插入普通数据".to_string());
+        }
+        return serial_tx
+            .try_send(SerialCommand::Write(bytes))
+            .map_err(|error| match error {
+                std::sync::mpsc::TrySendError::Full(_) => {
+                    "串口发送队列已满，已拒绝继续写入以保护内存".to_string()
+                }
+                std::sync::mpsc::TrySendError::Disconnected(_) => "串口写入通道已关闭".to_string(),
+            });
+    }
+    handle.tx.try_send(bytes).map_err(|error| match error {
+        tokio::sync::mpsc::error::TrySendError::Full(_) => {
+            "Terminal input queue is full; dropped to protect memory".to_string()
+        }
+        tokio::sync::mpsc::error::TrySendError::Closed(_) => {
+            "Terminal session input channel is closed".to_string()
+        }
+    })
+}
+
+pub(crate) async fn control_serial_runtime(
+    handle: &TerminalRuntimeHandle,
+    request: SerialControlRequest,
+) -> Result<SerialControlResponse, String> {
+    let tx = handle
+        .serial_command_tx
+        .as_ref()
+        .ok_or_else(|| "当前会话不是串口会话".to_string())?;
+    let is_file_send = matches!(&request, SerialControlRequest::SendFile(_));
+    let file_send_active = handle
+        .serial_file_send_active
+        .as_ref()
+        .ok_or_else(|| "当前会话不是串口会话".to_string())?;
+    if is_file_send {
+        file_send_active
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .map_err(|_| "已有串口文件正在发送".to_string())?;
+    } else if file_send_active.load(Ordering::Acquire) {
+        return Err("串口文件发送期间暂不接受其他写入或控制操作".to_string());
+    }
+    let (respond_to, response_rx) = oneshot::channel();
+    if let Err(error) = tx.try_send(SerialCommand::Control {
+        request,
+        respond_to,
+    }) {
+        if is_file_send {
+            file_send_active.store(false, Ordering::Release);
+        }
+        return Err(match error {
+            std::sync::mpsc::TrySendError::Full(_) => "串口控制队列已满".to_string(),
+            std::sync::mpsc::TrySendError::Disconnected(_) => "串口控制通道已关闭".to_string(),
+        });
+    }
+    if is_file_send {
+        return Ok(SerialControlResponse::Unit);
+    }
+    tokio::time::timeout(SERIAL_CONTROL_TIMEOUT, response_rx)
+        .await
+        .map_err(|_| "串口控制操作超时".to_string())?
+        .map_err(|_| "串口控制任务未返回结果".to_string())?
 }
 
 #[allow(dead_code)]
@@ -2654,6 +3400,151 @@ pub async fn resize_ssh(
     rows: u32,
 ) -> Result<(), String> {
     supervisor.resize_terminal(session_id, cols, rows).await
+}
+
+async fn run_serial_unit_control(
+    supervisor: &crate::session::supervisor::SessionSupervisor,
+    session_id: String,
+    request: SerialControlRequest,
+) -> Result<(), String> {
+    match supervisor.control_serial(session_id, request).await? {
+        SerialControlResponse::Unit => Ok(()),
+        SerialControlResponse::Status(_) => Err("串口控制返回了意外的状态结果".to_string()),
+    }
+}
+
+#[tauri::command]
+pub async fn serial_write_bytes(
+    supervisor: tauri::State<'_, crate::session::supervisor::SessionSupervisor>,
+    session_id: String,
+    data: Vec<u8>,
+) -> Result<(), String> {
+    run_serial_unit_control(
+        supervisor.inner(),
+        session_id,
+        SerialControlRequest::WriteRaw(data),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn serial_write_text(
+    supervisor: tauri::State<'_, crate::session::supervisor::SessionSupervisor>,
+    session_id: String,
+    text: String,
+    encoding: Option<String>,
+    line_ending: Option<String>,
+) -> Result<(), String> {
+    let suffix = match line_ending
+        .as_deref()
+        .unwrap_or("none")
+        .trim()
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "none" => "",
+        "cr" => "\r",
+        "lf" => "\n",
+        "crlf" => "\r\n",
+        _ => return Err("发送行尾必须为 none、cr、lf 或 crlf".to_string()),
+    };
+    let codec = serial_text_encoding(encoding.as_deref())?;
+    let payload = encode_text(&format!("{}{}", text, suffix), codec.as_deref())?;
+    run_serial_unit_control(
+        supervisor.inner(),
+        session_id,
+        SerialControlRequest::WriteRaw(payload),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn serial_send_file(
+    supervisor: tauri::State<'_, crate::session::supervisor::SessionSupervisor>,
+    session_id: String,
+    path: String,
+) -> Result<(), String> {
+    run_serial_unit_control(
+        supervisor.inner(),
+        session_id,
+        SerialControlRequest::SendFile(path),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn serial_set_control_line(
+    supervisor: tauri::State<'_, crate::session::supervisor::SessionSupervisor>,
+    session_id: String,
+    line: String,
+    enabled: bool,
+) -> Result<(), String> {
+    let request = match line.trim().to_ascii_lowercase().as_str() {
+        "dtr" => SerialControlRequest::SetDtr(enabled),
+        "rts" => SerialControlRequest::SetRts(enabled),
+        "break" => SerialControlRequest::SetBreak(enabled),
+        _ => return Err("控制线必须为 DTR、RTS 或 BREAK".to_string()),
+    };
+    run_serial_unit_control(supervisor.inner(), session_id, request).await
+}
+
+#[tauri::command]
+pub async fn serial_clear_buffer(
+    supervisor: tauri::State<'_, crate::session::supervisor::SessionSupervisor>,
+    session_id: String,
+    target: String,
+) -> Result<(), String> {
+    run_serial_unit_control(
+        supervisor.inner(),
+        session_id,
+        SerialControlRequest::Clear(target),
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn serial_start_capture(
+    supervisor: tauri::State<'_, crate::session::supervisor::SessionSupervisor>,
+    session_id: String,
+    path: String,
+    append: Option<bool>,
+) -> Result<(), String> {
+    run_serial_unit_control(
+        supervisor.inner(),
+        session_id,
+        SerialControlRequest::StartCapture {
+            path,
+            append: append.unwrap_or(false),
+        },
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn serial_stop_capture(
+    supervisor: tauri::State<'_, crate::session::supervisor::SessionSupervisor>,
+    session_id: String,
+) -> Result<(), String> {
+    run_serial_unit_control(
+        supervisor.inner(),
+        session_id,
+        SerialControlRequest::StopCapture,
+    )
+    .await
+}
+
+#[tauri::command]
+pub async fn serial_get_status(
+    supervisor: tauri::State<'_, crate::session::supervisor::SessionSupervisor>,
+    session_id: String,
+) -> Result<SerialStatus, String> {
+    match supervisor
+        .control_serial(session_id, SerialControlRequest::GetStatus)
+        .await?
+    {
+        SerialControlResponse::Status(status) => Ok(status),
+        SerialControlResponse::Unit => Err("串口状态查询未返回状态".to_string()),
+    }
 }
 
 #[tauri::command]

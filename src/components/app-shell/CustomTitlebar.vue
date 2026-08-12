@@ -25,7 +25,6 @@ const emit = defineEmits(['toggle-sftp', 'toggle-transfer']);
 const menus = [
   { key: 'file', label: '会话', items: [
     { key: 'file_new_conn', label: '新建连接', shortcut: 'Ctrl+N' },
-    { key: 'file_open_session', label: '打开会话列表', shortcut: 'Ctrl+O' },
     { key: 'file_prefs', label: '首选项', shortcut: 'Ctrl+,' }, { type: 'divider' },
     { key: 'file_quit', label: '退出', shortcut: 'Alt+F4' },
   ] },
@@ -37,11 +36,10 @@ const menus = [
     { key: 'edit_find', label: '查找...', bindingKey: 'toggleFind' },
   ] },
   { key: 'view', label: '视图', items: [
-    { key: 'view_tool_sessions', label: '切换会话列表', bindingKey: 'sessionList' },
-    { key: 'view_tool_sftp', label: '切换文件管理', bindingKey: 'sftpPanel' },
+    { key: 'view_tool_sessions', label: '会话列表', bindingKey: 'sessionList' },
+    { key: 'view_tool_sftp', label: '文件管理', bindingKey: 'sftpPanel' },
     { key: 'view_tool_knowledge', label: '命令知识库', bindingKey: 'commandKnowledge' },
     { key: 'view_transfer_list', label: '传输列表', bindingKey: 'transferList' },
-    { key: 'view_fullscreen', label: '切换全屏', shortcut: 'F11' },
   ] },
   { key: 'connection', label: '连接', items: [
     { key: 'conn_reconnect', label: '重连当前会话', shortcut: 'Ctrl+R' },

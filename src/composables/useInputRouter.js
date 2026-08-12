@@ -301,6 +301,12 @@ export function useInputRouter({ sshStore }) {
 
   const shouldBlockSensitiveBroadcast = async (sourceSessionId, targets, payload) => {
     if (!targets?.length) return false;
+    const sessions = sshStore.sessions || [];
+    const hasShellTarget = targets.some((targetId) => {
+      const target = sessions.find((session) => session.id === targetId);
+      return String(target?.config?.protocol || 'ssh').toLowerCase() !== 'serial';
+    });
+    if (!hasShellTarget) return false;
     if (!String(payload || '').includes('\r') && !String(payload || '').includes('\n')) {
       return false;
     }

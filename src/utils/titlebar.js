@@ -9,7 +9,6 @@ const menus = [
   {
     key: 'file', label: '文件', items: [
       { key: 'file_new_conn', label: '新建连接', shortcut: 'Ctrl+N' },
-      { key: 'file_open_session', label: '打开会话列表', shortcut: 'Ctrl+O' },
       { key: 'file_save_session', label: '保存会话', shortcut: 'Ctrl+S' },
       { key: 'file_save_all', label: '保存全部活动会话', shortcut: 'Ctrl+Shift+S' },
       { type: 'divider' },
@@ -34,9 +33,8 @@ const menus = [
       { key: 'view_zoom_out', label: '缩小', shortcut: 'Ctrl+Minus' },
       { key: 'view_zoom_reset', label: '重置缩放', shortcut: 'Ctrl+0' },
       { type: 'divider' },
-      { key: 'view_tool_sessions', label: '切换会话列表', shortcut: 'F8' },
-      { key: 'view_tool_sftp', label: '切换文件管理', shortcut: 'F9' },
-      { key: 'view_fullscreen', label: '切换全屏', shortcut: 'F11' },
+      { key: 'view_tool_sessions', label: '会话列表', shortcut: 'F8' },
+      { key: 'view_tool_sftp', label: '文件管理', shortcut: 'F9' },
       { key: 'view_refresh', label: '刷新当前视图', shortcut: 'F5' }
     ]
   },

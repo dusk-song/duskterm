@@ -12,7 +12,7 @@ import DialogHeader from '@/components/ui/dialog/DialogHeader.vue';
 import DialogTitle from '@/components/ui/dialog/DialogTitle.vue';
 import Input from '@/components/ui/input/Input.vue';
 import { toast } from '@/composables/useToast';
-import { save } from '@tauri-apps/plugin-dialog';
+import { open, save } from '@tauri-apps/plugin-dialog';
 import { FitAddon } from '@xterm/addon-fit';
 import { SearchAddon } from '@xterm/addon-search';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
@@ -68,7 +68,7 @@ const reconnectPromptShown = ref(false);
 const lineNumberRows = ref([]);
 const lineNumberGutterWidth = ref('4ch');
 const lineNumberRowHeightPx = ref(18);
-const showLineNumberGutter = computed(() => lineNumbersEnabled.value);
+const showLineNumberGutter = computed(() => lineNumbersEnabled.value && !isSerialSession.value);
 const sshStore = useSshStore();
 const transferStore = useTransfersStore();
 const commandKnowledgeStore = useCommandKnowledgeStore();
@@ -141,17 +141,55 @@ const syncBadgeState = ref({
   broadcastEnabled: false,
 });
 const nonPrimaryInputWarnAt = ref(0);
+let serialWriteErrorToastAt = 0;
 const serialReceiveVisible = ref(true);
 const serialRawReceiveChunks = ref([]);
 const serialIoLogChunks = ref([]);
+const serialPanelVisible = ref(true);
+const serialDisplayMode = ref('ascii');
+const serialSendMode = ref('text');
+const serialSendText = ref('');
+const serialSendLineEnding = ref('none');
+const serialPeriodicInterval = ref(1000);
+const serialPeriodicSending = ref(false);
+const serialDtrEnabled = ref(false);
+const serialRtsEnabled = ref(false);
+const serialBreakEnabled = ref(false);
+const createSerialStatus = () => ({
+  rxBytes: 0,
+  txBytes: 0,
+  rxRate: 0,
+  txRate: 0,
+  cts: null,
+  dsr: null,
+  ri: null,
+  dcd: null,
+  capturing: false,
+  sendingFile: false
+});
+const serialStatus = ref(createSerialStatus());
 let serialRawReceiveBytes = 0;
 let serialIoLogChars = 0;
+let serialPendingReceiveLogBytes = 0;
+let serialRawCaptureTruncated = false;
+let serialIoLogTruncated = false;
+let serialHexColumn = 0;
+let serialReceivePendingCr = false;
+let serialReceivePendingCrTimer = null;
+let serialPeriodicTimer = null;
+let serialPeriodicWritePending = false;
+let serialAutoReconnectTimer = null;
+let serialAutoReconnectAttempt = 0;
 const serialTextEncoder = new TextEncoder();
 
 const currentSession = computed(() => sshStore.sessions.find(s => s.id === props.sessionId) || null);
 const sessionName = computed(() => currentSession.value?.name || 'Unknown');
 const isSerialSession = computed(() => String(currentSession.value?.config?.protocol || '').toLowerCase() === 'serial');
 const isLocalSession = computed(() => String(currentSession.value?.config?.protocol || '').toLowerCase() === 'local');
+const serialLocalEchoEnabled = computed(() => currentSession.value?.config?.serial_local_echo === true);
+const serialReceiveLineEnding = computed(() => String(
+  currentSession.value?.config?.serial_receive_line_ending || 'none'
+).toLowerCase());
 const terminalTransferOwned = computed(() => transferStore.isTerminalOwned(props.sessionId));
 
 const serialPreferenceKey = () => {
@@ -177,13 +215,21 @@ const persistSerialReceivePreference = () => {
 };
 
 const appendLimitedSerialText = (chunksRef, text, sizeGetter, sizeSetter) => {
-  if (!text) return;
+  if (!text) return false;
+  if (text.length >= SERIAL_CAPTURE_MAX_CHARS) {
+    chunksRef.value = [text.slice(-SERIAL_CAPTURE_MAX_CHARS)];
+    sizeSetter(SERIAL_CAPTURE_MAX_CHARS);
+    return true;
+  }
+  let truncated = false;
   chunksRef.value.push(text);
   sizeSetter(sizeGetter() + text.length);
   while (sizeGetter() > SERIAL_CAPTURE_MAX_CHARS && chunksRef.value.length > 1) {
     const removed = chunksRef.value.shift() || '';
     sizeSetter(Math.max(0, sizeGetter() - removed.length));
+    truncated = true;
   }
+  return truncated;
 };
 
 const appendLimitedSerialBytes = (chunksRef, bytes) => {
@@ -194,6 +240,7 @@ const appendLimitedSerialBytes = (chunksRef, bytes) => {
   while (serialRawReceiveBytes > SERIAL_CAPTURE_MAX_CHARS && chunksRef.value.length > 1) {
     const removed = chunksRef.value.shift();
     serialRawReceiveBytes = Math.max(0, serialRawReceiveBytes - (removed?.length || 0));
+    serialRawCaptureTruncated = true;
   }
 };
 
@@ -212,23 +259,244 @@ const appendSerialReceiveRaw = (bytes) => {
 const appendSerialIoLog = (direction, text, byteLength) => {
   const marker = direction === 'SEND' ? '>>>' : '<<<';
   const entry = `[${formatSerialLogTimestamp()}]# ${direction} ASCII/${byteLength} ${marker}\n${text}\n\n`;
-  appendLimitedSerialText(
+  const truncated = appendLimitedSerialText(
     serialIoLogChunks,
     entry,
     () => serialIoLogChars,
     (value) => { serialIoLogChars = value; }
   );
+  if (truncated) serialIoLogTruncated = true;
 };
 
 const recordSerialReceive = (text, byteLength, rawBytes = null) => {
-  if (!isSerialSession.value || !text) return;
-  appendSerialReceiveRaw(rawBytes || serialTextEncoder.encode(text));
-  appendSerialIoLog('RECV', text, byteLength);
+  if (!isSerialSession.value) return;
+  const bytes = rawBytes || (text ? serialTextEncoder.encode(text) : null);
+  if (bytes?.length) appendSerialReceiveRaw(bytes);
+  serialPendingReceiveLogBytes += Math.max(0, Number(byteLength) || 0);
+  if (text) {
+    appendSerialIoLog('RECV', text, serialPendingReceiveLogBytes);
+    serialPendingReceiveLogBytes = 0;
+  }
 };
 
-const recordSerialSend = (text, byteLength = serialTextEncoder.encode(text).length) => {
-  if (!isSerialSession.value || !text) return;
-  appendSerialIoLog('SEND', text, byteLength);
+const serialBytesToHex = (bytes) => Array.from(bytes || [])
+  .map((byte) => Number(byte).toString(16).padStart(2, '0').toUpperCase())
+  .join(' ');
+
+const recordSerialSend = (text, byteLength = serialTextEncoder.encode(text).length, rawBytes = null) => {
+  if (!isSerialSession.value || (!text && !rawBytes?.length)) return;
+  appendSerialIoLog('SEND', text || `[HEX] ${serialBytesToHex(rawBytes)}`, byteLength);
+};
+
+const formatSerialHex = (bytes) => {
+  let output = '';
+  for (const byte of bytes || []) {
+    if (serialHexColumn > 0) output += ' ';
+    output += Number(byte).toString(16).padStart(2, '0').toUpperCase();
+    serialHexColumn += 1;
+    if (serialHexColumn >= 16) {
+      output += '\r\n';
+      serialHexColumn = 0;
+    }
+  }
+  return output;
+};
+
+const clearSerialPendingCr = () => {
+  if (serialReceivePendingCrTimer) clearTimeout(serialReceivePendingCrTimer);
+  serialReceivePendingCrTimer = null;
+  serialReceivePendingCr = false;
+};
+
+const flushSerialPendingCr = () => {
+  if (!serialReceivePendingCr) return;
+  clearSerialPendingCr();
+  enqueueTerminalOutput('\r\n');
+};
+
+const normalizeSerialReceiveText = (text) => {
+  const mode = serialReceiveLineEnding.value;
+  if (mode === 'none') return text;
+  if (mode === 'cr') return text.replace(/\r/g, '\r\n');
+  if (mode === 'lf') return text.replace(/\n/g, '\r\n');
+  if (mode !== 'auto') return text;
+
+  if (serialReceivePendingCrTimer) clearTimeout(serialReceivePendingCrTimer);
+  serialReceivePendingCrTimer = null;
+  let value = `${serialReceivePendingCr ? '\r' : ''}${text}`;
+  serialReceivePendingCr = value.endsWith('\r');
+  if (serialReceivePendingCr) {
+    value = value.slice(0, -1);
+    serialReceivePendingCrTimer = setTimeout(() => {
+      serialReceivePendingCrTimer = null;
+      if (!serialReceivePendingCr) return;
+      serialReceivePendingCr = false;
+      enqueueTerminalOutput('\r\n');
+    }, 30);
+  }
+  return value.replace(/\r\n|\r|\n/g, '\r\n');
+};
+
+const renderSerialReceive = (bytes, decoded) => (
+  serialDisplayMode.value === 'hex'
+    ? formatSerialHex(bytes)
+    : normalizeSerialReceiveText(decoded)
+);
+
+const renderSerialLocalEcho = (bytes, decoded) => {
+  if (!serialLocalEchoEnabled.value) return;
+  const output = serialDisplayMode.value === 'hex'
+    ? formatSerialHex(bytes)
+    : decoded.replace(/\r\n|\r|\n/g, '\r\n');
+  enqueueTerminalOutput(output);
+};
+
+const parseSerialHexInput = (value) => {
+  const withoutPrefixes = String(value || '').replace(/0x/gi, '');
+  const compact = withoutPrefixes.replace(/[\s,;:_-]+/g, '');
+  if (!compact || /[^0-9a-f]/i.test(compact) || compact.length % 2 !== 0) {
+    throw new Error('HEX 数据必须由完整字节组成，例如：01 03 00 00 00 02');
+  }
+  const bytes = [];
+  for (let index = 0; index < compact.length; index += 2) {
+    bytes.push(Number.parseInt(compact.slice(index, index + 2), 16));
+  }
+  return bytes;
+};
+
+const formatSerialByteCount = (value) => {
+  const bytes = Math.max(0, Number(value) || 0);
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+};
+
+const sendSerialPanelData = async () => {
+  if (!isSerialSession.value) return;
+  if (!serialSendText.value) throw new Error('请输入要发送的数据');
+  if (serialStatus.value.sendingFile) throw new Error('串口文件发送期间不能插入其他数据');
+  if (serialSendMode.value === 'hex') {
+    const bytes = parseSerialHexInput(serialSendText.value);
+    await invokeCommand('serial_write_bytes', { sessionId: props.sessionId, data: bytes });
+    return;
+  }
+  await invokeCommand('serial_write_text', {
+    sessionId: props.sessionId,
+    text: serialSendText.value,
+    encoding: currentSession.value?.config?.encoding || 'UTF-8',
+    lineEnding: serialSendLineEnding.value
+  });
+};
+
+const handleSerialSendClick = async () => {
+  try {
+    await sendSerialPanelData();
+  } catch (error) {
+    toast.error(`发送失败：${error}`);
+  }
+};
+
+watch(serialDisplayMode, () => {
+  serialHexColumn = 0;
+  clearSerialPendingCr();
+});
+
+const stopSerialPeriodicSend = () => {
+  if (serialPeriodicTimer) clearInterval(serialPeriodicTimer);
+  serialPeriodicTimer = null;
+  serialPeriodicSending.value = false;
+};
+
+const toggleSerialPeriodicSend = async () => {
+  if (serialPeriodicSending.value) {
+    stopSerialPeriodicSend();
+    return;
+  }
+  const interval = Math.max(20, Number(serialPeriodicInterval.value) || 1000);
+  serialPeriodicInterval.value = interval;
+  try {
+    await sendSerialPanelData();
+    serialPeriodicSending.value = true;
+    serialPeriodicTimer = setInterval(() => {
+      if (serialPeriodicWritePending) return;
+      serialPeriodicWritePending = true;
+      sendSerialPanelData()
+        .catch((error) => {
+          stopSerialPeriodicSend();
+          toast.error(`周期发送已停止：${error}`);
+        })
+        .finally(() => { serialPeriodicWritePending = false; });
+    }, interval);
+  } catch (error) {
+    toast.error(`发送失败：${error}`);
+  }
+};
+
+const sendSerialFile = async () => {
+  if (serialStatus.value.sendingFile) {
+    toast.info('已有串口文件正在发送');
+    return;
+  }
+  const selected = await open({ multiple: false, directory: false });
+  const path = selected?.path || selected;
+  if (!path) return;
+  try {
+    await invokeCommand('serial_send_file', { sessionId: props.sessionId, path });
+    serialStatus.value = { ...serialStatus.value, sendingFile: true };
+    stopSerialPeriodicSend();
+    toast.success('串口文件已开始发送');
+  } catch (error) {
+    toast.error(`文件发送失败：${error}`);
+  }
+};
+
+const setSerialControlLine = async (line) => {
+  const stateRef = line === 'dtr'
+    ? serialDtrEnabled
+    : line === 'rts'
+      ? serialRtsEnabled
+      : serialBreakEnabled;
+  const next = !stateRef.value;
+  try {
+    await invokeCommand('serial_set_control_line', {
+      sessionId: props.sessionId,
+      line,
+      enabled: next
+    });
+    stateRef.value = next;
+  } catch (error) {
+    toast.error(`${line.toUpperCase()} 设置失败：${error}`);
+  }
+};
+
+const clearSerialBuffer = async (target = 'all') => {
+  try {
+    await invokeCommand('serial_clear_buffer', { sessionId: props.sessionId, target });
+    toast.success('串口缓冲区已清理');
+  } catch (error) {
+    toast.error(`清理串口缓冲区失败：${error}`);
+  }
+};
+
+const toggleSerialCapture = async () => {
+  try {
+    if (serialStatus.value.capturing) {
+      await invokeCommand('serial_stop_capture', { sessionId: props.sessionId });
+      serialStatus.value = { ...serialStatus.value, capturing: false };
+      toast.success('串口直接抓取已停止');
+      return;
+    }
+    const path = await save({
+      title: '选择串口直接抓取文件',
+      defaultPath: buildLogFilename('direct-capture', 'dat')
+    });
+    if (!path) return;
+    await invokeCommand('serial_start_capture', { sessionId: props.sessionId, path, append: false });
+    serialStatus.value = { ...serialStatus.value, capturing: true };
+    toast.success('串口直接抓取已开始');
+  } catch (error) {
+    toast.error(`串口抓取操作失败：${error}`);
+  }
 };
 
 const toggleSerialReceiveVisible = () => {
@@ -254,7 +522,14 @@ function sendData(data) {
     const payload = session.isSplitChild
       ? { rootSessionId: session.workspaceSessionId || session.parentId, channelId: props.sessionId, data }
       : { sessionId: props.sessionId, data };
-    invokeCommand(command, payload).catch(console.error);
+    invokeCommand(command, payload).catch((error) => {
+      console.error(error);
+      if (!isSerialSession.value) return;
+      const now = Date.now();
+      if (now - serialWriteErrorToastAt < 1500) return;
+      serialWriteErrorToastAt = now;
+      toast.error(`串口发送失败：${error}`);
+    });
   }
 }
 
@@ -262,6 +537,9 @@ const formatCloseReason = (reason) => {
   const text = String(reason || '').trim();
   if (isLocalSession.value) {
     return text || '本地 Shell 已关闭。';
+  }
+  if (isSerialSession.value) {
+    return text ? `串口已关闭（${text}）。` : '串口已关闭。';
   }
   return text ? `Connection closed by remote host (${text}).` : 'Connection closed by remote host.';
 };
@@ -287,6 +565,25 @@ async function reconnectAfterDisconnect() {
     reconnectingAfterDisconnect.value = false;
   }
 }
+
+const clearSerialAutoReconnect = () => {
+  if (serialAutoReconnectTimer) clearTimeout(serialAutoReconnectTimer);
+  serialAutoReconnectTimer = null;
+};
+
+const scheduleSerialAutoReconnect = () => {
+  if (!isSerialSession.value || currentSession.value?.config?.serial_auto_reconnect === false) return;
+  if (serialAutoReconnectTimer || reconnectingAfterDisconnect.value) return;
+  const delay = Math.min(10000, 1000 * (2 ** Math.min(serialAutoReconnectAttempt, 3)));
+  serialAutoReconnectTimer = setTimeout(async () => {
+    serialAutoReconnectTimer = null;
+    const session = sshStore.sessions.find((item) => item.id === props.sessionId);
+    if (!session?.config || session.status === 'connected') return;
+    serialAutoReconnectAttempt += 1;
+    const ok = await sshStore.reconnectSession(props.sessionId);
+    if (!ok) scheduleSerialAutoReconnect();
+  }, delay);
+};
 
 const isCurrentSessionSyncSource = () => {
   const state = syncBadgeState.value || {};
@@ -424,8 +721,11 @@ let unlistenConnected = null;
 let unlistenClosed = null;
 let unlistenError = null;
 let unlistenSerialDataSent = null;
+let unlistenSerialStatus = null;
+let unlistenSerialOperationError = null;
 let resizeObserver = null;
 let textDecoder = new TextDecoder('utf-8'); // Default
+let serialSendLogDecoder = new TextDecoder('utf-8');
 let quickCommandHandler = null;
 let terminalFocusHandler = null;
 let quickHintDebounceTimer = null;
@@ -447,8 +747,13 @@ let lastProposedRows = 0;
 let lastSentCols = 0;
 let lastSentRows = 0;
 const DRAG_FIT_MIN_INTERVAL = 30;
-const SEARCH_AUTO_REFRESH_DEBOUNCE_MS = 200;
+const SEARCH_INPUT_DEBOUNCE_MS = 150;
+const SEARCH_OUTPUT_IDLE_MS = 300;
+const SEARCH_HIGHLIGHT_LIMIT = 200;
+const SEARCH_COUNT_SLICE_BUDGET_MS = 4;
+const SEARCH_COUNT_MAX_LINES_PER_SLICE = 512;
 const SEARCH_SELECTION_MAX_LENGTH = 512;
+const TERMINAL_OUTPUT_CHUNK_MAX_CHARS = 32 * 1024;
 const PHYSICAL_LINE_CHECKPOINT_STEP = 128;
 const PHYSICAL_LINE_CHECKPOINT_STEP_MEDIUM = 256;
 const PHYSICAL_LINE_CHECKPOINT_STEP_LARGE = 512;
@@ -464,9 +769,6 @@ let metricsDirty = false;
 let metricsRafId = null;
 let lastLineMetrics = null;
 let lastLineNumberRowsSignature = '';
-let searchBufferVersion = 0;
-let searchCountCacheSignature = '';
-let searchCountCacheValue = 0;
 
 const focusTerminalSurface = () => {
   if (!term) return;
@@ -480,6 +782,8 @@ const focusTerminalSurface = () => {
 
 let writeFlushRafId = null;
 let pendingOutputChunks = [];
+let pendingOutputChunkIndex = 0;
+let terminalWriteInFlight = false;
 let viewportElement = null;
 let viewportScrollHandler = null;
 let termTitleDisposable = null;
@@ -1123,7 +1427,7 @@ async function saveSerialReceiveData() {
       }
     }
     await flushBuffer();
-    toast.success('串口接收数据已保存');
+    toast.success(serialRawCaptureTruncated ? '串口接收数据已保存（仅包含最近 5 MB）' : '串口接收数据已保存');
   } catch (e) {
     toast.error(`保存失败: ${e}`);
   }
@@ -1143,7 +1447,7 @@ async function saveSerialIoLog() {
   if (!path) return;
   try {
     await invokeCommand('save_text_file', { path, content });
-    toast.success('串口收发日志已保存');
+    toast.success(serialIoLogTruncated ? '串口收发日志已保存（较早记录已被淘汰）' : '串口收发日志已保存');
   } catch (e) {
     toast.error(`保存失败: ${e}`);
   }
@@ -1162,7 +1466,16 @@ const searchInput = ref(null);
 const searchInputFocused = ref(false);
 const searchMatchCount = ref(0);
 const searchCurrentMatch = ref(0);
-let searchAutoRefreshTimer = null;
+const searchResultsPending = ref(false);
+const searchCountPending = ref(false);
+const searchExactCountReady = ref(false);
+let searchInputDebounceTimer = null;
+let searchOutputIdleTimer = null;
+let searchCountTimer = null;
+let searchCountTaskToken = 0;
+let searchOutputHot = false;
+let searchResultsDisposable = null;
+let lastTerminalOutputAt = 0;
 let searchAddon = null;
 
 const searchDecorations = {
@@ -1170,20 +1483,50 @@ const searchDecorations = {
   activeMatchBackground: 'rgba(99, 102, 241, 0.30)',
   matchBorder: 'rgba(96, 165, 250, 0.45)',
   activeMatchBorder: 'rgba(129, 140, 248, 0.65)',
-  matchOverviewRuler: 'rgba(99, 102, 241, 0.72)'
+  matchOverviewRuler: 'rgba(99, 102, 241, 0.72)',
+  activeMatchColorOverviewRuler: 'rgba(129, 140, 248, 0.82)'
 };
 
 const hasValidSearchKeyword = () => String(searchText.value ?? '').trim().length > 0;
 
+const searchCountLabel = computed(() => {
+  if (searchResultsPending.value || searchCountPending.value) {
+    return `${searchCurrentMatch.value > 0 ? searchCurrentMatch.value : '…'}/…`;
+  }
+  const count = Math.max(0, Number(searchMatchCount.value || 0));
+  const currentValue = Number(searchCurrentMatch.value || 0);
+  const current = count > 0 ? (currentValue > 0 ? currentValue : '…') : 0;
+  return `${current}/${count}`;
+});
+
+const cancelExactSearchCount = () => {
+  searchCountTaskToken += 1;
+  if (searchCountTimer) {
+    clearTimeout(searchCountTimer);
+    searchCountTimer = null;
+  }
+  searchCountPending.value = false;
+  searchExactCountReady.value = false;
+};
+
 const resetSearchStats = () => {
+  cancelExactSearchCount();
   searchMatchCount.value = 0;
   searchCurrentMatch.value = 0;
+  searchResultsPending.value = false;
 };
 
 const markSearchBufferChanged = () => {
-  searchBufferVersion += 1;
-  searchCountCacheSignature = '';
-  scheduleSearchAutoRefresh();
+  lastTerminalOutputAt = performance.now();
+  if (!searchVisible.value || !hasValidSearchKeyword()) return;
+
+  cancelExactSearchCount();
+  searchResultsPending.value = true;
+  if (!searchOutputHot) {
+    searchOutputHot = true;
+    searchAddon?.clearDecorations();
+  }
+  scheduleSearchIdleRefresh();
 };
 
 const normalizeSearchSelection = (selection) => {
@@ -1218,102 +1561,173 @@ const buildSearchRegex = () => {
   const source = searchOptions.value.regex
     ? searchText.value
     : searchText.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const wrapped = searchOptions.value.wholeWord ? `\\b${source}\\b` : source;
   const flags = searchOptions.value.matchCase ? 'g' : 'gi';
 
   try {
-    return new RegExp(wrapped, flags);
+    return new RegExp(source, flags);
   } catch {
     return null;
   }
 };
 
-const countSearchMatches = () => {
-  if (!term || !hasValidSearchKeyword()) return 0;
-  const regex = buildSearchRegex();
-  if (!regex) return 0;
+const SEARCH_WORD_SEPARATORS = ` ~!@#$%^&*()+\`-=[]{}|\\;:"',./<>?`;
 
-  const buffer = term.buffer.active;
-  const signature = [
-    searchBufferVersion,
-    buffer.length,
-    buffer.baseY,
-    searchText.value,
-    searchOptions.value.matchCase ? 1 : 0,
-    searchOptions.value.regex ? 1 : 0,
-    searchOptions.value.wholeWord ? 1 : 0
-  ].join('|');
+const isWholeWordMatch = (text, index, length) => (
+  (index === 0 || SEARCH_WORD_SEPARATORS.includes(text[index - 1]))
+  && (index + length === text.length || SEARCH_WORD_SEPARATORS.includes(text[index + length]))
+);
 
-  if (signature === searchCountCacheSignature) {
-    return searchCountCacheValue;
-  }
-
+const countSearchMatchesInText = (text, regex) => {
   let count = 0;
+  let offset = 0;
 
-  for (let index = 0; index < buffer.length; index += 1) {
-    const line = buffer.getLine(index)?.translateToString(true) || '';
-    regex.lastIndex = 0;
-    let match = regex.exec(line);
-    while (match) {
+  while (offset <= text.length) {
+    regex.lastIndex = offset;
+    const match = regex.exec(text);
+    if (!match) break;
+
+    const matchLength = match[0].length;
+    if (matchLength > 0
+      && (!searchOptions.value.wholeWord || isWholeWordMatch(text, match.index, matchLength))) {
       count += 1;
-      if ((match[0] || '').length === 0) {
-        regex.lastIndex += 1;
-      }
-      match = regex.exec(line);
     }
+    // SearchAddon advances one position so overlapping matches are counted as well.
+    offset = match.index + 1;
   }
 
-  searchCountCacheSignature = signature;
-  searchCountCacheValue = count;
   return count;
 };
 
-const updateSearchStats = ({ resetCurrent = false } = {}) => {
-  searchMatchCount.value = countSearchMatches();
-  if (resetCurrent) {
-    searchCurrentMatch.value = searchMatchCount.value > 0 ? 1 : 0;
-    return;
+const readLogicalBufferLine = (buffer, startIndex, bufferLength) => {
+  const parts = [];
+  let index = startIndex;
+
+  while (index < bufferLength) {
+    const line = buffer.getLine(index);
+    const nextLine = index + 1 < bufferLength ? buffer.getLine(index + 1) : null;
+    const wrapsToNext = Boolean(nextLine?.isWrapped);
+    let text = line?.translateToString(!wrapsToNext) || '';
+
+    if (wrapsToNext && line && nextLine) {
+      const lastCell = line.getCell(line.length - 1);
+      const firstNextCell = nextLine.getCell(0);
+      if (lastCell?.getCode() === 0 && lastCell.getWidth() === 1 && firstNextCell?.getWidth() === 2) {
+        text = text.slice(0, -1);
+      }
+    }
+
+    parts.push(text);
+    index += 1;
+    if (!wrapsToNext) break;
   }
-  if (searchMatchCount.value === 0) {
-    searchCurrentMatch.value = 0;
-  } else if (searchCurrentMatch.value > searchMatchCount.value || searchCurrentMatch.value <= 0) {
-    searchCurrentMatch.value = 1;
-  }
+
+  return { text: parts.join(''), nextIndex: index };
 };
 
-const getSearchFindOptions = (incremental = false) => ({
-  matchCase: searchOptions.value.matchCase,
+function startExactSearchCount() {
+  cancelExactSearchCount();
+  const regex = buildSearchRegex();
+  const buffer = term?.buffer?.active;
+  if (!searchVisible.value || !regex || !buffer) return;
+
+  const taskToken = searchCountTaskToken;
+  const bufferLength = buffer.length;
+  let lineIndex = 0;
+  let matchCount = 0;
+  searchCountPending.value = true;
+
+  const countSlice = () => {
+    searchCountTimer = null;
+    if (taskToken !== searchCountTaskToken || !searchVisible.value) return;
+
+    const sliceStartedAt = performance.now();
+    let processedLines = 0;
+    while (lineIndex < bufferLength
+      && processedLines < SEARCH_COUNT_MAX_LINES_PER_SLICE
+      && performance.now() - sliceStartedAt < SEARCH_COUNT_SLICE_BUDGET_MS) {
+      const logicalLine = readLogicalBufferLine(buffer, lineIndex, bufferLength);
+      matchCount += countSearchMatchesInText(logicalLine.text, regex);
+      processedLines += Math.max(1, logicalLine.nextIndex - lineIndex);
+      lineIndex = logicalLine.nextIndex;
+    }
+
+    if (lineIndex < bufferLength) {
+      searchCountTimer = setTimeout(countSlice, 0);
+      return;
+    }
+
+    if (taskToken !== searchCountTaskToken || !searchVisible.value) return;
+    searchMatchCount.value = matchCount;
+    searchCountPending.value = false;
+    searchExactCountReady.value = true;
+    if (matchCount === 0) searchCurrentMatch.value = 0;
+  };
+
+  searchCountTimer = setTimeout(countSlice, 0);
+}
+
+const getSearchFindOptions = (incremental = false, withDecorations = true) => ({
+  caseSensitive: searchOptions.value.matchCase,
   regex: searchOptions.value.regex,
   wholeWord: searchOptions.value.wholeWord,
   incremental,
-  decorations: searchDecorations
+  ...(withDecorations ? { decorations: searchDecorations } : {})
 });
 
-const runAutoSearchRefresh = () => {
-  if (!searchVisible.value || !searchAddon || !searchInputFocused.value) return;
-  if (!hasValidSearchKeyword()) {
-    searchAddon.clearDecorations();
-    resetSearchStats();
-    return;
-  }
-  performSearch();
+const isTerminalOutputHot = () => (
+  lastTerminalOutputAt > 0 && performance.now() - lastTerminalOutputAt < SEARCH_OUTPUT_IDLE_MS
+);
+
+const cancelSearchInputDebounce = () => {
+  if (!searchInputDebounceTimer) return;
+  clearTimeout(searchInputDebounceTimer);
+  searchInputDebounceTimer = null;
 };
 
-const scheduleSearchAutoRefresh = () => {
-  if (!searchVisible.value || !searchInputFocused.value) return;
-  if (searchAutoRefreshTimer) {
-    clearTimeout(searchAutoRefreshTimer);
-  }
-  searchAutoRefreshTimer = setTimeout(() => {
-    searchAutoRefreshTimer = null;
-    runAutoSearchRefresh();
-  }, SEARCH_AUTO_REFRESH_DEBOUNCE_MS);
+const cancelSearchIdleRefresh = () => {
+  if (!searchOutputIdleTimer) return;
+  clearTimeout(searchOutputIdleTimer);
+  searchOutputIdleTimer = null;
 };
 
-const cancelSearchAutoRefresh = () => {
-  if (!searchAutoRefreshTimer) return;
-  clearTimeout(searchAutoRefreshTimer);
-  searchAutoRefreshTimer = null;
+function scheduleSearchIdleRefresh() {
+  cancelSearchIdleRefresh();
+  if (!searchVisible.value || !hasValidSearchKeyword()) return;
+
+  const elapsed = performance.now() - lastTerminalOutputAt;
+  const delay = Math.max(0, SEARCH_OUTPUT_IDLE_MS - elapsed);
+  searchOutputIdleTimer = setTimeout(() => {
+    searchOutputIdleTimer = null;
+    if (isTerminalOutputHot()) {
+      scheduleSearchIdleRefresh();
+      return;
+    }
+    searchOutputHot = false;
+    performSearch({ withDecorations: true });
+  }, delay);
+}
+
+const scheduleSearchFromInput = () => {
+  cancelSearchInputDebounce();
+  cancelExactSearchCount();
+  if (!searchVisible.value || !hasValidSearchKeyword()) return;
+
+  searchAddon?.clearDecorations();
+  searchResultsPending.value = true;
+  searchMatchCount.value = 0;
+  searchCurrentMatch.value = 0;
+  searchInputDebounceTimer = setTimeout(() => {
+    searchInputDebounceTimer = null;
+    const withDecorations = !isTerminalOutputHot();
+    performSearch({ withDecorations });
+    if (!withDecorations) scheduleSearchIdleRefresh();
+  }, SEARCH_INPUT_DEBOUNCE_MS);
+};
+
+const cancelSearchScheduling = () => {
+  cancelSearchInputDebounce();
+  cancelSearchIdleRefresh();
+  cancelExactSearchCount();
 };
 
 const updateLineNumberRowHeight = () => {
@@ -1645,21 +2059,85 @@ const scheduleLineMetrics = () => {
   });
 };
 
+const takePendingTerminalOutput = (maxChars) => {
+  if (pendingOutputChunkIndex >= pendingOutputChunks.length) return '';
+
+  const parts = [];
+  let length = 0;
+  while (pendingOutputChunkIndex < pendingOutputChunks.length && length < maxChars) {
+    const chunk = pendingOutputChunks[pendingOutputChunkIndex];
+    const remaining = maxChars - length;
+    if (chunk.length <= remaining) {
+      parts.push(chunk);
+      length += chunk.length;
+      pendingOutputChunkIndex += 1;
+      continue;
+    }
+
+    let splitAt = remaining;
+    const previousCode = chunk.charCodeAt(splitAt - 1);
+    const nextCode = chunk.charCodeAt(splitAt);
+    if (
+      previousCode >= 0xd800 && previousCode <= 0xdbff &&
+      nextCode >= 0xdc00 && nextCode <= 0xdfff
+    ) {
+      splitAt -= 1;
+    }
+    if (splitAt <= 0) break;
+    parts.push(chunk.slice(0, splitAt));
+    pendingOutputChunks[pendingOutputChunkIndex] = chunk.slice(splitAt);
+    length += splitAt;
+  }
+
+  if (pendingOutputChunkIndex >= pendingOutputChunks.length) {
+    pendingOutputChunks = [];
+    pendingOutputChunkIndex = 0;
+  } else if (
+    pendingOutputChunkIndex >= 256 &&
+    pendingOutputChunkIndex * 2 >= pendingOutputChunks.length
+  ) {
+    pendingOutputChunks = pendingOutputChunks.slice(pendingOutputChunkIndex);
+    pendingOutputChunkIndex = 0;
+  }
+
+  return parts.join('');
+};
+
+const hasPendingTerminalOutput = () => pendingOutputChunkIndex < pendingOutputChunks.length;
+
+const scheduleTerminalOutputFlush = () => {
+  if (writeFlushRafId || terminalWriteInFlight || !hasPendingTerminalOutput()) return;
+  writeFlushRafId = requestAnimationFrame(flushTerminalOutput);
+};
+
 const flushTerminalOutput = () => {
   writeFlushRafId = null;
-  if (!term || pendingOutputChunks.length === 0) return;
-  const merged = pendingOutputChunks.join('');
-  pendingOutputChunks = [];
-  term.write(merged);
-  markSearchBufferChanged();
-  scheduleLineMetrics();
+  if (!term || terminalWriteInFlight || !hasPendingTerminalOutput()) return;
+
+  const output = takePendingTerminalOutput(TERMINAL_OUTPUT_CHUNK_MAX_CHARS);
+  if (!output) {
+    scheduleTerminalOutputFlush();
+    return;
+  }
+
+  terminalWriteInFlight = true;
+  term.write(output, () => {
+    terminalWriteInFlight = false;
+    if (!term) return;
+    markSearchBufferChanged();
+    scheduleLineMetrics();
+    scheduleTerminalOutputFlush();
+  });
 };
 
 const enqueueTerminalOutput = (chunk) => {
   if (!chunk) return;
+  if (!hasPendingTerminalOutput()) {
+    pendingOutputChunks = [];
+    pendingOutputChunkIndex = 0;
+  }
   pendingOutputChunks.push(chunk);
-  if (writeFlushRafId) return;
-  writeFlushRafId = requestAnimationFrame(flushTerminalOutput);
+  scheduleTerminalOutputFlush();
 };
 
 function focusSearchInputSoon({ selectText = false } = {}) {
@@ -1677,7 +2155,7 @@ function openSearch({ seedFromSelection = true } = {}) {
   searchVisible.value = true;
   searchInputFocused.value = true;
   focusSearchInputSoon({ selectText: seeded });
-  if (hasValidSearchKeyword()) performSearch();
+  if (hasValidSearchKeyword()) scheduleSearchFromInput();
   else resetSearchStats();
   if (!wasVisible) {
     setTimeout(() => handleResize(), 100);
@@ -1691,12 +2169,16 @@ function openSearchFromMenu(event) {
 }
 
 function closeSearch() {
-  cancelSearchAutoRefresh();
+  cancelSearchScheduling();
+  searchOutputHot = false;
   searchInputFocused.value = false;
+  searchInput.value?.blur();
   searchVisible.value = false;
-  term?.focus();
   searchAddon?.clearDecorations();
   resetSearchStats();
+  nextTick(() => {
+    requestAnimationFrame(() => term?.focus());
+  });
   setTimeout(() => handleResize(), 100);
 }
 
@@ -1710,49 +2192,79 @@ function handleSearchInputBlur() {
 
 function handleSearchInput() {
   if (!hasValidSearchKeyword()) {
+    cancelSearchScheduling();
     searchAddon?.clearDecorations();
     resetSearchStats();
     return;
   }
   if (searchOptions.value.incremental) {
-    performSearch();
+    scheduleSearchFromInput();
   }
 }
 
 function toggleSearchOption(optionKey) {
   searchOptions.value[optionKey] = !searchOptions.value[optionKey];
   if (searchVisible.value && hasValidSearchKeyword()) {
-    performSearch();
+    scheduleSearchFromInput();
   }
 }
 
-function performSearch() {
+function performSearch({ withDecorations = !isTerminalOutputHot() } = {}) {
   if (!searchAddon || !hasValidSearchKeyword() || !buildSearchRegex()) {
     searchAddon?.clearDecorations();
     resetSearchStats();
     return;
   }
 
-  updateSearchStats({ resetCurrent: true });
-  const found = searchAddon.findNext(searchText.value, getSearchFindOptions(searchOptions.value.incremental));
-  searchCurrentMatch.value = found ? 1 : 0;
+  if (withDecorations && searchResultsPending.value) {
+    searchAddon.clearDecorations();
+  }
+  const found = searchAddon.findNext(
+    searchText.value,
+    getSearchFindOptions(searchOptions.value.incremental, withDecorations),
+    { noScroll: true }
+  );
+  if (!withDecorations) {
+    searchOutputHot = true;
+    searchResultsPending.value = true;
+    searchMatchCount.value = 0;
+    searchCurrentMatch.value = found ? 1 : 0;
+  } else {
+    startExactSearchCount();
+  }
 }
 
 function findNext() {
   if (!searchAddon || !hasValidSearchKeyword() || !buildSearchRegex()) return;
-  updateSearchStats();
-  const found = searchAddon.findNext(searchText.value, getSearchFindOptions(false));
-  if (found && searchMatchCount.value > 0) {
-    searchCurrentMatch.value = searchCurrentMatch.value >= searchMatchCount.value ? 1 : searchCurrentMatch.value + 1;
+  cancelSearchInputDebounce();
+  const withDecorations = !isTerminalOutputHot();
+  if (withDecorations && searchResultsPending.value) {
+    searchAddon.clearDecorations();
+  }
+  const found = searchAddon.findNext(searchText.value, getSearchFindOptions(false, withDecorations));
+  if (!withDecorations) {
+    searchResultsPending.value = true;
+    searchCurrentMatch.value = found ? Math.max(1, searchCurrentMatch.value) : 0;
+    scheduleSearchIdleRefresh();
+  } else if (!searchExactCountReady.value && !searchCountPending.value) {
+    startExactSearchCount();
   }
 }
 
 function findPrev() {
   if (!searchAddon || !hasValidSearchKeyword() || !buildSearchRegex()) return;
-  updateSearchStats();
-  const found = searchAddon.findPrevious(searchText.value, getSearchFindOptions(false));
-  if (found && searchMatchCount.value > 0) {
-    searchCurrentMatch.value = searchCurrentMatch.value <= 1 ? searchMatchCount.value : searchCurrentMatch.value - 1;
+  cancelSearchInputDebounce();
+  const withDecorations = !isTerminalOutputHot();
+  if (withDecorations && searchResultsPending.value) {
+    searchAddon.clearDecorations();
+  }
+  const found = searchAddon.findPrevious(searchText.value, getSearchFindOptions(false, withDecorations));
+  if (!withDecorations) {
+    searchResultsPending.value = true;
+    searchCurrentMatch.value = found ? Math.max(1, searchCurrentMatch.value) : 0;
+    scheduleSearchIdleRefresh();
+  } else if (!searchExactCountReady.value && !searchCountPending.value) {
+    startExactSearchCount();
   }
 }
 
@@ -2119,7 +2631,10 @@ onMounted(async () => {
     unlistenClosed = cached.unlistenClosed;
     unlistenError = cached.unlistenError;
     unlistenSerialDataSent = cached.unlistenSerialDataSent;
+    unlistenSerialStatus = cached.unlistenSerialStatus;
+    unlistenSerialOperationError = cached.unlistenSerialOperationError;
     textDecoder = cached.textDecoder || textDecoder;
+    serialSendLogDecoder = cached.serialSendLogDecoder || serialSendLogDecoder;
 
     if (terminalContainer.value) {
       terminalContainer.value.innerHTML = '';
@@ -2151,6 +2666,7 @@ onMounted(async () => {
     if (config.encoding && config.encoding !== 'UTF-8') {
       try {
         textDecoder = new TextDecoder(config.encoding);
+        serialSendLogDecoder = new TextDecoder(config.encoding);
       } catch (e) {
         console.error('Invalid encoding:', config.encoding);
         toast.warn(`编码 '${config.encoding}' 不受支持，已使用 UTF-8`);
@@ -2182,7 +2698,7 @@ onMounted(async () => {
 
     fitAddon = new FitAddon();
     unicode11Addon = new Unicode11Addon();
-    searchAddon = new SearchAddon();
+    searchAddon = new SearchAddon({ highlightLimit: SEARCH_HIGHLIGHT_LIMIT });
 
     term.loadAddon(fitAddon);
     term.loadAddon(unicode11Addon);
@@ -2264,6 +2780,13 @@ onMounted(async () => {
 
         if (shouldLockInputByPrimaryMode()) {
           notifyPrimaryLockIfNeeded();
+          return;
+        }
+
+        if (isSerialSession.value) {
+          closeQuickHint();
+          currentInputBuffer.value = '';
+          forwardTerminalInput(data);
           return;
         }
 
@@ -2443,13 +2966,13 @@ onMounted(async () => {
         const decoded = textDecoder.decode(rawBytes, { stream: true });
         recordSerialReceive(decoded, payload.length, rawBytes);
         if (!isSerialSession.value || serialReceiveVisible.value) {
-          enqueueTerminalOutput(decoded);
+          enqueueTerminalOutput(isSerialSession.value ? renderSerialReceive(rawBytes, decoded) : decoded);
         }
       } else if (typeof payload === 'string') {
         const rawBytes = serialTextEncoder.encode(payload);
         recordSerialReceive(payload, rawBytes.length, rawBytes);
         if (!isSerialSession.value || serialReceiveVisible.value) {
-          enqueueTerminalOutput(payload);
+          enqueueTerminalOutput(isSerialSession.value ? renderSerialReceive(rawBytes, payload) : payload);
         }
       }
     });
@@ -2476,6 +2999,9 @@ onMounted(async () => {
     }, 200);
 
     unlistenConnected = await listenEvent(`ssh-connected-${props.sessionId}`, () => {
+      clearSerialAutoReconnect();
+      serialAutoReconnectAttempt = 0;
+      if (isSerialSession.value) serialStatus.value = createSerialStatus();
       sshStore.setSessionStatus(props.sessionId, 'connected');
       refreshTerminalSurface(true);
       focusTerminalSurface();
@@ -2494,16 +3020,23 @@ onMounted(async () => {
     });
 
     unlistenClosed = await listenEvent(`ssh-closed-${props.sessionId}`, (reason) => {
+      flushSerialPendingCr();
+      stopSerialPeriodicSend();
+      serialStatus.value = { ...serialStatus.value, rxRate: 0, txRate: 0, capturing: false, sendingFile: false };
       sshStore.setSessionStatus(props.sessionId, 'disconnected');
       reconnectPromptShown.value = false;
       term.write(`\r\n\x1b[31m${formatCloseReason(reason)}\x1b[0m\r\n`);
       term.write(`\x1b[33m按 Enter 键尝试${isLocalSession.value ? '重新启动' : '重连'}。\x1b[0m\r\n`);
       markSearchBufferChanged();
       scheduleLineMetrics();
+      scheduleSerialAutoReconnect();
     });
 
     // Listen for errors
     unlistenError = await listenEvent(`ssh-error-${props.sessionId}`, (err) => {
+      flushSerialPendingCr();
+      stopSerialPeriodicSend();
+      serialStatus.value = { ...serialStatus.value, rxRate: 0, txRate: 0, capturing: false, sendingFile: false };
       sshStore.setSessionStatus(props.sessionId, 'disconnected');
       reconnectPromptShown.value = false;
       term.write(`\r\n\x1b[31mError: ${err}\x1b[0m\r\n`);
@@ -2511,14 +3044,29 @@ onMounted(async () => {
       markSearchBufferChanged();
       toast.error(`会话错误：${err}`);
       scheduleLineMetrics();
+      scheduleSerialAutoReconnect();
     });
 
     unlistenSerialDataSent = await listenEvent(`serial-data-sent-${props.sessionId}`, (payload) => {
       if (Array.isArray(payload)) {
-        recordSerialSend(textDecoder.decode(new Uint8Array(payload)), payload.length);
+        const bytes = new Uint8Array(payload);
+        const decoded = serialSendLogDecoder.decode(bytes, { stream: true });
+        recordSerialSend(decoded, payload.length, bytes);
+        renderSerialLocalEcho(bytes, decoded);
       } else if (typeof payload === 'string') {
         recordSerialSend(payload, serialTextEncoder.encode(payload).length);
+        renderSerialLocalEcho(serialTextEncoder.encode(payload), payload);
       }
+    });
+
+    unlistenSerialStatus = await listenEvent(`serial-status-${props.sessionId}`, (payload) => {
+      if (!payload || typeof payload !== 'object') return;
+      serialStatus.value = { ...serialStatus.value, ...payload };
+      if (payload.sendingFile) stopSerialPeriodicSend();
+    });
+
+    unlistenSerialOperationError = await listenEvent(`serial-operation-error-${props.sessionId}`, (error) => {
+      toast.error(`串口后台操作失败：${error}`);
     });
 
     // Listen for Global Menu Global Events
@@ -2564,9 +3112,28 @@ onMounted(async () => {
       unlistenClosed,
       unlistenError,
       unlistenSerialDataSent,
-      textDecoder
+      unlistenSerialStatus,
+      unlistenSerialOperationError,
+      textDecoder,
+      serialSendLogDecoder
     });
   }
+
+  searchResultsDisposable?.dispose?.();
+  searchResultsDisposable = searchAddon?.onDidChangeResults?.(({ resultIndex, resultCount }) => {
+    if (!searchVisible.value) return;
+    if (searchOutputHot && isTerminalOutputHot()) return;
+    const count = Math.max(0, Number(resultCount || 0));
+    if (!searchExactCountReady.value) searchMatchCount.value = count;
+    searchResultsPending.value = false;
+    if (resultIndex >= 0) {
+      searchCurrentMatch.value = resultIndex + 1;
+    } else if (count === 0) {
+      searchCurrentMatch.value = 0;
+    } else {
+      searchCurrentMatch.value = 0;
+    }
+  }) || null;
 
   window.addEventListener('keydown', handleKeydown);
   quickCommandHandler = handleKnowledgeCommandEvent;
@@ -2602,6 +3169,9 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  stopSerialPeriodicSend();
+  clearSerialAutoReconnect();
+  clearSerialPendingCr();
   // Clean up listeners
   window.removeEventListener('term:zoom-in', handleZoomIn);
   window.removeEventListener('term:zoom-out', handleZoomOut);
@@ -2637,7 +3207,9 @@ onUnmounted(() => {
     clearTimeout(dragFitTimerId);
     dragFitTimerId = null;
   }
-  cancelSearchAutoRefresh();
+  cancelSearchScheduling();
+  searchResultsDisposable?.dispose?.();
+  searchResultsDisposable = null;
   if (metricsRafId) {
     cancelAnimationFrame(metricsRafId);
     metricsRafId = null;
@@ -2676,6 +3248,8 @@ onUnmounted(() => {
     termScrollDisposable = null;
   }
   pendingOutputChunks = [];
+  pendingOutputChunkIndex = 0;
+  terminalWriteInFlight = false;
   lastLineMetrics = null;
   lastLineNumberRowsSignature = '';
   safeUnlisten(unlistenData);
@@ -2684,12 +3258,16 @@ onUnmounted(() => {
   safeUnlisten(unlistenClosed);
   safeUnlisten(unlistenError);
   safeUnlisten(unlistenSerialDataSent);
+  safeUnlisten(unlistenSerialStatus);
+  safeUnlisten(unlistenSerialOperationError);
   unlistenData = null;
   unlistenDebug = null;
   unlistenConnected = null;
   unlistenClosed = null;
   unlistenError = null;
   unlistenSerialDataSent = null;
+  unlistenSerialStatus = null;
+  unlistenSerialOperationError = null;
   // Always clear cache on unmount so next mount creates fresh bindings.
   // KeepAlive page switches use onDeactivated/onActivated, not onUnmounted.
   terminalCache.delete(props.sessionId);
@@ -2770,6 +3348,64 @@ onUnmounted(() => {
       </ContextMenu>
     </div>
 
+    <div v-if="isSerialSession" class="serial-console-panel">
+      <div class="serial-status-row">
+        <span>RX {{ formatSerialByteCount(serialStatus.rxBytes) }} · {{ formatSerialByteCount(serialStatus.rxRate) }}/s</span>
+        <span>TX {{ formatSerialByteCount(serialStatus.txBytes) }} · {{ formatSerialByteCount(serialStatus.txRate) }}/s</span>
+        <span :class="{ active: serialStatus.cts }">CTS</span>
+        <span :class="{ active: serialStatus.dsr }">DSR</span>
+        <span :class="{ active: serialStatus.ri }">RI</span>
+        <span :class="{ active: serialStatus.dcd }">DCD</span>
+        <span>{{ serialLocalEchoEnabled ? '本地回显' : '设备回显' }}</span>
+        <div class="serial-status-spacer"></div>
+        <label>显示</label>
+        <select v-model="serialDisplayMode" class="serial-compact-select">
+          <option value="ascii">ASCII</option>
+          <option value="hex">HEX</option>
+        </select>
+        <Button type="button" variant="ghost" size="sm" @click="serialPanelVisible = !serialPanelVisible">
+          {{ serialPanelVisible ? '收起发送区' : '展开发送区' }}
+        </Button>
+      </div>
+      <div v-show="serialPanelVisible" class="serial-send-area">
+        <textarea v-model="serialSendText" class="serial-send-input" rows="2" :disabled="serialStatus.sendingFile"
+          :placeholder="serialSendMode === 'hex' ? '01 03 00 00 00 02' : '输入要发送的文本，Ctrl+Enter 发送'"
+          @keydown.ctrl.enter.prevent="handleSerialSendClick"></textarea>
+        <div class="serial-send-controls">
+          <select v-model="serialSendMode" class="serial-compact-select">
+            <option value="text">文本</option>
+            <option value="hex">HEX</option>
+          </select>
+          <select v-model="serialSendLineEnding" class="serial-compact-select" :disabled="serialSendMode === 'hex'">
+            <option value="none">无行尾</option>
+            <option value="cr">CR</option>
+            <option value="lf">LF</option>
+            <option value="crlf">CRLF</option>
+          </select>
+          <Button type="button" size="sm" :disabled="serialStatus.sendingFile" @click="handleSerialSendClick">发送</Button>
+          <Button type="button" variant="outline" size="sm" :disabled="serialStatus.sendingFile" @click="sendSerialFile">
+            {{ serialStatus.sendingFile ? '文件发送中' : '发送文件' }}
+          </Button>
+          <Input v-model="serialPeriodicInterval" class="serial-interval-input" aria-label="周期发送间隔"
+            title="周期发送间隔（毫秒）" />
+          <span class="serial-unit">ms</span>
+          <Button type="button" :variant="serialPeriodicSending ? 'destructive' : 'outline'" size="sm"
+            :disabled="serialStatus.sendingFile"
+            @click="toggleSerialPeriodicSend">{{ serialPeriodicSending ? '停止周期' : '周期发送' }}</Button>
+          <Button type="button" :variant="serialDtrEnabled ? 'default' : 'outline'" size="sm"
+            @click="setSerialControlLine('dtr')">DTR</Button>
+          <Button type="button" :variant="serialRtsEnabled ? 'default' : 'outline'" size="sm"
+            @click="setSerialControlLine('rts')">RTS</Button>
+          <Button type="button" :variant="serialBreakEnabled ? 'destructive' : 'outline'" size="sm"
+            @click="setSerialControlLine('break')">BREAK</Button>
+          <Button type="button" variant="outline" size="sm" @click="clearSerialBuffer('input')">清 RX</Button>
+          <Button type="button" variant="outline" size="sm" @click="clearSerialBuffer('output')">清 TX</Button>
+          <Button type="button" :variant="serialStatus.capturing ? 'destructive' : 'outline'" size="sm"
+            @click="toggleSerialCapture">{{ serialStatus.capturing ? '停止抓取' : '直接抓取' }}</Button>
+        </div>
+      </div>
+    </div>
+
     <!-- Search Bar -->
     <div v-show="searchVisible" class="search-bar">
       <div class="search-input-wrapper">
@@ -2779,33 +3415,36 @@ onUnmounted(() => {
           @input="handleSearchInput" @focus="handleSearchInputFocus" @blur="handleSearchInputBlur"
           @keydown="handleSearchKeydown" />
       </div>
-      <span class="search-count" :class="{ empty: searchMatchCount === 0 }">{{ searchCurrentMatch }}/{{ searchMatchCount
-      }}</span>
+      <span class="search-count"
+        :class="{ empty: !searchResultsPending && !searchCountPending && searchMatchCount === 0 }">
+        {{ searchCountLabel }}
+      </span>
       <button type="button" class="terminal-find-button terminal-find-icon-button option-button"
-        :class="{ active: searchOptions.matchCase }" aria-label="区分大小写"
+        :class="{ active: searchOptions.matchCase }" title="区分大小写" aria-label="区分大小写"
         @click="toggleSearchOption('matchCase')">
         <CaseSensitive :size="15" stroke-width="1.9" />
       </button>
       <button type="button" class="terminal-find-button terminal-find-icon-button option-button"
-        :class="{ active: searchOptions.wholeWord }" aria-label="全词匹配"
+        :class="{ active: searchOptions.wholeWord }" title="全词匹配" aria-label="全词匹配"
         @click="toggleSearchOption('wholeWord')">
         <WholeWord :size="15" stroke-width="1.9" />
       </button>
       <button type="button" class="terminal-find-button terminal-find-icon-button option-button"
-        :class="{ active: searchOptions.regex }" aria-label="正则表达式" @click="toggleSearchOption('regex')">
+        :class="{ active: searchOptions.regex }" title="正则表达式" aria-label="正则表达式"
+        @click="toggleSearchOption('regex')">
         <Regex :size="15" stroke-width="1.9" />
       </button>
       <span class="terminal-find-divider"></span>
-      <button type="button" class="terminal-find-button terminal-find-icon-button" aria-label="上一个"
-        @click="findPrev">
+      <button type="button" class="terminal-find-button terminal-find-icon-button" title="上一个匹配（Shift+J）"
+        aria-label="上一个匹配" @click="findPrev">
         <ChevronUp :size="15" stroke-width="1.9" />
       </button>
-      <button type="button" class="terminal-find-button terminal-find-icon-button" aria-label="下一个"
-        @click="findNext">
+      <button type="button" class="terminal-find-button terminal-find-icon-button" title="下一个匹配（Enter / Shift+K）"
+        aria-label="下一个匹配" @click="findNext">
         <ChevronDown :size="15" stroke-width="1.9" />
       </button>
-      <button type="button" class="terminal-find-close terminal-find-icon-button" aria-label="关闭查找"
-        @click="closeSearch">
+      <button type="button" class="terminal-find-close terminal-find-icon-button" title="关闭查找（Esc）"
+        aria-label="关闭查找" @click="closeSearch">
         <X :size="15" stroke-width="1.9" />
       </button>
     </div>
@@ -3029,8 +3668,8 @@ onUnmounted(() => {
 
 .search-bar {
   position: absolute;
-  top: 8px;
-  right: 8px;
+  top: 42px;
+  right: 22px;
   z-index: var(--z-floating);
   display: flex;
   align-items: center;
@@ -3048,6 +3687,8 @@ onUnmounted(() => {
   position: relative;
   display: flex;
   align-items: center;
+  flex: 1 1 220px;
+  min-width: 120px;
 }
 
 .search-icon {
@@ -3060,7 +3701,8 @@ onUnmounted(() => {
 }
 
 .terminal-search-input {
-  width: 260px;
+  width: 220px;
+  max-width: 100%;
   height: 28px;
   box-sizing: border-box;
   padding: 3px 8px 3px 28px;
@@ -3087,7 +3729,9 @@ onUnmounted(() => {
   color: var(--app-text-muted);
   font-weight: 600;
   white-space: nowrap;
-  min-width: 36px;
+  min-width: 80px;
+  flex: 0 0 auto;
+  font-variant-numeric: tabular-nums;
   text-align: center;
 }
 
@@ -3224,6 +3868,93 @@ onUnmounted(() => {
   font-family: var(--font-mono);
   font-size: 12px;
   font-weight: 500;
+}
+
+.serial-console-panel {
+  flex: 0 0 auto;
+  border-top: 1px solid var(--app-border-shadow);
+  background: color-mix(in srgb, var(--app-bg-dialog) 94%, var(--app-bg));
+  color: var(--app-text);
+  font-size: 12px;
+}
+
+.serial-status-row,
+.serial-send-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  min-width: 0;
+}
+
+.serial-status-row > span {
+  white-space: nowrap;
+  color: var(--app-text-muted);
+}
+
+.serial-status-row > span.active {
+  color: var(--color-success, #4caf50);
+  font-weight: 600;
+}
+
+.serial-status-spacer {
+  flex: 1;
+}
+
+.serial-send-area {
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) auto;
+  gap: 6px;
+  padding: 0 8px 7px;
+}
+
+.serial-send-input {
+  min-height: 54px;
+  resize: vertical;
+  padding: 6px 8px;
+  border: 1px solid var(--app-border-shadow);
+  border-radius: 5px;
+  outline: none;
+  background: var(--app-input-bg);
+  color: var(--app-text);
+  font: 12px/1.35 var(--font-mono);
+}
+
+.serial-send-controls {
+  max-width: 560px;
+  padding: 0;
+  align-content: flex-start;
+  flex-wrap: wrap;
+}
+
+.serial-compact-select {
+  height: 30px;
+  padding: 0 6px;
+  border: 1px solid var(--app-border-shadow);
+  border-radius: 5px;
+  background: var(--app-input-bg);
+  color: var(--app-text);
+  font-size: 12px;
+}
+
+.serial-interval-input {
+  width: 72px;
+  height: 30px;
+  font-size: 12px;
+}
+
+.serial-unit {
+  margin-left: -4px;
+  color: var(--app-text-muted);
+}
+
+@media (max-width: 900px) {
+  .serial-send-area {
+    grid-template-columns: 1fr;
+  }
+  .serial-status-row > span:nth-child(n+3):nth-child(-n+6) {
+    display: none;
+  }
 }
 
 /* Context menu styling provided by shadcn-vue ContextMenu component */

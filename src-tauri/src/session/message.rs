@@ -6,7 +6,7 @@ use crate::{
         FileEntry, SftpAppState, SftpLsPagedResult, SftpOpenTextFileResult, SftpSaveTextFileResult,
         SshConfig as SftpConfig,
     },
-    ssh::SshConfig,
+    ssh::{SerialControlRequest, SerialControlResponse, SshConfig},
     storage::SharedStorageState,
     terminal_transfer::TerminalTransferControl,
     tunnel::{TunnelInfo, TunnelRequest, TunnelState},
@@ -22,6 +22,10 @@ pub enum SessionMessage {
     WriteTerminal {
         data: String,
         respond_to: oneshot::Sender<Result<(), String>>,
+    },
+    ControlSerial {
+        request: SerialControlRequest,
+        respond_to: oneshot::Sender<Result<SerialControlResponse, String>>,
     },
     ResizeTerminal {
         cols: u32,

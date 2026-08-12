@@ -9,7 +9,7 @@ use crate::{
         FileEntry, SftpAppState, SftpLsPagedResult, SftpOpenTextFileResult, SftpSaveTextFileResult,
         SftpStreamBridge, SshConfig as SftpConfig,
     },
-    ssh::SshConfig,
+    ssh::{SerialControlRequest, SerialControlResponse, SshConfig},
     storage::SharedStorageState,
     terminal_transfer::{TerminalTransferControl, TerminalTransferSelection},
     tunnel::{self, TunnelInfo, TunnelRequest, TunnelState},
@@ -229,6 +229,24 @@ impl SessionSupervisor {
 
         rx.await
             .map_err(|_| "Session actor dropped terminal write response".to_string())?
+    }
+
+    pub async fn control_serial(
+        &self,
+        session_id: String,
+        request: SerialControlRequest,
+    ) -> Result<SerialControlResponse, String> {
+        let actor = self.get_actor(&session_id)?;
+        let (respond_to, rx) = oneshot::channel();
+        actor
+            .sender
+            .send(SessionMessage::ControlSerial {
+                request,
+                respond_to,
+            })
+            .map_err(|_| "Failed to send serial control message to session actor".to_string())?;
+        rx.await
+            .map_err(|_| "Session actor dropped serial control response".to_string())?
     }
 
     pub async fn resize_terminal(

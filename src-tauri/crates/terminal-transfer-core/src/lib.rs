@@ -1,3 +1,5 @@
+use std::time::{Duration, Instant};
+
 const ZPAD: u8 = b'*';
 const ZDLE: u8 = 0x18;
 const ZBIN: u8 = b'A';
@@ -116,6 +118,7 @@ pub struct ProbeOutput {
 pub struct TerminalStreamMux {
     mode: StreamMode,
     probe: ZmodemProbe,
+    probe_pending_since: Option<Instant>,
     pending_protocol: Vec<u8>,
     pending_limit: usize,
 }
@@ -131,6 +134,7 @@ impl TerminalStreamMux {
         Self {
             mode: StreamMode::Normal,
             probe: ZmodemProbe::new(),
+            probe_pending_since: None,
             pending_protocol: Vec::new(),
             pending_limit: pending_limit.max(1),
         }
@@ -143,12 +147,20 @@ impl TerminalStreamMux {
     pub fn push_remote(&mut self, data: &[u8]) -> Result<Vec<StreamEvent>, StreamError> {
         match self.mode {
             StreamMode::Normal => {
+                let had_pending = !self.probe.pending.is_empty();
                 let output = self.probe.inspect(data);
+                let has_pending = !self.probe.pending.is_empty();
+                self.probe_pending_since = match (had_pending, has_pending) {
+                    (false, true) => Some(Instant::now()),
+                    (true, true) => self.probe_pending_since,
+                    (_, false) => None,
+                };
                 let mut events = Vec::with_capacity(2);
                 if !output.terminal_data.is_empty() {
                     events.push(StreamEvent::TerminalData(output.terminal_data));
                 }
                 if let Some(detection) = output.detection {
+                    self.probe_pending_since = None;
                     self.pending_protocol = output.protocol_data;
                     self.ensure_pending_limit()?;
                     self.mode = StreamMode::AwaitingDecision;
@@ -194,21 +206,35 @@ impl TerminalStreamMux {
     pub fn begin_recovery(&mut self) {
         self.pending_protocol.clear();
         self.probe.reset();
+        self.probe_pending_since = None;
         self.mode = StreamMode::Recovering;
     }
 
     pub fn restore_terminal(&mut self) {
         self.pending_protocol.clear();
         self.probe.reset();
+        self.probe_pending_since = None;
         self.mode = StreamMode::Normal;
     }
 
     pub fn flush_terminal_data(&mut self) -> Vec<u8> {
         if self.mode == StreamMode::Normal {
+            self.probe_pending_since = None;
             self.probe.flush()
         } else {
             Vec::new()
         }
+    }
+
+    pub fn flush_stale_terminal_data(&mut self, max_age: Duration) -> Vec<u8> {
+        if self.mode != StreamMode::Normal
+            || self
+                .probe_pending_since
+                .is_none_or(|since| since.elapsed() < max_age)
+        {
+            return Vec::new();
+        }
+        self.flush_terminal_data()
     }
 
     fn ensure_pending_limit(&mut self) -> Result<(), StreamError> {
@@ -517,6 +543,19 @@ mod tests {
         mux.push_remote(b"more").unwrap();
         assert_eq!(mux.accept().unwrap(), [header, b"more".to_vec()].concat());
         assert_eq!(mux.mode(), StreamMode::Transferring);
+    }
+
+    #[test]
+    fn mux_flushes_an_incomplete_header_prefix_after_timeout() {
+        let mut mux = TerminalStreamMux::new(1024);
+        let events = mux.push_remote(b"grep *").unwrap();
+        assert_eq!(events, vec![StreamEvent::TerminalData(b"grep ".to_vec())]);
+
+        assert!(mux
+            .flush_stale_terminal_data(Duration::from_secs(1))
+            .is_empty());
+        assert_eq!(mux.flush_stale_terminal_data(Duration::ZERO), b"*".to_vec());
+        assert!(mux.flush_stale_terminal_data(Duration::ZERO).is_empty());
     }
 
     #[test]

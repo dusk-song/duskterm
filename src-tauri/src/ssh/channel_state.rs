@@ -7,6 +7,7 @@ pub(crate) enum TerminalCause {
     StreamEnded,
     ApplicationClosed,
     TransportError(String),
+    SerialError(String),
 }
 
 impl TerminalCause {
@@ -19,6 +20,7 @@ impl TerminalCause {
             Self::StreamEnded => "SSH channel message stream ended".to_string(),
             Self::ApplicationClosed => "closed by application".to_string(),
             Self::TransportError(error) => format!("SSH channel transport error: {}", error),
+            Self::SerialError(error) => format!("serial port error: {}", error),
         }
     }
 }

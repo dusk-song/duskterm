@@ -202,7 +202,7 @@ const dividerStyle = (divider) => divider.direction === 'vertical'
   position: absolute;
   z-index: 20;
   top: 8px;
-  right: 10px;
+  right: 22px;
   display: inline-flex;
   width: 26px;
   height: 26px;

@@ -103,6 +103,20 @@ pub fn spawn_session_actor(
                         .and_then(|runtime| ssh::write_ssh_runtime(&runtime.handle, data));
                     let _ = respond_to.send(result);
                 }
+                SessionMessage::ControlSerial {
+                    request,
+                    respond_to,
+                } => {
+                    let Some(runtime) = runtime_state.ssh.as_ref() else {
+                        let _ = respond_to.send(Err("Session not connected".to_string()));
+                        continue;
+                    };
+                    let handle = runtime.handle.clone();
+                    tokio::spawn(async move {
+                        let result = ssh::control_serial_runtime(&handle, request).await;
+                        let _ = respond_to.send(result);
+                    });
+                }
                 SessionMessage::ResizeTerminal {
                     cols,
                     rows,

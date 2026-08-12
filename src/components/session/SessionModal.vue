@@ -28,7 +28,7 @@ import {
   Zap
 } from '@lucide/vue';
 import { v4 as uuidv4 } from 'uuid';
-import { computed, reactive, ref, watch } from 'vue';
+import { computed, onUnmounted, reactive, ref, watch } from 'vue';
 import { useSshStore } from '@/stores/ssh';
 import { invokeCommand } from '@/utils/ipc';
 
@@ -53,6 +53,7 @@ const serialPortOptions = ref([]);
 const serialPathMode = ref('auto');
 const serialPortsLoading = ref(false);
 let serialPortRequestId = 0;
+let serialPortRefreshTimer = null;
 
 const protocolOptions = [
   { key: 'ssh', label: 'SSH', desc: '标准终端连接' },
@@ -131,7 +132,14 @@ const formState = reactive({
   data_bits: '8',
   stop_bits: '1',
   parity: 'none',
-  flow_control: 'none'
+  flow_control: 'none',
+  serial_line_ending: 'cr',
+  serial_receive_line_ending: 'none',
+  serial_local_echo: false,
+  serial_device_id: '',
+  serial_connect_delay_ms: 0,
+  serial_line_delay_ms: 0,
+  serial_auto_reconnect: true
 });
 
 // --- Validation Rules ---
@@ -151,7 +159,9 @@ const rules = {
   proxy_port: [{ validator: validateRequiredIntegerRange('代理端口', 1, 65535), trigger: 'blur' }],
   jump_port: [{ validator: validateRequiredIntegerRange('跳板机端口', 1, 65535), trigger: 'blur' }],
   serial_path: [{ required: true, message: '请选择或输入串口设备', trigger: 'blur' }],
-  baud_rate: [{ validator: validateRequiredIntegerRange('波特率', 50, 921600), trigger: 'blur' }]
+  baud_rate: [{ validator: validateRequiredIntegerRange('波特率', 50, 4294967295), trigger: 'blur' }],
+  serial_connect_delay_ms: [{ validator: validateRequiredIntegerRange('连接后延迟', 0, 60000), trigger: 'blur' }],
+  serial_line_delay_ms: [{ validator: validateRequiredIntegerRange('脚本行延迟', 0, 60000), trigger: 'blur' }]
 };
 
 const isSshProtocol = computed(() => activeProtocol.value === 'ssh');
@@ -203,6 +213,8 @@ const computedRules = computed(() => {
   if (!isSerialProtocol.value) {
     delete r.serial_path;
     delete r.baud_rate;
+    delete r.serial_connect_delay_ms;
+    delete r.serial_line_delay_ms;
   }
   return r;
 });
@@ -214,6 +226,10 @@ const normalizeSerialFormFields = () => {
   formState.stop_bits = String(formState.stop_bits || '1');
   formState.parity = String(formState.parity || 'none');
   formState.flow_control = String(formState.flow_control || 'none');
+  formState.serial_line_ending = String(formState.serial_line_ending || 'cr');
+  formState.serial_receive_line_ending = String(formState.serial_receive_line_ending || 'none');
+  formState.serial_local_echo = formState.serial_local_echo === true;
+  formState.serial_auto_reconnect = formState.serial_auto_reconnect !== false;
 };
 
 const serialPortSelectOptions = computed(() => {
@@ -275,6 +291,31 @@ watch(activeProtocol, (value) => {
   }
 });
 
+watch(() => formState.serial_path, (path) => {
+  const selected = serialPortOptions.value.find((item) => item.value === path);
+  if (selected) {
+    formState.serial_device_id = selected.stableId || '';
+  } else if (serialPathMode.value === 'custom') {
+    formState.serial_device_id = '';
+  }
+});
+
+watch([() => props.visible, activeProtocol], ([visible, protocol]) => {
+  if (serialPortRefreshTimer) {
+    clearInterval(serialPortRefreshTimer);
+    serialPortRefreshTimer = null;
+  }
+  if (visible && protocol === 'serial') {
+    serialPortRefreshTimer = setInterval(() => {
+      if (!serialPortsLoading.value) loadSerialPortOptions({ silent: true });
+    }, 2000);
+  }
+}, { immediate: true });
+
+onUnmounted(() => {
+  if (serialPortRefreshTimer) clearInterval(serialPortRefreshTimer);
+});
+
 function getNewSessionState() {
   return {
     id: uuidv4(),
@@ -316,21 +357,43 @@ function getNewSessionState() {
     data_bits: '8',
     stop_bits: '1',
     parity: 'none',
-    flow_control: 'none'
+    flow_control: 'none',
+    serial_line_ending: 'cr',
+    serial_receive_line_ending: 'none',
+    serial_local_echo: false,
+    serial_device_id: '',
+    serial_connect_delay_ms: 0,
+    serial_line_delay_ms: 0,
+    serial_auto_reconnect: true
   };
 }
 
-const loadSerialPortOptions = async () => {
+const loadSerialPortOptions = async ({ silent = false } = {}) => {
   const requestId = ++serialPortRequestId;
-  serialPortsLoading.value = true;
+  if (!silent) serialPortsLoading.value = true;
   try {
     const ports = await invokeCommand('list_serial_ports');
     if (requestId !== serialPortRequestId) return;
     serialPortOptions.value = Array.isArray(ports)
-      ? ports.map((item) => ({ value: item.path, label: item.label || item.path }))
+      ? ports.map((item) => ({
+          value: item.path,
+          label: item.label || item.path,
+          stableId: item.stableId || '',
+          vid: item.vid,
+          pid: item.pid,
+          serialNumber: item.serialNumber || ''
+        }))
       : [];
-    if (activeProtocol.value === 'serial' && serialPathMode.value === 'auto') {
-      formState.serial_path = serialPortOptions.value[0]?.value || '';
+    const stableMatch = serialPortOptions.value.find((item) => (
+      formState.serial_device_id && item.stableId === formState.serial_device_id
+    ));
+    if (stableMatch) {
+      formState.serial_path = stableMatch.value;
+      serialPathMode.value = 'detected';
+    } else if (activeProtocol.value === 'serial' && serialPathMode.value === 'auto') {
+      const firstPort = serialPortOptions.value[0];
+      formState.serial_path = firstPort?.value || '';
+      formState.serial_device_id = firstPort?.stableId || '';
     } else if (
       activeProtocol.value === 'serial'
       && isEditMode.value
@@ -344,7 +407,7 @@ const loadSerialPortOptions = async () => {
     console.error('Load serial ports failed:', error);
     serialPortOptions.value = [];
   } finally {
-    if (requestId === serialPortRequestId) serialPortsLoading.value = false;
+    if (!silent && requestId === serialPortRequestId) serialPortsLoading.value = false;
   }
 };
 
@@ -381,6 +444,8 @@ const buildSessionConfig = () => {
   sessionConfig.jump_port = Number(sessionConfig.jump_port);
   sessionConfig.baud_rate = Number(sessionConfig.baud_rate);
   sessionConfig.data_bits = Number(sessionConfig.data_bits);
+  sessionConfig.serial_connect_delay_ms = Number(sessionConfig.serial_connect_delay_ms || 0);
+  sessionConfig.serial_line_delay_ms = Number(sessionConfig.serial_line_delay_ms || 0);
 
   if (activeProtocol.value === 'ssh' && formState.auth_type === 'password') {
     sessionConfig.private_key_path = null;
@@ -417,6 +482,8 @@ const buildSessionConfig = () => {
   }
 
   if (activeProtocol.value === 'serial') {
+    const selectedPort = serialPortOptions.value.find((item) => item.value === sessionConfig.serial_path);
+    sessionConfig.serial_device_id = selectedPort?.stableId || normalizeOptional(sessionConfig.serial_device_id);
     sessionConfig.host = '';
     sessionConfig.port = 0;
     sessionConfig.username = '';
@@ -431,6 +498,13 @@ const buildSessionConfig = () => {
     sessionConfig.stop_bits = null;
     sessionConfig.parity = null;
     sessionConfig.flow_control = null;
+    sessionConfig.serial_line_ending = null;
+    sessionConfig.serial_receive_line_ending = null;
+    sessionConfig.serial_local_echo = null;
+    sessionConfig.serial_device_id = null;
+    sessionConfig.serial_connect_delay_ms = null;
+    sessionConfig.serial_line_delay_ms = null;
+    sessionConfig.serial_auto_reconnect = null;
   }
 
   if (activeProtocol.value === 'telnet') {
@@ -471,10 +545,44 @@ const buildSessionConfig = () => {
   sessionConfig.jump_passphrase = normalizeOptional(sessionConfig.jump_passphrase);
   sessionConfig.login_script = normalizeOptional(sessionConfig.login_script);
   sessionConfig.serial_path = normalizeOptional(sessionConfig.serial_path);
-  sessionConfig.stop_bits = normalizeOptional(sessionConfig.stop_bits) || '1';
-  sessionConfig.parity = normalizeOptional(sessionConfig.parity) || 'none';
-  sessionConfig.flow_control = normalizeOptional(sessionConfig.flow_control) || 'none';
+  sessionConfig.serial_device_id = normalizeOptional(sessionConfig.serial_device_id);
+  if (activeProtocol.value === 'serial') {
+    sessionConfig.stop_bits = normalizeOptional(sessionConfig.stop_bits) || '1';
+    sessionConfig.parity = normalizeOptional(sessionConfig.parity) || 'none';
+    sessionConfig.flow_control = normalizeOptional(sessionConfig.flow_control) || 'none';
+    sessionConfig.serial_line_ending = normalizeOptional(sessionConfig.serial_line_ending) || 'cr';
+    sessionConfig.serial_receive_line_ending = normalizeOptional(sessionConfig.serial_receive_line_ending) || 'none';
+  }
   return sessionConfig;
+};
+
+const validateSerialFields = () => {
+  if (!isSerialProtocol.value) return true;
+  if (!formState.serial_path?.trim()) {
+    toast.error('请选择串口设备');
+    return false;
+  }
+  const baudRateText = String(formState.baud_rate ?? '').trim();
+  if (!/^\d+$/.test(baudRateText)) {
+    toast.error('波特率必须是整数');
+    return false;
+  }
+  const baudRate = Number(baudRateText);
+  if (baudRate < 50 || baudRate > 4294967295) {
+    toast.error('波特率范围 50-4294967295，最终支持范围由设备和驱动决定');
+    return false;
+  }
+  for (const [label, value] of [
+    ['连接后延迟', formState.serial_connect_delay_ms],
+    ['脚本行延迟', formState.serial_line_delay_ms]
+  ]) {
+    const text = String(value ?? '').trim();
+    if (!/^\d+$/.test(text) || Number(text) > 60000) {
+      toast.error(`${label}必须是 0-60000 毫秒的整数`);
+      return false;
+    }
+  }
+  return true;
 };
 
 // --- Actions ---
@@ -521,7 +629,7 @@ const handleOk = async () => {
   if (isSshProtocol.value && !formState.username?.trim()) { toast.error('请输入用户名'); return; }
   if (isSshProtocol.value && formState.auth_type === 'password' && !isEditMode.value && !formState.password) { toast.error('请输入密码'); return; }
   if (isSshProtocol.value && formState.auth_type === 'key' && !formState.private_key_path?.trim()) { toast.error('请选择私钥文件'); return; }
-  if (isSerialProtocol.value && !formState.serial_path?.trim()) { toast.error('请选择串口设备'); return; }
+  if (!validateSerialFields()) return;
 
   confirmLoading.value = true;
   try {
@@ -551,14 +659,20 @@ const handleCancel = () => {
 const handleTestConnection = async () => {
   if (isTestingConnection.value) return;
   if (supportsHostPort.value && !formState.host?.trim()) { toast.error('请输入主机地址'); return; }
+  if (!validateSerialFields()) return;
 
   const loadingKey = 'test-conn';
   isTestingConnection.value = true;
-  toast.loading({ content: '正在测试端口连通性…', key: loadingKey, duration: 0 });
+  toast.loading({
+    content: isSerialProtocol.value
+      ? '正在试开串口；此操作可能切换 DTR/RTS 并复位设备…'
+      : '正在测试端口连通性…',
+    key: loadingKey,
+    duration: 0
+  });
 
   try {
     const testConfig = buildSessionConfig();
-    // Use the Rust command which now does TCP-only test for all protocols
     const result = await invokeCommand('test_ssh_connection', { config: testConfig });
     toast.success({ content: typeof result === 'string' ? result : '端口连通性正常', key: loadingKey });
   } catch (error) {
@@ -690,6 +804,37 @@ const groupOptions = computed(() => {
                       </SelectContent>
                     </Select>
                   </div>
+                  <div class="form-item mb-2"><label class="text-sm text-muted-foreground mb-1">发送行尾</label>
+                    <Select v-model="formState.serial_line_ending">
+                      <SelectTrigger size="sm" class="w-[280px] flex-none">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent :side-offset="4">
+                        <SelectItem value="cr">CR</SelectItem>
+                        <SelectItem value="lf">LF</SelectItem>
+                        <SelectItem value="crlf">CRLF</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div class="form-item mb-2"><label class="text-sm text-muted-foreground mb-1">接收换行</label>
+                    <Select v-model="formState.serial_receive_line_ending">
+                      <SelectTrigger size="sm" class="w-[280px] flex-none">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent :side-offset="4">
+                        <SelectItem value="none">原始数据</SelectItem>
+                        <SelectItem value="cr">CR 转 CRLF</SelectItem>
+                        <SelectItem value="lf">LF 转 CRLF</SelectItem>
+                        <SelectItem value="auto">自动识别 CR/LF</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div class="form-item mb-2"><label class="text-sm text-muted-foreground mb-1">本地回显</label>
+                    <div class="flex h-8 w-[280px] items-center gap-2">
+                      <Checkbox v-model="formState.serial_local_echo" />
+                      <span class="text-xs text-muted-foreground">显示本机发送的字符</span>
+                    </div>
+                  </div>
 
                 </template>
                 <!-- SSH 认证：支持密码 / 私钥 -->
@@ -801,7 +946,7 @@ const groupOptions = computed(() => {
 
             <div v-show="activeConfigTab === 'connection'">
               <div class="compact-form-grid">
-                <div class="form-item mb-2" name="connect_timeout">
+                <div class="form-item mb-2" v-if="!isSerialProtocol" name="connect_timeout">
                   <label class="text-sm text-muted-foreground mb-1">连接超时</label>
                   <Input size="sm" class="w-[280px] flex-none" v-model="formState.connect_timeout" placeholder="秒" />
                   <!-- <div class="field-hint">网络条件较差时建议增加此值</div> -->
@@ -812,6 +957,24 @@ const groupOptions = computed(() => {
                     placeholder="秒" />
                   <!-- <div class="field-hint">SSH / Telnet 可选保活 (0 为禁用)</div> -->
                 </div>
+                <template v-if="isSerialProtocol">
+                  <div class="form-item mb-2" name="serial_connect_delay_ms">
+                    <label class="text-sm text-muted-foreground mb-1">连接后延迟</label>
+                    <Input size="sm" class="w-[280px] flex-none" v-model="formState.serial_connect_delay_ms"
+                      placeholder="毫秒，例如 1500" />
+                  </div>
+                  <div class="form-item mb-2" name="serial_line_delay_ms">
+                    <label class="text-sm text-muted-foreground mb-1">脚本行延迟</label>
+                    <Input size="sm" class="w-[280px] flex-none" v-model="formState.serial_line_delay_ms"
+                      placeholder="毫秒，例如 100" />
+                  </div>
+                  <div class="form-item mb-2"><label class="text-sm text-muted-foreground mb-1">自动重连</label>
+                    <div class="flex h-8 w-[280px] items-center gap-2">
+                      <Checkbox v-model="formState.serial_auto_reconnect" />
+                      <span class="text-xs text-muted-foreground">设备重新插入后自动恢复</span>
+                    </div>
+                  </div>
+                </template>
               </div>
             </div>
 
@@ -980,7 +1143,7 @@ const groupOptions = computed(() => {
       <DialogFooter>
         <Button variant="outline" @click="handleTestConnection" :disabled="isTestingConnection" size="sm">
           <Zap :size="14" />
-          测试连接
+          {{ isSerialProtocol ? '试开串口' : '测试连接' }}
         </Button>
         <Button variant="outline" @click="handleCancel" size="sm">取消</Button>
         <Button :disabled="confirmLoading" @click="handleOk" size="sm">
