@@ -29,6 +29,7 @@ import {
 } from '@lucide/vue';
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useTheme } from '@/composables/useTheme';
+import { useCommandHistoryStore } from '@/stores/commandHistory';
 import { useCommandKnowledgeStore } from '@/stores/commandKnowledge';
 import { useSecurityStore } from '@/stores/security';
 import { useSshStore } from '@/stores/ssh';
@@ -38,10 +39,10 @@ import { findMatchedCommandInPayload, matchSensitiveCommand } from '@/utils/sens
 import { getSessionSyncBadgeState, SYNC_INPUT_CHANNELS_STORAGE_KEY } from '@/utils/syncInputChannels';
 import {
   buildTerminalLineReplacementPayload,
-  extractCommandFromTerminalLine,
-  findCommandHistoryMatches,
-  normalizeCommandHistory,
-  recordCommandHistoryEntry,
+  createTerminalInputState,
+  extractAnchoredTerminalInput,
+  replaceTerminalInputState,
+  updateTerminalInputState,
 } from '@/utils/terminalCommandHistory';
 import { getTerminalTheme, loadTerminalThemeSettings } from '@/utils/terminalTheme';
 
@@ -71,6 +72,7 @@ const lineNumberRowHeightPx = ref(18);
 const showLineNumberGutter = computed(() => lineNumbersEnabled.value && !isSerialSession.value);
 const sshStore = useSshStore();
 const transferStore = useTransfersStore();
+const commandHistoryStore = useCommandHistoryStore();
 const commandKnowledgeStore = useCommandKnowledgeStore();
 const securityStore = useSecurityStore();
 const { isDark } = useTheme();
@@ -85,51 +87,39 @@ const securityModalVisible = ref(false);
 const blockedCommandContent = ref('');
 const blockedCommandSeverity = ref('warning');
 const pendingData = ref(null);
+let pendingHistorySnapshot = null;
 const confirmPassword = ref('');
-const currentInputBuffer = ref('');
+const currentInputState = ref(createTerminalInputState());
+const currentInputBuffer = computed({
+  get: () => currentInputState.value.text,
+  set: (value) => {
+    currentInputState.value = replaceTerminalInputState(value);
+  },
+});
+let inputLinePrefix = '';
 const quickHintVisible = ref(false);
 const quickHintItems = ref([]);
 const quickHintSelectedIndex = ref(0);
 const quickHintFocused = ref(false);
 const quickHintPanelRef = ref(null);
 const quickHintPanelStyle = ref({});
-const quickHintLastQuery = ref('');
-const quickHintLastMatchedIndexes = ref([]);
-const commandHistory = ref([]); // [{ cmd: string, count: number }]
-const HISTORY_MAX = 200;
-const HISTORY_MIN_LEN = 5;
-const HISTORY_STORAGE_KEY = 'cmd-history-v1';
-const HISTORY_CHANGED_EVENT = 'command-history-changed';
+let quickHintDismissedInput = '';
+let pendingKnowledgeUsageId = '';
 const SERIAL_RECEIVE_VISIBLE_KEY_PREFIX = 'serial-receive-visible-v1:';
 const SERIAL_CAPTURE_MAX_CHARS = 5 * 1024 * 1024;
 const SERIAL_SAVE_IPC_CHUNK_BYTES = 128 * 1024;
 const knowledgeSensitiveRules = computed(() => commandKnowledgeStore.sensitiveRules || []);
 
-const readStoredCommandHistory = () => {
-  try {
-    const raw = localStorage.getItem(HISTORY_STORAGE_KEY);
-    return normalizeCommandHistory(raw ? JSON.parse(raw) : []);
-  } catch {
-    return [];
-  }
+const resetCurrentInputState = () => {
+  currentInputState.value = createTerminalInputState();
+  inputLinePrefix = '';
 };
 
-const loadCommandHistory = () => {
-  commandHistory.value = readStoredCommandHistory();
+const captureInputLinePrefix = () => {
+  if (currentInputState.value.text) return;
+  inputLinePrefix = getCursorLogicalLineText();
 };
 
-const persistCommandHistory = () => {
-  try {
-    localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(commandHistory.value));
-  } catch { /* ignore */ }
-  window.dispatchEvent(new CustomEvent(HISTORY_CHANGED_EVENT, {
-    detail: { history: commandHistory.value },
-  }));
-};
-
-const onCommandHistoryChanged = (event) => {
-  commandHistory.value = normalizeCommandHistory(event?.detail?.history || []);
-};
 const syncBadgeState = ref({
   visible: false,
   channelId: '',
@@ -505,32 +495,39 @@ const toggleSerialReceiveVisible = () => {
   toast.info(serialReceiveVisible.value ? '串口接收数据显示已开启' : '串口接收数据显示已隐藏');
 };
 
-const openSecurityModal = (matched, data) => {
+const openSecurityModal = (matched, data, historySnapshot = null, knowledgeUsageId = '') => {
   blockedCommandContent.value = matched.content;
   blockedCommandSeverity.value = matched.severity;
   pendingData.value = data;
+  pendingHistorySnapshot = historySnapshot;
+  pendingKnowledgeUsageId = knowledgeUsageId;
   confirmPassword.value = '';
-  currentInputBuffer.value = '';
+  resetCurrentInputState();
   securityModalVisible.value = true;
 };
 
-function sendData(data) {
-  if (terminalTransferOwned.value) return;
+async function sendData(data) {
+  if (terminalTransferOwned.value) return false;
   const session = currentSession.value;
   if (session && (session.status === 'connected' || session.status === 'connecting')) {
     const command = session.isSplitChild ? 'write_ssh_shell_channel' : 'write_ssh';
     const payload = session.isSplitChild
       ? { rootSessionId: session.workspaceSessionId || session.parentId, channelId: props.sessionId, data }
       : { sessionId: props.sessionId, data };
-    invokeCommand(command, payload).catch((error) => {
+    try {
+      await invokeCommand(command, payload);
+      return true;
+    } catch (error) {
       console.error(error);
-      if (!isSerialSession.value) return;
+      if (!isSerialSession.value) return false;
       const now = Date.now();
       if (now - serialWriteErrorToastAt < 1500) return;
       serialWriteErrorToastAt = now;
       toast.error(`串口发送失败：${error}`);
-    });
+      return false;
+    }
   }
+  return false;
 }
 
 const formatCloseReason = (reason) => {
@@ -554,7 +551,7 @@ async function reconnectAfterDisconnect() {
     if (ok) {
       term?.write('\r\n\x1b[32m已重新连接。\x1b[0m\r\n');
       markSearchBufferChanged();
-      currentInputBuffer.value = '';
+      resetCurrentInputState();
       closeQuickHint();
       reconnectPromptShown.value = false;
     } else {
@@ -617,13 +614,16 @@ const forwardTerminalInput = async (data) => {
   };
 
   let resolved = false;
-  let handled = false;
+  let routeResult = { handled: false, sent: false };
   const waitHandled = new Promise((resolve) => {
     detail.respond = (result) => {
       if (resolved) return;
       resolved = true;
-      handled = !!result?.handled;
-      resolve(handled);
+      routeResult = {
+        handled: !!result?.handled,
+        sent: !!result?.sent,
+      };
+      resolve(routeResult);
     };
   });
 
@@ -631,10 +631,10 @@ const forwardTerminalInput = async (data) => {
 
   if (detail.handledByRouter) {
     await waitHandled;
-    if (handled) return;
+    if (routeResult.handled) return routeResult.sent;
   }
 
-  sendData(data);
+  return sendData(data);
 };
 
 const onSyncInputChanged = (event) => {
@@ -682,29 +682,40 @@ async function handleSecurityConfirm() {
   }
 
   if (pendingData.value) {
-    recordCommandHistory(blockedCommandContent.value);
-    forwardTerminalInput(pendingData.value);
-    pendingData.value = null;
+    const sent = await forwardTerminalInput(pendingData.value);
+    if (sent && pendingHistorySnapshot) {
+      scheduleSubmittedCommandRecord(pendingHistorySnapshot);
+    }
+    if (sent && pendingKnowledgeUsageId) {
+      recordKnowledgeUsage(pendingKnowledgeUsageId);
+    }
   }
+  pendingData.value = null;
+  pendingHistorySnapshot = null;
+  pendingKnowledgeUsageId = '';
   securityModalVisible.value = false;
   confirmPassword.value = '';
-  currentInputBuffer.value = '';
+  resetCurrentInputState();
   term?.focus();
 }
 
 function handleSecurityCancel() {
   pendingData.value = null;
+  pendingHistorySnapshot = null;
+  pendingKnowledgeUsageId = '';
   securityModalVisible.value = false;
   confirmPassword.value = '';
-  currentInputBuffer.value = '';
+  resetCurrentInputState();
   sendData('\x03');
   term?.focus();
 }
 
 function openSettings() {
   pendingData.value = null;
+  pendingHistorySnapshot = null;
+  pendingKnowledgeUsageId = '';
   confirmPassword.value = '';
-  currentInputBuffer.value = '';
+  resetCurrentInputState();
   sendData('\x03');
   securityModalVisible.value = false;
   window.dispatchEvent(new CustomEvent('app:open-settings'));
@@ -972,16 +983,17 @@ watch(isDark, () => {
   applyTerminalTheme();
 });
 
-const recordCommandHistory = (command) => {
-  const latestHistory = readStoredCommandHistory();
-  commandHistory.value = recordCommandHistoryEntry(latestHistory, command, {
-    max: HISTORY_MAX,
-    minLength: HISTORY_MIN_LEN,
+const recordCommandHistory = (command, source = 'terminal') => {
+  const session = currentSession.value;
+  void commandHistoryStore.record(command, {
+    source,
+    protocol: session?.config?.protocol || 'ssh',
+    host: session?.config?.host || null,
+    username: session?.config?.username || null,
   });
-  persistCommandHistory();
 };
 
-const getCursorLogicalLineText = () => {
+const getCursorLogicalLineText = ({ fullLine = false } = {}) => {
   const buffer = term?.buffer?.active;
   if (!buffer) return '';
 
@@ -992,39 +1004,85 @@ const getCursorLogicalLineText = () => {
   }
 
   const parts = [];
-  for (let index = startIndex; index <= cursorVisualIndex; index += 1) {
+  let endIndex = cursorVisualIndex;
+  if (fullLine) {
+    while (endIndex + 1 < buffer.length && buffer.getLine(endIndex + 1)?.isWrapped) {
+      endIndex += 1;
+    }
+  }
+
+  for (let index = startIndex; index <= endIndex; index += 1) {
     const line = buffer.getLine(index);
     if (!line) continue;
     const text = line.translateToString(false);
-    if (index === cursorVisualIndex) {
+    if (!fullLine && index === cursorVisualIndex) {
       parts.push(text.slice(0, Math.max(0, Number(buffer.cursorX || 0))));
     } else {
       parts.push(text);
     }
   }
 
-  return parts.join('').replace(/\u00a0/g, ' ').trimEnd();
-};
-
-const stripPromptFromCommandLine = (line, fallbackInput = '') => {
-  return extractCommandFromTerminalLine(line, fallbackInput);
+  const text = parts.join('').replace(/\u00a0/g, ' ');
+  return fullLine ? text.trimEnd() : text;
 };
 
 const getSubmittedCommandText = () => {
-  const fallback = currentInputBuffer.value;
-  const commandFromTerminal = stripPromptFromCommandLine(getCursorLogicalLineText(), fallback);
-  if (commandFromTerminal) return commandFromTerminal;
-  return String(fallback || '').trim();
+  const local = currentInputState.value;
+  if (!local.reliable || !inputLinePrefix) return null;
+  const command = String(local.text || '').trim();
+  if (!command || /[\r\n]/.test(command)) return null;
+  return {
+    command,
+    echoedText: local.text.trimEnd(),
+    linePrefix: inputLinePrefix,
+    source: 'terminal',
+  };
+};
+
+const terminalContainsSubmittedCommand = (snapshot) => {
+  const buffer = term?.buffer?.active;
+  if (!buffer || !snapshot?.linePrefix || !snapshot?.echoedText) return false;
+  const expected = `${snapshot.linePrefix}${snapshot.echoedText}`;
+  const end = Math.max(0, Number(buffer.baseY || 0) + Number(buffer.cursorY || 0));
+  for (let index = end; index >= Math.max(0, end - 12); index -= 1) {
+    let start = index;
+    while (start > 0 && buffer.getLine(start)?.isWrapped) start -= 1;
+    const parts = [];
+    let cursor = start;
+    do {
+      const line = buffer.getLine(cursor);
+      if (!line) break;
+      parts.push(line.translateToString(false));
+      cursor += 1;
+    } while (cursor < buffer.length && buffer.getLine(cursor)?.isWrapped);
+    if (parts.join('').replace(/\u00a0/g, ' ').trimEnd() === expected) return true;
+    index = start;
+  }
+  return false;
+};
+
+const scheduleSubmittedCommandRecord = (snapshot) => {
+  if (!snapshot?.command) return;
+  let attempt = 0;
+  const verify = () => {
+    if (terminalContainsSubmittedCommand(snapshot)) {
+      recordCommandHistory(snapshot.command, snapshot.source);
+      return;
+    }
+    attempt += 1;
+    if (attempt < 20) setTimeout(verify, 100);
+  };
+  setTimeout(verify, 0);
 };
 
 const syncInputBufferFromTerminal = ({ refreshHints = true } = {}) => {
-  const command = stripPromptFromCommandLine(getCursorLogicalLineText(), currentInputBuffer.value);
-  if (!command) return '';
-  if (command !== currentInputBuffer.value) {
-    currentInputBuffer.value = command;
-    if (refreshHints) scheduleQuickHintUpdate(command);
-  }
-  return command;
+  if (!inputLinePrefix) return '';
+  if (currentInputState.value.reliable) return currentInputState.value.text;
+  const extracted = extractAnchoredTerminalInput(getCursorLogicalLineText(), inputLinePrefix);
+  if (!extracted.reliable) return '';
+  currentInputState.value = replaceTerminalInputState(extracted.text);
+  if (refreshHints) scheduleQuickHintUpdate(extracted.text);
+  return extracted.text;
 };
 
 const cancelShellCompletionSync = () => {
@@ -1054,20 +1112,12 @@ const closeQuickHint = () => {
   quickHintSelectedIndex.value = 0;
   quickHintFocused.value = false;
   quickHintPanelStyle.value = {};
-  quickHintLastQuery.value = '';
-  quickHintLastMatchedIndexes.value = [];
 };
 
 const cancelQuickHintDebounce = () => {
   if (!quickHintDebounceTimer) return;
   clearTimeout(quickHintDebounceTimer);
   quickHintDebounceTimer = null;
-};
-
-const loadCommandKnowledgeCatalog = () => {
-  commandKnowledgeStore.loadEntries().catch((error) => {
-    console.error('Load command knowledge failed:', error);
-  });
 };
 
 const cancelQuickHintPositionUpdate = () => {
@@ -1185,17 +1235,31 @@ const collectQuickHintMatchesAsync = async (query, token) => {
     }));
 
   const seenCmds = new Set(knowledgeItems.map(item => String(item.command || '')));
-  const historyItems = findCommandHistoryMatches(commandHistory.value, query, {
-    excludedCommands: seenCmds,
-    limit: 10,
-  });
+  const historyItems = query.length >= 2
+    ? commandHistoryStore.matches(query, {
+      excludedCommands: seenCmds,
+      limit: 10,
+    })
+    : [];
 
   return { knowledgeItems, historyItems };
 };
 
 const updateQuickHintMatches = async (rawInput) => {
   const query = normalizeQuickHintQuery(rawInput);
-  if (!query || query.length < 2) {
+  if (!query) {
+    closeQuickHint();
+    return;
+  }
+  if (!inputLinePrefix || currentInputState.value.reliable === false) {
+    closeQuickHint();
+    return;
+  }
+  const echoed = extractAnchoredTerminalInput(
+    getCursorLogicalLineText({ fullLine: true }),
+    inputLinePrefix,
+  );
+  if (!echoed.reliable || echoed.text.trimEnd() !== currentInputBuffer.value.trimEnd()) {
     closeQuickHint();
     return;
   }
@@ -1219,9 +1283,6 @@ const updateQuickHintMatches = async (rawInput) => {
     return;
   }
 
-  quickHintLastQuery.value = query;
-  quickHintLastMatchedIndexes.value = knowledgeItems.map((item) => item.id);
-
   const sameItems = areQuickHintItemsSame(nextItems);
   if (!sameItems) {
     quickHintItems.value = nextItems;
@@ -1239,6 +1300,14 @@ const updateQuickHintMatches = async (rawInput) => {
 };
 
 const scheduleQuickHintUpdate = (rawInput) => {
+  const input = String(rawInput ?? '');
+  if (quickHintDismissedInput) {
+    if (input === quickHintDismissedInput) {
+      closeQuickHint();
+      return;
+    }
+    quickHintDismissedInput = '';
+  }
   const query = normalizeQuickHintQuery(rawInput);
   cancelQuickHintDebounce();
   quickHintDebounceTimer = setTimeout(() => {
@@ -1247,6 +1316,26 @@ const scheduleQuickHintUpdate = (rawInput) => {
       console.error('Quick hint async match failed:', error);
     });
   }, resolveQuickHintDebounceMs(query));
+};
+
+const replaceCurrentTerminalLine = (command) => {
+  const text = String(command || '').trim();
+  if (!text) return null;
+
+  const currentInput = currentInputBuffer.value;
+  quickHintDismissedInput = text;
+  closeQuickHint();
+  const sent = forwardTerminalInput(buildTerminalLineReplacementPayload(text, currentInput));
+  currentInputState.value = replaceTerminalInputState(text);
+  term?.focus();
+  return sent;
+};
+
+const recordKnowledgeUsage = (id) => {
+  if (!id) return;
+  void commandKnowledgeStore.recordUsage(id).catch((error) => {
+    console.error('Record command knowledge usage failed:', error);
+  });
 };
 
 const applyQuickHintSelection = () => {
@@ -1258,20 +1347,13 @@ const applyQuickHintSelection = () => {
     return false;
   }
 
-  const matched = matchSensitiveCommand(command, knowledgeSensitiveRules.value);
-  if (matched) {
-    openSecurityModal(matched, `${buildTerminalLineReplacementPayload(command, currentInputBuffer.value)}\r`);
-    closeQuickHint();
-    return true;
-  }
-
-  forwardTerminalInput(buildTerminalLineReplacementPayload(command, currentInputBuffer.value));
-  currentInputBuffer.value = command;
+  const sent = replaceCurrentTerminalLine(command);
+  if (!sent) return false;
   if (selected?._source === 'knowledge' && selected?.id) {
-    commandKnowledgeStore.recordUsage(selected.id);
+    void sent.then((wasSent) => {
+      if (wasSent) recordKnowledgeUsage(selected.id);
+    });
   }
-  closeQuickHint();
-  term?.focus();
   return true;
 };
 
@@ -2560,25 +2642,35 @@ const handleMenuSelect = async (key) => {
   }
 };
 
-function executeKnowledgeCommand(detail, command) {
+async function executeKnowledgeCommand(detail, command) {
   const text = String(command || '').trim();
   if (!text) return;
-  const payload = text.endsWith('\r') || text.endsWith('\n') ? text : `${text}\r`;
+  captureInputLinePrefix();
+  syncInputBufferFromTerminal({ refreshHints: false });
+  const payload = `${buildTerminalLineReplacementPayload(text, currentInputBuffer.value)}\r`;
+  const historySnapshot = {
+    command: text,
+    echoedText: text,
+    linePrefix: inputLinePrefix,
+    source: 'knowledge',
+  };
 
   closeQuickHint();
-  currentInputBuffer.value = '';
-  recordCommandHistory(text);
-  if (detail?.id) {
-    commandKnowledgeStore.recordUsage(detail.id);
-  }
+  resetCurrentInputState();
 
   const matched = findMatchedCommandInPayload(payload, knowledgeSensitiveRules.value);
-  if (matched) {
-    openSecurityModal(matched, payload);
+  const requiresTerminalConfirmation = matched
+    && (!detail?.securityConfirmed || matched.severity === 'critical');
+  if (requiresTerminalConfirmation) {
+    openSecurityModal(matched, payload, historySnapshot, detail?.id);
     return;
   }
 
-  forwardTerminalInput(payload);
+  const sent = await forwardTerminalInput(payload);
+  if (sent) {
+    scheduleSubmittedCommandRecord(historySnapshot);
+    recordKnowledgeUsage(detail?.id);
+  }
   term?.focus();
 }
 
@@ -2590,23 +2682,24 @@ function handleKnowledgeCommandEvent(event) {
   if (typeof command !== 'string' || command.length === 0) return;
 
   if (detail?.execute) {
-    executeKnowledgeCommand(detail, command);
+    void executeKnowledgeCommand(detail, command);
     return;
   }
 
-  closeQuickHint();
-  term?.paste(command);
-  currentInputBuffer.value = command.trim();
-  if (detail?.id) {
-    commandKnowledgeStore.recordUsage(detail.id);
+  captureInputLinePrefix();
+  syncInputBufferFromTerminal({ refreshHints: false });
+  const sent = replaceCurrentTerminalLine(command);
+  if (sent && detail?.id) {
+    void sent.then((wasSent) => {
+      if (wasSent) recordKnowledgeUsage(detail.id);
+    });
   }
-  term?.focus();
 }
 
 onMounted(async () => {
   loadSyncInputState();
-  loadCommandKnowledgeCatalog();
-  loadCommandHistory();
+  void commandKnowledgeStore.loadEntries();
+  void commandHistoryStore.loadEntries();
   loadSerialReceivePreference();
 
   const cacheKey = props.sessionId;
@@ -2785,7 +2878,7 @@ onMounted(async () => {
 
         if (isSerialSession.value) {
           closeQuickHint();
-          currentInputBuffer.value = '';
+          resetCurrentInputState();
           forwardTerminalInput(data);
           return;
         }
@@ -2842,6 +2935,8 @@ onMounted(async () => {
         }
 
         if (data === '\t') {
+          captureInputLinePrefix();
+          currentInputState.value = updateTerminalInputState(currentInputState.value, data);
           shellCompletionSyncPending = true;
           forwardTerminalInput(data);
           return;
@@ -2852,7 +2947,7 @@ onMounted(async () => {
         const routedBySync = isCurrentSessionSyncSource();
 
         if (routedBySync && isPasteWithNewline) {
-          currentInputBuffer.value = '';
+          resetCurrentInputState();
           closeQuickHint();
           forwardTerminalInput(data);
           return;
@@ -2861,10 +2956,12 @@ onMounted(async () => {
         if (routedBySync && isEnter) {
           syncInputBufferFromTerminal({ refreshHints: false });
           cancelShellCompletionSync();
-          recordCommandHistory(getSubmittedCommandText());
-          currentInputBuffer.value = '';
+          const historySnapshot = getSubmittedCommandText();
+          resetCurrentInputState();
           closeQuickHint();
-          forwardTerminalInput(data);
+          void forwardTerminalInput(data).then((sent) => {
+            if (sent && historySnapshot) scheduleSubmittedCommandRecord(historySnapshot);
+          });
           return;
         }
 
@@ -2874,7 +2971,7 @@ onMounted(async () => {
             openSecurityModal(matched, data);
             return;
           }
-          currentInputBuffer.value = '';
+          resetCurrentInputState();
           closeQuickHint();
           forwardTerminalInput(data);
           return;
@@ -2883,21 +2980,23 @@ onMounted(async () => {
         if (!routedBySync && isEnter) {
           syncInputBufferFromTerminal({ refreshHints: false });
           cancelShellCompletionSync();
-          const submittedCommand = getSubmittedCommandText();
-          const matched = matchSensitiveCommand(submittedCommand, knowledgeSensitiveRules.value);
+          const historySnapshot = getSubmittedCommandText();
+          const matched = matchSensitiveCommand(historySnapshot?.command || '', knowledgeSensitiveRules.value);
           if (matched) {
-            openSecurityModal(matched, data);
+            openSecurityModal(matched, data, historySnapshot);
             return;
           }
-          recordCommandHistory(submittedCommand);
-          currentInputBuffer.value = '';
+          resetCurrentInputState();
           closeQuickHint();
-          forwardTerminalInput(data);
+          void forwardTerminalInput(data).then((sent) => {
+            if (sent && historySnapshot) scheduleSubmittedCommandRecord(historySnapshot);
+          });
           return;
         }
 
         if (data === '\u007f' || data === '\b') {
-          currentInputBuffer.value = currentInputBuffer.value.slice(0, -1);
+          captureInputLinePrefix();
+          currentInputState.value = updateTerminalInputState(currentInputState.value, data);
           scheduleQuickHintUpdate(currentInputBuffer.value);
           forwardTerminalInput(data);
           return;
@@ -2905,7 +3004,7 @@ onMounted(async () => {
 
         if (data === '\u0003') {
           cancelShellCompletionSync();
-          currentInputBuffer.value = '';
+          resetCurrentInputState();
           closeQuickHint();
           forwardTerminalInput(data);
           return;
@@ -2913,17 +3012,26 @@ onMounted(async () => {
 
         const isControlSequence = data.startsWith('\x1b') || /^[\u0000-\u001F\u007F]$/.test(data);
         if (!isControlSequence) {
-          currentInputBuffer.value += data;
+          captureInputLinePrefix();
+          currentInputState.value = updateTerminalInputState(currentInputState.value, data);
           scheduleQuickHintUpdate(currentInputBuffer.value);
         } else if (data === '\x1b') {
+          currentInputState.value = updateTerminalInputState(currentInputState.value, data);
           closeQuickHint();
+        } else {
+          captureInputLinePrefix();
+          currentInputState.value = updateTerminalInputState(currentInputState.value, data);
+          if (data === '\x1b[A' || data === '\x1b[B') {
+            shellCompletionSyncPending = true;
+          }
+          scheduleQuickHintUpdate(currentInputBuffer.value);
         }
 
         forwardTerminalInput(data);
       } catch (error) {
         console.error('Security interceptor fallback:', error);
         closeQuickHint();
-        currentInputBuffer.value = '';
+        resetCurrentInputState();
         forwardTerminalInput(data);
       }
     });
@@ -2967,12 +3075,24 @@ onMounted(async () => {
         recordSerialReceive(decoded, payload.length, rawBytes);
         if (!isSerialSession.value || serialReceiveVisible.value) {
           enqueueTerminalOutput(isSerialSession.value ? renderSerialReceive(rawBytes, decoded) : decoded);
+          if (!isSerialSession.value && shellCompletionSyncPending) {
+            scheduleShellCompletionSync();
+          }
+          if (!isSerialSession.value && currentInputBuffer.value.length >= 1) {
+            scheduleQuickHintUpdate(currentInputBuffer.value);
+          }
         }
       } else if (typeof payload === 'string') {
         const rawBytes = serialTextEncoder.encode(payload);
         recordSerialReceive(payload, rawBytes.length, rawBytes);
         if (!isSerialSession.value || serialReceiveVisible.value) {
           enqueueTerminalOutput(isSerialSession.value ? renderSerialReceive(rawBytes, payload) : payload);
+          if (!isSerialSession.value && shellCompletionSyncPending) {
+            scheduleShellCompletionSync();
+          }
+          if (!isSerialSession.value && currentInputBuffer.value.length >= 1) {
+            scheduleQuickHintUpdate(currentInputBuffer.value);
+          }
         }
       }
     });
@@ -3093,9 +3213,6 @@ onMounted(async () => {
     window.addEventListener('term:clear', handleClear);
     window.addEventListener('term:find', openSearchFromMenu);
 
-    window.addEventListener('command-knowledge-changed', loadCommandKnowledgeCatalog);
-    loadCommandKnowledgeCatalog();
-
     terminalCache.set(cacheKey, {
       term,
       fitAddon,
@@ -3145,7 +3262,6 @@ onMounted(async () => {
   window.addEventListener('terminal:toggle-line-numbers', handleExternalLineNumberToggle);
   window.addEventListener('mousedown', handleQuickHintPointerDown, true);
   window.addEventListener('sync-input-changed', onSyncInputChanged);
-  window.addEventListener(HISTORY_CHANGED_EVENT, onCommandHistoryChanged);
 
   if (resizeObserver) resizeObserver.disconnect();
   resizeObserver = new ResizeObserver(() => handleResize());
@@ -3189,7 +3305,6 @@ onUnmounted(() => {
     window.removeEventListener('terminal:focus', terminalFocusHandler);
     terminalFocusHandler = null;
   }
-  window.removeEventListener('command-knowledge-changed', loadCommandKnowledgeCatalog);
 
   if (resizeObserver) resizeObserver.disconnect();
   layoutDragSources.clear();
@@ -3279,7 +3394,6 @@ onUnmounted(() => {
   window.removeEventListener('terminal:toggle-line-numbers', handleExternalLineNumberToggle);
   window.removeEventListener('mousedown', handleQuickHintPointerDown, true);
   window.removeEventListener('sync-input-changed', onSyncInputChanged);
-  window.removeEventListener(HISTORY_CHANGED_EVENT, onCommandHistoryChanged);
   detachViewportScrollListener();
   cancelQuickHintDebounce();
   cancelShellCompletionSync();

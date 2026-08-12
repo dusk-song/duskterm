@@ -41,14 +41,35 @@ async fn exit_app(app_handle: tauri::AppHandle) -> Result<(), String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .manage(session::supervisor::SessionSupervisor::new())
         .manage(ssh::SshAppState::new())
         .manage(sftp::SftpAppState::new())
         .manage(tunnel::TunnelState::new())
-        .manage(Arc::new(Mutex::new(storage::StorageState::new())))
         .setup(|app| {
+            let storage_state = storage::StorageState::new();
+            let command_history_state = storage::command_history::CommandHistoryState::new(
+                storage_state.app_dir.join("duskterm.db"),
+            )
+            .unwrap_or_else(|error| {
+                eprintln!(
+                    "Failed to initialize persistent command history database; using memory only: {}",
+                    error
+                );
+                storage::command_history::CommandHistoryState::in_memory()
+                    .expect("Failed to initialize fallback command history database")
+            });
+            app.manage(Arc::new(Mutex::new(storage_state)));
+            app.manage(Arc::new(command_history_state));
+
             if let Some(window) = app.get_webview_window("main") {
                 let _ = window.set_min_size(Some(PhysicalSize::new(460, 250)));
             }
@@ -106,6 +127,9 @@ pub fn run() {
             storage::replace_command_knowledge_entries,
             storage::export_command_knowledge_to,
             storage::import_command_knowledge_from,
+            storage::command_history::load_command_history,
+            storage::command_history::record_command_history,
+            storage::command_history::clear_command_history,
             storage::list_tunnel_configs,
             storage::save_tunnel_config,
             storage::delete_tunnel_config,

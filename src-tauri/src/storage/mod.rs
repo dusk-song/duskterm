@@ -12,6 +12,8 @@ use uuid::Uuid;
 
 use crate::tunnel::TunnelState;
 
+pub mod command_history;
+
 #[cfg(unix)]
 fn ensure_private_key_permissions(path: &PathBuf) -> Result<(), String> {
     use std::os::unix::fs::PermissionsExt;

@@ -207,17 +207,18 @@ const executeCommand = async (entry = selectedEntry.value) => {
     toast.warning('高危命令禁止从知识库直接执行');
     return;
   }
+  let securityConfirmed = false;
   if (entry.executionPolicy === 'confirmBeforeExecute' || entry.safetyLevel === 'sensitive') {
-    const ok = await confirmChoice({
+    securityConfirmed = await confirmChoice({
       title: '执行敏感命令？',
       content: entry.command,
       okText: '执行',
       cancelText: '取消',
       centered: true,
     });
-    if (!ok) return;
+    if (!securityConfirmed) return;
   }
-  emit('execute-command', { id: entry.id, command: entry.command });
+  emit('execute-command', { id: entry.id, command: entry.command, securityConfirmed });
 };
 
 const removeEntry = async (entry = selectedEntry.value) => {

@@ -1,6 +1,6 @@
 [package]
 name = "duskterm"
-version = "1.2.0"
+version = "1.2.1"
 description = "跨平台SSH/Telnet/Serial终端，基于Tauri和Rust开发，支持SFTP文件传输"
 authors = ["xiaosong <yushan00514@gmail.com>"]
 edition = "2021"
@@ -32,6 +32,7 @@ uuid = { version = "1.10.0", features = ["v4"] }
 crossbeam-channel = "0.5"
 tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
+tauri-plugin-single-instance = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 aes-gcm = "0.10.3"
@@ -43,6 +44,7 @@ tauri-plugin-dialog = "2.6.0"
 zeroize = "1.7.0"
 serialport = "4.7.0"
 encoding_rs = "0.8"
+rusqlite = { version = "0.40", features = ["bundled"] }
 portable-pty = "0.9.0"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 webp = "0.3"

@@ -1,4 +1,5 @@
 <script setup>
+import Button from '@/components/ui/button/Button.vue';
 import Switch from '@/components/ui/switch/Switch.vue';
 import {
   Select,
@@ -14,6 +15,14 @@ import { computed } from 'vue';
 const props = defineProps({
   terminalThemeSettings: {
     type: Object,
+    required: true
+  },
+  commandHistorySettings: {
+    type: Object,
+    required: true
+  },
+  clearCommandHistory: {
+    type: Function,
     required: true
   }
 });
@@ -64,6 +73,19 @@ const updateTerminalTheme = (theme) => {
       <div class="setting-row">
         <span class="setting-label">行号显示</span>
         <Switch v-model="terminalThemeSettings.showLineNumbers" />
+      </div>
+    </div>
+    <div class="settings-section idea-panel">
+      <div class="settings-section-title-wrap">
+        <div class="settings-section-title">命令历史</div>
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">自动记录</span>
+        <Switch v-model="commandHistorySettings.enabled" />
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">历史数据</span>
+        <Button type="button" variant="outline" size="sm" @click="clearCommandHistory">清空历史</Button>
       </div>
     </div>
   </div>

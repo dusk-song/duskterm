@@ -17,6 +17,7 @@ import {
 import { open } from '@tauri-apps/plugin-dialog';
 import { computed, defineAsyncComponent, ref, watch } from 'vue';
 import { useSecurityStore } from '@/stores/security';
+import { useCommandHistoryStore } from '@/stores/commandHistory';
 import {
   createDefaultDesktopPetNode,
   defaultDesktopPetNodes,
@@ -47,6 +48,7 @@ const dialogOpen = computed({
 });
 
 const securityStore = useSecurityStore();
+const commandHistoryStore = useCommandHistoryStore();
 const activeKey = ref('security');
 
 const settingsTabs = [
@@ -56,6 +58,7 @@ const settingsTabs = [
   { key: 'keybindings', label: '快捷键', icon: Keyboard },
 ];
 const terminalThemeSettings = ref(loadTerminalThemeSettings());
+const commandHistorySettings = ref(loadPreference('commandHistory'));
 const mainUiSettings = ref(loadMainUiSettings());
 let persistedBackgroundId = '';
 const temporaryBackgroundIds = new Set();
@@ -163,6 +166,7 @@ watch(() => props.visible, (val) => {
       keybindings.value = { ...defaultKeybindings };
     }
     terminalThemeSettings.value = loadTerminalThemeSettings();
+    commandHistorySettings.value = loadPreference('commandHistory');
     mainUiSettings.value = loadMainUiSettings();
     persistedBackgroundId = mainUiSettings.value.background?.resourceId || '';
     temporaryBackgroundIds.clear();
@@ -203,6 +207,12 @@ const handleSave = async () => {
   } catch (e) {
     toast.error('主界面设置保存失败');
   }
+  try {
+    savePreference('commandHistory', commandHistorySettings.value);
+    commandHistoryStore.setEnabled(commandHistorySettings.value.enabled);
+  } catch (e) {
+    toast.error('命令历史设置保存失败');
+  }
   if (!mainUiSaved) return;
   const normalizedRecentSessions = normalizeMainUiSettings(mainUiSettings.value).recentSessions;
   if (normalizedRecentSessions.enabled) {
@@ -238,6 +248,24 @@ const previewTerminalTheme = (settings) => {
   window.dispatchEvent(new CustomEvent('terminal-theme-changed', {
     detail: { settings }
   }));
+};
+
+const clearCommandHistory = () => {
+  confirm({
+    title: '清空命令历史',
+    content: '确认清空全部命令历史？',
+    okText: '清空',
+    cancelText: '取消',
+    okButtonProps: { danger: true },
+    onOk: async () => {
+      try {
+        await commandHistoryStore.clear();
+        toast.success('命令历史已清空');
+      } catch (error) {
+        toast.error(`清空命令历史失败：${error}`);
+      }
+    },
+  });
 };
 
 const resolveDialogSelectionPath = (selected) => {
@@ -479,6 +507,7 @@ async function verifyAndChange() {
             @background-importing="backgroundImporting = $event" />
 
           <SettingsTerminalPane v-if="activeKey === 'terminal'" :terminal-theme-settings="terminalThemeSettings"
+            :command-history-settings="commandHistorySettings" :clear-command-history="clearCommandHistory"
             @preview-change="previewTerminalTheme" />
 
           <SettingsKeybindingsPane v-if="activeKey === 'keybindings'" :keybinding-items="keybindingItems"

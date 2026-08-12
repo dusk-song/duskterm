@@ -26,10 +26,6 @@ const readLocalJson = (key, fallback) => {
   }
 };
 
-const writeChangedEvent = () => {
-  window.dispatchEvent(new CustomEvent('command-knowledge-changed'));
-};
-
 export const useCommandKnowledgeStore = defineStore('commandKnowledge', () => {
   const entries = ref([]);
   const loaded = ref(false);
@@ -38,13 +34,20 @@ export const useCommandKnowledgeStore = defineStore('commandKnowledge', () => {
 
   const index = computed(() => buildCommandKnowledgeIndex(entries.value));
   const sensitiveRules = computed(() => deriveKnowledgeSensitiveRules(entries.value));
+  let loadPromise = null;
+  let mutationQueue = Promise.resolve();
 
   function setEntries(nextEntries) {
     entries.value = (nextEntries || []).map((entry) => normalizeKnowledgeEntry(entry));
-    writeChangedEvent();
   }
 
-  async function persistAll(nextEntries) {
+  function enqueueMutation(task) {
+    const operation = mutationQueue.then(task, task);
+    mutationQueue = operation.catch(() => {});
+    return operation;
+  }
+
+  async function persistAllNow(nextEntries) {
     const saved = await invokeCommand('replace_command_knowledge_entries', { entries: nextEntries });
     setEntries(saved || nextEntries);
     return entries.value;
@@ -67,33 +70,42 @@ export const useCommandKnowledgeStore = defineStore('commandKnowledge', () => {
     });
 
     if (migrated.length !== entries.value.length) {
-      await persistAll(migrated);
+      await persistAllNow(migrated);
     }
     localStorage.setItem(MIGRATION_KEY, '1');
     return true;
   }
 
-  async function loadEntries() {
-    if (loading.value) return entries.value;
+  async function loadEntries({ force = false } = {}) {
+    if (loadPromise) {
+      await loadPromise;
+      if (!force) return entries.value;
+    }
+    if (loaded.value && !force) return entries.value;
+
     loading.value = true;
     lastError.value = '';
-    try {
-      const data = await invokeCommand('load_command_knowledge');
-      setEntries(Array.isArray(data) ? data : []);
-      loaded.value = true;
-      await migrateLegacyIfNeeded();
-      return entries.value;
-    } catch (error) {
-      lastError.value = String(error || '');
-      console.error('Load command knowledge failed:', error);
-      toast.error('加载命令知识库失败');
-      return entries.value;
-    } finally {
-      loading.value = false;
-    }
+    loadPromise = (async () => {
+      try {
+        const data = await invokeCommand('load_command_knowledge');
+        setEntries(Array.isArray(data) ? data : []);
+        loaded.value = true;
+        await migrateLegacyIfNeeded();
+        return entries.value;
+      } catch (error) {
+        lastError.value = String(error || '');
+        console.error('Load command knowledge failed:', error);
+        toast.error('加载命令知识库失败');
+        return entries.value;
+      } finally {
+        loading.value = false;
+        loadPromise = null;
+      }
+    })();
+    return loadPromise;
   }
 
-  async function saveEntry(entry) {
+  async function saveEntryNow(entry) {
     const normalized = normalizeKnowledgeEntry(entry);
     const saved = await invokeCommand('save_command_knowledge_entry', { entry: normalized });
     const next = [...entries.value];
@@ -104,20 +116,32 @@ export const useCommandKnowledgeStore = defineStore('commandKnowledge', () => {
     return saved;
   }
 
-  async function deleteEntry(id) {
-    await invokeCommand('delete_command_knowledge_entry', { id });
-    setEntries(entries.value.filter((entry) => entry.id !== id));
+  function saveEntry(entry) {
+    return enqueueMutation(async () => {
+      await loadEntries();
+      return saveEntryNow(entry);
+    });
   }
 
-  async function recordUsage(id) {
-    const entry = entries.value.find((item) => item.id === id);
-    if (!entry) return null;
-    const next = {
-      ...entry,
-      usageCount: Number(entry.usageCount || 0) + 1,
-      lastUsedAt: Date.now(),
-    };
-    return saveEntry(next);
+  function deleteEntry(id) {
+    return enqueueMutation(async () => {
+      await loadEntries();
+      await invokeCommand('delete_command_knowledge_entry', { id });
+      setEntries(entries.value.filter((entry) => entry.id !== id));
+    });
+  }
+
+  function recordUsage(id) {
+    return enqueueMutation(async () => {
+      await loadEntries();
+      const entry = entries.value.find((item) => item.id === id);
+      if (!entry) return null;
+      return saveEntryNow({
+        ...entry,
+        usageCount: Number(entry.usageCount || 0) + 1,
+        lastUsedAt: Date.now(),
+      });
+    });
   }
 
   function search(query, limit) {
@@ -128,14 +152,20 @@ export const useCommandKnowledgeStore = defineStore('commandKnowledge', () => {
     return matchKnowledgeTriggers(index.value, query, limit);
   }
 
-  async function exportTo(targetPath) {
-    await invokeCommand('export_command_knowledge_to', { targetPath });
+  function exportTo(targetPath) {
+    return enqueueMutation(async () => {
+      await loadEntries();
+      await invokeCommand('export_command_knowledge_to', { targetPath });
+    });
   }
 
-  async function importFrom(sourcePath) {
-    const imported = await invokeCommand('import_command_knowledge_from', { sourcePath });
-    await loadEntries();
-    return imported || [];
+  function importFrom(sourcePath) {
+    return enqueueMutation(async () => {
+      await loadEntries();
+      const imported = await invokeCommand('import_command_knowledge_from', { sourcePath });
+      await loadEntries({ force: true });
+      return imported || [];
+    });
   }
 
   return {
@@ -153,6 +183,5 @@ export const useCommandKnowledgeStore = defineStore('commandKnowledge', () => {
     matchTriggers,
     exportTo,
     importFrom,
-    migrateLegacyIfNeeded,
   };
 });

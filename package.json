@@ -1,7 +1,7 @@
 {
   "name": "duskterm",
   "private": true,
-  "version": "1.2.0",
+  "version": "1.2.1",
   "description": "A cross-platform terminal tool for SSH, Telnet & Serial, built with Tauri 2 and Vue 3.",
   "author": "xiaosong",
   "license": "MIT",

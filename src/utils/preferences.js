@@ -34,6 +34,12 @@ const PREFERENCE_DEFINITIONS = {
       showLineNumbers: false
     }
   },
+  commandHistory: {
+    storageKey: 'command-history-settings-v1',
+    defaults: {
+      enabled: true
+    }
+  },
   mainUi: {
     storageKey: 'main-ui-settings-v1',
     defaults: {

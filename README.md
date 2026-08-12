@@ -10,7 +10,7 @@
 <p align="center">
   <img src="https://img.shields.io/github/stars/dusk-song/duskterm?style=flat-square" alt="GitHub Stars" />
   <img src="https://img.shields.io/github/license/dusk-song/duskterm?style=flat-square" alt="License" />
-  <img src="https://img.shields.io/badge/version-1.2.0-6C63FF?style=flat-square" alt="Version 1.2.0" />
+  <img src="https://img.shields.io/badge/version-1.2.1-6C63FF?style=flat-square" alt="Version 1.2.1" />
   <img src="https://img.shields.io/badge/Tauri-2.x-24C8DB?style=flat-square&logo=tauri&logoColor=white" alt="Tauri" />
   <img src="https://img.shields.io/badge/Rust-stable-000000?style=flat-square&logo=rust&logoColor=white" alt="Rust" />
   <img src="https://img.shields.io/badge/Vue-3.x-4FC08D?style=flat-square&logo=vuedotjs&logoColor=white" alt="Vue" />

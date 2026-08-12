@@ -488,12 +488,13 @@ export function useInputRouter({ sshStore }) {
 
   const writeSourceInput = async (sourceSessionId, payload) => {
     if (!sourceSessionId || typeof payload !== 'string' || !payload.length) {
-      return;
+      return false;
     }
-    if (transferStore.isTerminalOwned(sourceSessionId)) return;
+    if (transferStore.isTerminalOwned(sourceSessionId)) return false;
 
     try {
       await writeSessionInput(sourceSessionId, payload);
+      return true;
     } catch (error) {
       const msg = String(error || 'write source failed');
       syncStats.value = {
@@ -503,16 +504,17 @@ export function useInputRouter({ sshStore }) {
         lastFailedTarget: sourceSessionId,
       };
       emitSyncInputStats();
+      return false;
     }
   };
 
   const routeBroadcastInput = async (sourceSessionId, payload) => {
-    if (!sourceSessionId || !payload || typeof payload !== 'string') return false;
-    if (transferStore.isTerminalOwned(sourceSessionId)) return true;
+    if (!sourceSessionId || !payload || typeof payload !== 'string') return { handled: false, sent: false };
+    if (transferStore.isTerminalOwned(sourceSessionId)) return { handled: true, sent: false };
 
     const channel = resolveRoutingChannel(sourceSessionId);
-    if (!channel?.broadcastEnabled) return false;
-    if (!canRouteSourceWithSync(sourceSessionId)) return false;
+    if (!channel?.broadcastEnabled) return { handled: false, sent: false };
+    if (!canRouteSourceWithSync(sourceSessionId)) return { handled: false, sent: false };
 
     const targets = (channel.connectedIds || []).filter((id) => (
       id !== sourceSessionId && !transferStore.isTerminalOwned(id)
@@ -520,28 +522,29 @@ export function useInputRouter({ sshStore }) {
     const resolvedPayload = resolveBroadcastPayload(sourceSessionId, payload, normalizeSendMode(channel.sendMode));
 
     if (!resolvedPayload) {
-      await writeSourceInput(sourceSessionId, payload);
-      return true;
+      const sent = await writeSourceInput(sourceSessionId, payload);
+      return { handled: true, sent };
     }
 
     const guardTargets = [sourceSessionId, ...targets];
     const blocked = await shouldBlockSensitiveBroadcast(sourceSessionId, guardTargets, resolvedPayload);
     if (blocked) {
-      return true;
+      return { handled: true, sent: false };
     }
     // The sensitive-command confirmation can stay open while ZMODEM claims the
     // source terminal. Do not let that stale input reach the source or peers.
-    if (transferStore.isTerminalOwned(sourceSessionId)) return true;
+    if (transferStore.isTerminalOwned(sourceSessionId)) return { handled: true, sent: false };
 
-    await writeSourceInput(sourceSessionId, payload);
+    const sent = await writeSourceInput(sourceSessionId, payload);
+    if (!sent) return { handled: true, sent: false };
 
     if (!targets.length) {
-      return true;
+      return { handled: true, sent: true };
     }
 
     enqueuePayload(sourceSessionId, resolvedPayload);
     scheduleFlush();
-    return true;
+    return { handled: true, sent: true };
   };
 
   const onInputRoute = (event) => {
@@ -550,12 +553,12 @@ export function useInputRouter({ sshStore }) {
     const respond = event?.detail?.respond;
 
     if (transferStore.isTerminalOwned(panelId)) {
-      if (typeof respond === 'function') respond({ handled: true });
+      if (typeof respond === 'function') respond({ handled: true, sent: false });
       return;
     }
 
     if (!canRouteSourceWithSync(panelId)) {
-      if (typeof respond === 'function') respond({ handled: false });
+      if (typeof respond === 'function') respond({ handled: false, sent: false });
       return;
     }
 
@@ -564,11 +567,11 @@ export function useInputRouter({ sshStore }) {
     }
 
     enqueueSourceRouteTask(panelId, () => routeBroadcastInput(panelId, payload))
-      .then((handled) => {
-        if (typeof respond === 'function') respond({ handled: !!handled });
+      .then((result) => {
+        if (typeof respond === 'function') respond(result);
       })
       .catch(() => {
-        if (typeof respond === 'function') respond({ handled: false });
+        if (typeof respond === 'function') respond({ handled: false, sent: false });
       });
   };
 
