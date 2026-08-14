@@ -115,6 +115,8 @@
     --app-status-success: #8f7a4a;
     --app-status-success-bg: rgba(143, 122, 74, 0.12);
     --app-status-success-border: rgba(143, 122, 74, 0.26);
+    --app-connection-online: #2f8f5b;
+    --app-connection-offline: #8f8981;
     --app-status-info: #c0842f;
     --app-status-info-bg: rgba(192, 132, 47, 0.1);
     --app-status-info-border: rgba(192, 132, 47, 0.24);
@@ -130,6 +132,10 @@
     --app-toast-bg: hsl(var(--popover));
     --app-toast-border: hsl(var(--border) / 0.84);
     --app-toast-text: hsl(var(--foreground));
+    --app-toast-success: #2f8f5b;
+    --app-toast-info: #3476ad;
+    --app-toast-warning: #a8681d;
+    --app-toast-danger: #bd5149;
     --app-toast-shadow: 0 18px 38px rgba(52, 47, 41, 0.16), var(--app-surface-highlight);
     --app-terminal-close-color: #5f564e;
     --app-terminal-close-hover-color: #a3483f;
@@ -260,6 +266,8 @@
     --app-status-success: #b8a06a;
     --app-status-success-bg: rgba(184, 160, 106, 0.16);
     --app-status-success-border: rgba(184, 160, 106, 0.3);
+    --app-connection-online: #6fd08c;
+    --app-connection-offline: #77736c;
     --app-status-info: #c0842f;
     --app-status-info-bg: rgba(192, 132, 47, 0.14);
     --app-status-info-border: rgba(192, 132, 47, 0.28);
@@ -274,7 +282,11 @@
     --app-risk-danger-glow: 0 0 0 4px rgba(209, 122, 114, 0.08);
     --app-toast-bg: #191919;
     --app-toast-border: rgba(228, 224, 216, 0.12);
-    --app-toast-text: #e4e0d8;
+    --app-toast-text: #fffaf2;
+    --app-toast-success: #6fd08c;
+    --app-toast-info: #79afe5;
+    --app-toast-warning: #dfb15e;
+    --app-toast-danger: #ec8178;
     --app-toast-shadow: 0 18px 46px rgba(0, 0, 0, 0.34), var(--app-surface-highlight);
     --app-terminal-close-color: #f1ece4;
     --app-terminal-close-hover-color: #fffaf2;

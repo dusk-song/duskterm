@@ -1,47 +1,10 @@
-﻿<script setup>
+<script setup>
 import { useToast } from '@/composables/useToast';
-import { nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { Check, CircleAlert, Info, LoaderCircle, TriangleAlert } from '@lucide/vue';
+import { computed } from 'vue';
 
-const { toasts, toast } = useToast();
-const viewportRef = ref(null);
-let resizeObserver = null;
-let trimFrame = null;
-
-async function trimOverflowingToasts() {
-  await nextTick();
-  const viewport = viewportRef.value;
-  if (!viewport) return;
-  while (toasts.value.length > 1 && viewport.scrollWidth > viewport.clientWidth + 1) {
-    toast.remove(toasts.value[0].id, true);
-    await nextTick();
-  }
-}
-
-function scheduleOverflowTrim() {
-  if (trimFrame !== null) return;
-  trimFrame = requestAnimationFrame(async () => {
-    trimFrame = null;
-    await trimOverflowingToasts();
-  });
-}
-
-watch(
-  () => toasts.value.map((item) => `${item.id}:${item.message}`).join('|'),
-  scheduleOverflowTrim,
-  { flush: 'post' }
-);
-
-onMounted(() => {
-  resizeObserver = new ResizeObserver(scheduleOverflowTrim);
-  if (viewportRef.value) resizeObserver.observe(viewportRef.value);
-  window.addEventListener('resize', scheduleOverflowTrim);
-});
-
-onUnmounted(() => {
-  resizeObserver?.disconnect();
-  if (trimFrame !== null) cancelAnimationFrame(trimFrame);
-  window.removeEventListener('resize', scheduleOverflowTrim);
-});
+const { toasts } = useToast();
+const visibleToasts = computed(() => [...toasts.value].reverse());
 
 const toastToneMap = {
   success: 'toast-card--success',
@@ -50,101 +13,134 @@ const toastToneMap = {
   warning: 'toast-card--warning',
   loading: 'toast-card--info',
 };
+
+const toastIconMap = {
+  success: Check,
+  error: CircleAlert,
+  info: Info,
+  warning: TriangleAlert,
+  loading: LoaderCircle,
+};
 </script>
 
 <template>
-  <div v-if="toasts.length" ref="viewportRef" class="toast-viewport">
-    <div v-for="t in toasts" :key="t.id"
-      :class="['toast-card', toastToneMap[t.type] || toastToneMap.info, t.leaving ? 'toast-card--leaving' : '']">
-      <span class="toast-message">{{ t.message }}</span>
-    </div>
+  <div v-if="visibleToasts.length" class="toast-viewport">
+    <TransitionGroup name="toast-list" tag="div" class="toast-track">
+      <div v-for="t in visibleToasts" :key="t.id"
+        :class="['toast-card', toastToneMap[t.type] || toastToneMap.info, t.leaving ? 'toast-card--leaving' : '']"
+        :role="t.type === 'error' || t.type === 'warning' ? 'alert' : 'status'">
+        <component :is="toastIconMap[t.type] || toastIconMap.info" class="toast-icon"
+          :class="{ 'toast-icon--loading': t.type === 'loading' }" :size="15" :stroke-width="2.15" />
+        <span class="toast-message">{{ t.message }}</span>
+      </div>
+    </TransitionGroup>
   </div>
 </template>
 
 <style scoped>
 .toast-viewport {
-  position: relative;
-  z-index: var(--z-alert);
   display: flex;
   width: 100%;
   max-width: 100%;
-  flex-direction: row-reverse;
-  align-items: center;
-  gap: 4px;
+  max-height: 86px;
+  align-items: flex-start;
+  justify-content: center;
   pointer-events: none;
   overflow: hidden;
 }
 
+.toast-track {
+  position: relative;
+  display: flex;
+  width: max-content;
+  max-width: 100%;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+}
+
 .toast-card {
+  --toast-tone: var(--app-toast-info);
   pointer-events: none;
   position: relative;
   display: flex;
   width: max-content;
-  min-width: 96px;
-  max-width: none;
-  height: 19px;
+  min-width: 0;
+  max-width: min(360px, calc(100vw - 32px));
+  height: 26px;
   flex: 0 0 auto;
   align-items: center;
-  overflow: visible;
-  border: 1px solid color-mix(in srgb, var(--app-toast-border) 72%, transparent);
+  gap: 6px;
+  overflow: hidden;
+  border: 1px solid var(--app-toast-border);
   border-radius: var(--niri-radius-md, 8px);
   color: var(--app-toast-text);
-  background: color-mix(in srgb, var(--app-toast-bg) 76%, transparent);
-  box-shadow: none;
+  background: var(--app-toast-bg);
+  box-shadow: var(--app-toast-shadow);
+  box-sizing: border-box;
   padding: 0 8px;
   font-size: 12px;
-  line-height: 17px;
-  transform: translateX(0);
+  line-height: 16px;
+  transform: translateY(0);
   opacity: 1;
+  animation: toast-card-enter 160ms var(--app-motion-ease) both;
   transition:
-    opacity var(--app-motion-panel) var(--app-motion-ease),
-    transform var(--app-motion-panel) var(--app-motion-ease),
+    opacity 180ms var(--app-motion-ease),
+    transform 180ms var(--app-motion-ease),
     border-color var(--app-motion-panel) var(--app-motion-ease),
     background-color var(--app-motion-panel) var(--app-motion-ease),
     color var(--app-motion-panel) var(--app-motion-ease);
 }
 
 .toast-card--leaving {
-  transform: translateX(-4px);
+  transform: translateY(-4px) scale(0.98);
   opacity: 0;
+}
+
+.toast-icon {
+  flex: 0 0 auto;
+  color: var(--toast-tone);
+}
+
+.toast-icon--loading {
+  animation: toast-icon-spin 900ms linear infinite;
 }
 
 .toast-message {
   min-width: 0;
-  flex: 0 0 auto;
-  overflow: visible;
-  text-overflow: clip;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.toast-card--success {
-  color: var(--app-status-success);
-  border-color: var(--app-status-success-border);
-  background: color-mix(in srgb, var(--app-status-success-bg) 82%, var(--app-toast-bg));
+.toast-card--success { --toast-tone: var(--app-toast-success); }
+.toast-card--error { --toast-tone: var(--app-toast-danger); }
+.toast-card--warning { --toast-tone: var(--app-toast-warning); }
+.toast-card--info { --toast-tone: var(--app-toast-info); }
+
+@keyframes toast-card-enter {
+  from {
+    transform: translateY(-6px) scale(0.98);
+    opacity: 0;
+  }
 }
 
-.toast-card--error {
-  color: var(--app-risk-danger);
-  border-color: var(--app-risk-danger-border);
-  background: color-mix(in srgb, var(--app-risk-danger-bg) 84%, var(--app-toast-bg));
+@keyframes toast-icon-spin {
+  to { transform: rotate(360deg); }
 }
 
-.toast-card--warning {
-  color: var(--app-risk-warning);
-  border-color: var(--app-risk-warning-border);
-  background: color-mix(in srgb, var(--app-risk-warning-bg) 84%, var(--app-toast-bg));
+.toast-list-move {
+  transition: transform 180ms var(--app-motion-ease);
 }
 
-.toast-card--info {
-  color: var(--app-status-info);
-  border-color: var(--app-status-info-border);
-  background: color-mix(in srgb, var(--app-status-info-bg) 82%, var(--app-toast-bg));
-}
-
-@media (max-width: 980px) {
-  .toast-card {
-    min-width: 90px;
-    max-width: none;
+@media (prefers-reduced-motion: reduce) {
+  .toast-card,
+  .toast-list-move,
+  .toast-icon--loading {
+    animation-duration: 1ms;
+    transition-duration: 1ms;
   }
 }
 </style>

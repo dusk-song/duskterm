@@ -5,8 +5,10 @@ let _id = 0;
 const keyToId = new Map();
 const idToKey = new Map();
 const idToTimer = new Map();
+const idToLeaveTimer = new Map();
 
 const DEFAULT_DURATION = 2500;
+const MAX_TOASTS = 3;
 
 export function useToast() {
   return { toasts, addToast, toast };
@@ -33,10 +35,44 @@ function addToast(raw, type = 'info', duration) {
     opts.duration = Number.isFinite(requestedDuration) ? Math.max(0, requestedDuration) : DEFAULT_DURATION;
   }
 
-  // Key-based: replace existing toast with same key
+  // Key-based notifications (for example loading → success) update in place.
   if (opts.key !== null && keyToId.has(opts.key)) {
     const existingId = keyToId.get(opts.key);
-    removeToast(existingId, true);
+    const existing = toasts.value.find((item) => item.id === existingId);
+    if (existing) {
+      clearTimeout(idToLeaveTimer.get(existingId));
+      idToLeaveTimer.delete(existingId);
+      existing.message = opts.message;
+      existing.type = opts.type;
+      existing.duration = opts.duration;
+      existing.leaving = false;
+      const existingIndex = toasts.value.findIndex((item) => item.id === existingId);
+      if (existingIndex >= 0) {
+        toasts.value.splice(existingIndex, 1);
+        toasts.value.push(existing);
+      }
+      scheduleToastRemoval(existingId, opts.duration);
+      return existingId;
+    }
+    keyToId.delete(opts.key);
+    idToKey.delete(existingId);
+  }
+
+  // Repeated identical feedback refreshes one card instead of filling the row.
+  const duplicateIndex = opts.key === null
+    ? toasts.value.findIndex((item) => (
+      !item.leaving
+      && !idToKey.has(item.id)
+      && item.type === opts.type
+      && item.message === opts.message
+    ))
+    : -1;
+  if (duplicateIndex >= 0) {
+    const [existing] = toasts.value.splice(duplicateIndex, 1);
+    existing.duration = opts.duration;
+    toasts.value.push(existing);
+    scheduleToastRemoval(existing.id, opts.duration);
+    return existing.id;
   }
 
   const id = ++_id;
@@ -46,11 +82,26 @@ function addToast(raw, type = 'info', duration) {
     idToKey.set(id, opts.key);
   }
 
-  if (opts.duration > 0) {
-    const timer = setTimeout(() => removeToast(id), opts.duration);
-    idToTimer.set(id, timer);
+  while (toasts.value.length > MAX_TOASTS) {
+    removeToast(toasts.value[0].id, true);
   }
+  scheduleToastRemoval(id, opts.duration);
   return id;
+}
+
+function scheduleToastRemoval(id, duration) {
+  clearTimeout(idToTimer.get(id));
+  idToTimer.delete(id);
+  if (duration <= 0) return;
+  const timer = setTimeout(() => removeToast(id), duration);
+  idToTimer.set(id, timer);
+}
+
+function clearToastKey(id) {
+  const key = idToKey.get(id);
+  if (key === undefined) return;
+  keyToId.delete(key);
+  idToKey.delete(id);
 }
 
 function removeToast(id, immediate = false) {
@@ -58,20 +109,21 @@ function removeToast(id, immediate = false) {
   if (idx === -1) return;
   clearTimeout(idToTimer.get(id));
   idToTimer.delete(id);
-  const key = idToKey.get(id);
-  if (key !== undefined) {
-    keyToId.delete(key);
-    idToKey.delete(id);
-  }
   if (immediate) {
+    clearTimeout(idToLeaveTimer.get(id));
+    idToLeaveTimer.delete(id);
+    clearToastKey(id);
     toasts.value.splice(idx, 1);
     return;
   }
   if (toasts.value[idx].leaving) return;
   toasts.value[idx].leaving = true;
-  setTimeout(() => {
+  const leaveTimer = setTimeout(() => {
+    idToLeaveTimer.delete(id);
+    clearToastKey(id);
     toasts.value = toasts.value.filter(t => t.id !== id);
   }, 200);
+  idToLeaveTimer.set(id, leaveTimer);
 }
 
 export const toast = {

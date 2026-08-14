@@ -1327,21 +1327,23 @@ const handleTabContext = (key, session) => {
 }
 
 .global-toast-layer {
-  position: relative;
-  z-index: var(--z-alert);
+  position: fixed;
+  z-index: calc(var(--z-chrome) - 1);
+  top: 52px;
+  left: 50%;
   display: flex;
-  width: 100%;
-  height: 21px;
-  flex: 0 0 21px;
-  align-items: center;
-  justify-content: flex-end;
-  padding: 0 4px;
+  width: calc(100vw - 24px);
+  height: 86px;
+  align-items: flex-start;
+  justify-content: center;
   box-sizing: border-box;
   pointer-events: none;
   overflow: hidden;
+  transform: translateX(-50%);
 }
 
-.app-shell > :not(.global-background) { position: relative; z-index: 1; }
+.app-shell > :not(.global-background):not(.global-toast-layer) { position: relative; z-index: 1; }
+.app-shell > .dusk-titlebar { z-index: var(--z-chrome); }
 .app-shell.has-floating-surfaces {
   --terminal-surface-bg: color-mix(in srgb, var(--app-bg-dialog) 52%, transparent);
   --workspace-side-panel-top-offset: 0px;

@@ -677,7 +677,7 @@ const handleTestConnection = async () => {
     toast.success({ content: typeof result === 'string' ? result : '端口连通性正常', key: loadingKey });
   } catch (error) {
     const text = String(error || '端口不可达');
-    toast.error({ content: text, key: loadingKey, duration: 4 });
+    toast.error({ content: text, key: loadingKey, duration: 4000 });
   } finally {
     isTestingConnection.value = false;
   }
