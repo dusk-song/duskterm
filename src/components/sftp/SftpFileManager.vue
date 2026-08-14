@@ -168,8 +168,9 @@ const editorContent = ref('');
 const editorOriginalContent = ref('');
 const editorReadFallback = ref(false);
 const editorCasToken = ref('');
+const editorEncoding = ref('utf-8');
+const editorLineEnding = ref('lf');
 const INLINE_EDITOR_MAX_BYTES = 8 * 1024 * 1024;
-const INLINE_EDITOR_LIGHTWEIGHT_BYTES = 1024 * 1024;
 const editorMeta = reactive({
   size: 0,
   modified: 0,
@@ -335,30 +336,16 @@ const notifyTransferSummary = (action, tasks) => {
   }
 };
 
-const verifyUploadedTask = async (task) => {
-  try {
-    const stat = await invokeCommand('sftp_stat', {
-      sessionId: task.sessionId,
-      path: task.remotePath
-    });
-    const remoteSize = Number(stat?.size || 0);
-    const expectedSize = Number(task.total || 0);
-    if (expectedSize > 0 && remoteSize !== expectedSize) {
-      console.warn(`[SFTP] Upload Verify Mismatch: expected ${expectedSize}, got ${remoteSize}`);
-    }
-    task.total = expectedSize > 0 ? expectedSize : remoteSize;
-    task.current = task.total;
-  } catch (err) {
-    console.warn(`[SFTP] Upload Verify Error: ${err}`);
-  }
-};
-
 const runSingleUploadTask = async (task) => {
-  task.status = 'uploading';
+  task.status = 'negotiating';
   task.error = '';
   task.rate = 0;
   task.etaSeconds = null;
   task.telemetrySamples = [];
+  task.transferStartedAt = null;
+  task.finalizingStartedAt = null;
+  task.transferElapsedMs = null;
+  task.finalizingElapsedMs = null;
   const uploadPayload = {
     sessionId: task.sessionId,
     localPath: task.localPath,
@@ -372,10 +359,6 @@ const runSingleUploadTask = async (task) => {
 
   try {
     await invokeUpload();
-    // For 0 byte file or quick uploads, we don't throw verified error to avoid rollback.
-    if (task.total > 0) {
-      await verifyUploadedTask(task);
-    }
     task.status = 'success';
     task.percent = task.total > 0 ? 100 : 0;
     if (task.total > 0) task.current = task.total;
@@ -389,9 +372,6 @@ const runSingleUploadTask = async (task) => {
       if (ready) {
         try {
           await invokeUpload();
-          if (task.total > 0) {
-            await verifyUploadedTask(task);
-          }
           task.status = 'success';
           task.percent = task.total > 0 ? 100 : 0;
           if (task.total > 0) task.current = task.total;
@@ -414,11 +394,15 @@ const runSingleUploadTask = async (task) => {
 };
 
 const runSingleDownloadTask = async (task) => {
-  task.status = 'uploading';
+  task.status = 'negotiating';
   task.error = '';
   task.rate = 0;
   task.etaSeconds = null;
   task.telemetrySamples = [];
+  task.transferStartedAt = null;
+  task.finalizingStartedAt = null;
+  task.transferElapsedMs = null;
+  task.finalizingElapsedMs = null;
   try {
     await invokeCommand('sftp_download_file', {
       sessionId: task.sessionId,
@@ -483,9 +467,8 @@ const formatEntrySize = (record) => (!record || record.is_dir ? '-' : formatSize
 const localTime = (record) => formatLocalTime(record?.modified || 0);
 const permissionText = (record) => formatPermissions(record?.permissions || 0);
 const hasWritePermission = (permissions) => ((permissions || 0) & 0o222) !== 0;
-const editorLargeFile = computed(() => Number(editorMeta.size || editorOriginalContent.value.length || 0) >= INLINE_EDITOR_LIGHTWEIGHT_BYTES);
-const editorCanSave = computed(() => !editorReadonly.value && !editorSaving.value && !editorLoading.value && editorDirty.value);
-const editorFileName = computed(() => editorFilePath.value.split('/').pop() || '');
+const editorConnectionLost = computed(() => editorVisible.value && activeSessionStatus.value !== 'connected');
+const editorCanSave = computed(() => !editorReadonly.value && !editorSaving.value && !editorLoading.value && editorDirty.value && !editorConnectionLost.value);
 
 function patchPagerItem(nextEntry) {
   if (!nextEntry?.name) return;
@@ -495,54 +478,12 @@ function patchPagerItem(nextEntry) {
   cachePanelState();
 }
 
-const EDITABLE_LANGUAGE_MAP = Object.freeze({
-  txt: 'plaintext', log: 'plaintext', conf: 'plaintext', cfg: 'plaintext', ini: 'plaintext', env: 'shell',
-  json: 'json', jsonc: 'json', yaml: 'yaml', yml: 'yaml', toml: 'ini', xml: 'xml', csv: 'plaintext',
-  tsv: 'plaintext', md: 'markdown', markdown: 'markdown', sql: 'sql', gql: 'graphql', graphql: 'graphql',
-  js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript', ts: 'typescript', tsx: 'typescript',
-  vue: 'html', html: 'html', htm: 'html', css: 'css', scss: 'scss', less: 'less',
-  rs: 'rust', py: 'python', sh: 'shell', bash: 'shell', zsh: 'shell', ps1: 'powershell', bat: 'bat',
-  c: 'c', h: 'c', cpp: 'cpp', cc: 'cpp', cxx: 'cpp', hpp: 'cpp', hxx: 'cpp', java: 'java',
-  go: 'go', php: 'php', rb: 'ruby', swift: 'swift', kt: 'kotlin'
-});
-
-const EDITABLE_FILE_NAMES = new Set([
-  'dockerfile', 'makefile', 'readme', 'license', '.gitignore', '.gitattributes', '.editorconfig',
-  '.npmrc', '.prettierrc', '.eslintrc', '.bashrc', '.zshrc', '.profile'
-]);
-
-function normalizeFileName(filename) {
-  return String(filename || '').split('/').pop()?.trim().toLowerCase() || '';
-}
-
-function isEditableFileName(filename) {
-  const normalized = normalizeFileName(filename);
-  if (!normalized) return false;
-  if (EDITABLE_FILE_NAMES.has(normalized) || normalized.startsWith('.env')) return true;
-  const dotIndex = normalized.lastIndexOf('.');
-  if (dotIndex <= 0 || dotIndex === normalized.length - 1) return false;
-  const ext = normalized.slice(dotIndex + 1);
-  return Object.prototype.hasOwnProperty.call(EDITABLE_LANGUAGE_MAP, ext);
-}
-
-function getEditBlockedReason(filename, size = 0) {
-  if (Number(size || 0) > INLINE_EDITOR_MAX_BYTES) {
+function getEditBlockedReason(record = {}) {
+  if (Number(record?.size || 0) > INLINE_EDITOR_MAX_BYTES) {
     return `当前在线编辑仅支持 ${formatSize(INLINE_EDITOR_MAX_BYTES)} 以内的文本文件。请下载后编辑该大文件。`;
   }
-  if (isEditableFileName(filename)) return '';
+  if (record?.editable !== false) return '';
   return '当前编辑器仅支持文本、代码和配置类文件。该文件类型不支持在线编辑，请下载后处理。';
-}
-
-function getLanguageFromExt(filename) {
-  const normalized = normalizeFileName(filename);
-  if (EDITABLE_FILE_NAMES.has(normalized)) {
-    if (normalized === 'dockerfile') return 'shell';
-    return 'plaintext';
-  }
-  if (normalized.startsWith('.env')) return 'shell';
-  const dotIndex = normalized.lastIndexOf('.');
-  const ext = dotIndex > -1 ? normalized.slice(dotIndex + 1) : '';
-  return EDITABLE_LANGUAGE_MAP[ext] || 'plaintext';
 }
 
 function isDisconnectError(err) {
@@ -559,6 +500,8 @@ function isRecoverableSftpError(err) {
   return isDisconnectError(err)
     || text.includes('timeout')
     || text.includes('timed out')
+    || text.includes('no connection')
+    || text.includes('connection lost')
     || text.includes('connection reset')
     || text.includes('connection aborted')
     || text.includes('resource temporarily unavailable');
@@ -895,7 +838,7 @@ function isContextActionDisabled(action, record) {
     return action === 'edit' || action === 'download' || action === 'prop';
   }
   if (action === 'edit') {
-    return !!record.is_dir;
+    return !!record.is_dir || record.editable === false;
   }
   return false;
 }
@@ -913,6 +856,8 @@ function closeEditorState() {
   editorContent.value = '';
   editorOriginalContent.value = '';
   editorCasToken.value = '';
+  editorEncoding.value = 'utf-8';
+  editorLineEnding.value = 'lf';
   editorCursor.line = 1;
   editorCursor.column = 1;
   editorCloseConfirmVisible.value = false;
@@ -1260,7 +1205,7 @@ async function showProperties(record) {
 async function openEditor(record) {
   if (!record || record.is_dir) return;
 
-  const blockedReason = getEditBlockedReason(record.name, record.size);
+  const blockedReason = getEditBlockedReason(record);
   if (blockedReason) {
     toast.warning(blockedReason);
     return;
@@ -1275,7 +1220,7 @@ async function openEditor(record) {
   const requestId = editorOpenRequestId.value + 1;
   editorOpenRequestId.value = requestId;
   editorFilePath.value = joinRemotePath(currentPath.value, record.name);
-  editorLanguage.value = getLanguageFromExt(record.name);
+  editorLanguage.value = record.language || 'plaintext';
   editorReadonly.value = !hasWritePermission(record.permissions);
   editorReadFallback.value = false;
   editorVisible.value = true;
@@ -1304,6 +1249,9 @@ async function openEditor(record) {
     editorOriginalContent.value = editorContent.value;
     editorDirty.value = false;
     editorCasToken.value = String(result?.cas_token || '');
+    editorEncoding.value = String(result?.encoding || 'utf-8');
+    editorLineEnding.value = String(result?.line_ending || 'lf');
+    editorLanguage.value = file?.language || editorLanguage.value;
     editorMeta.size = file?.size || 0;
     editorMeta.modified = file?.modified || 0;
     editorMeta.permissions = file?.permissions || 0;
@@ -1341,8 +1289,15 @@ function handleEditorCursorChange(position) {
 }
 
 function handleEditorReady() {
-  editorRef.value?.resize?.();
-  editorRef.value?.focus?.();
+  requestAnimationFrame(() => {
+    if (!editorVisible.value) return;
+    editorRef.value?.resize?.();
+    editorRef.value?.focus?.();
+  });
+}
+
+function handleEditorOpenAutoFocus(event) {
+  event?.preventDefault?.();
 }
 
 async function confirmEmptyEditorSave() {
@@ -1367,7 +1322,7 @@ async function saveEditor(contentOverride) {
     toast.warning('文件仍在读取中，请稍候...');
     return;
   }
-  const blockedReason = getEditBlockedReason(editorFileName.value, editorMeta.size);
+  const blockedReason = getEditBlockedReason({ size: editorMeta.size, editable: true });
   if (blockedReason) {
     toast.warning(blockedReason);
     return;
@@ -1381,6 +1336,9 @@ async function saveEditor(contentOverride) {
   const content = typeof contentOverride === 'string'
     ? contentOverride
     : (editorRef.value?.getValue?.() ?? editorContent.value);
+  const saveGeneration = editorOpenRequestId.value;
+  const saveSessionId = props.sessionId;
+  const savePath = editorFilePath.value;
 
   if (content === editorOriginalContent.value) {
     editorDirty.value = false;
@@ -1394,30 +1352,60 @@ async function saveEditor(contentOverride) {
     if (!confirmEmpty) return;
   }
 
-  const ready = await ensureSftpReady();
-  if (!ready) {
-    toast.error('SFTP 会话不可用，无法保存文件');
-    return;
-  }
-
   editorSaving.value = true;
   const toastKey = `editor-save-${editorFilePath.value}`;
-  toast.loading({ content: '保存中...', key: toastKey, duration: 0 });
   try {
-    const result = await invokeCommand('sftp_save_text_file', {
-      sessionId: props.sessionId,
-      path: editorFilePath.value,
+    const ready = await ensureSftpReady();
+    if (!ready) {
+      toast.error('SFTP 会话不可用，未保存内容已保留');
+      return;
+    }
+    if (
+      saveGeneration !== editorOpenRequestId.value
+      || saveSessionId !== props.sessionId
+      || savePath !== editorFilePath.value
+    ) return;
+
+    toast.loading({ content: '保存中...', key: toastKey, duration: 0 });
+    const payload = {
+      sessionId: saveSessionId,
+      path: savePath,
       content,
       expectedCasToken: editorCasToken.value
-    });
+    };
+    let result;
+    try {
+      result = await invokeCommand('sftp_save_text_file', payload);
+    } catch (error) {
+      if (!isRecoverableSftpError(error) || saveSessionId !== props.sessionId) throw error;
+      connected.value = false;
+      sshStore.markSftpDisconnected(saveSessionId);
+      const reconnected = await ensureSftpReady();
+      if (!reconnected) throw error;
+      result = await invokeCommand('sftp_save_text_file', payload);
+    }
+
+    if (
+      saveGeneration !== editorOpenRequestId.value
+      || saveSessionId !== props.sessionId
+      || savePath !== editorFilePath.value
+    ) return;
 
     const file = result?.file || {};
-    editorContent.value = content;
+    const latestContent = editorRef.value?.getValue?.() ?? content;
+    editorContent.value = latestContent;
     editorOriginalContent.value = content;
-    editorDirty.value = false;
-    editorRef.value?.markClean?.(content);
+    if (latestContent === content) {
+      editorDirty.value = false;
+      editorRef.value?.markClean?.(content);
+    } else {
+      editorDirty.value = true;
+    }
     editorReadFallback.value = false;
     editorCasToken.value = String(result?.cas_token || '');
+    editorEncoding.value = String(result?.encoding || editorEncoding.value);
+    editorLineEnding.value = String(result?.line_ending || editorLineEnding.value);
+    editorLanguage.value = file?.language || editorLanguage.value;
     editorMeta.size = file?.size || content.length;
     editorMeta.modified = file?.modified || 0;
     editorMeta.permissions = file?.permissions || editorMeta.permissions;
@@ -1427,9 +1415,9 @@ async function saveEditor(contentOverride) {
     patchPagerItem(file);
     toast.success({ content: '保存成功', key: toastKey });
   } catch (err) {
-    toast.error({ content: `保存失败：${String(err)}`, key: toastKey, duration: 4 });
+    toast.error({ content: `保存失败，未保存内容已保留：${String(err)}`, key: toastKey, duration: 4000 });
   } finally {
-    editorSaving.value = false;
+    if (saveGeneration === editorOpenRequestId.value) editorSaving.value = false;
   }
 }
 
@@ -1897,47 +1885,39 @@ onUnmounted(() => {
 
     <Dialog :open="editorVisible" @update:open="(v) => { if (!v) handleEditorModalCancel(); }">
       <DialogContent :show-close-button="false"
-        class="sftp-editor-dialog !max-w-[96vw] !w-[min(1120px,96vw)] !p-0 !bg-[var(--app-bg-dialog)]">
+        class="sftp-editor-dialog !max-w-[96vw] !w-[min(1120px,96vw)] !gap-0 !p-0 !bg-[var(--app-bg-dialog)]"
+        @open-auto-focus="handleEditorOpenAutoFocus">
         <DialogHeader class="sr-only">
-          <DialogTitle>{{ editorFilePath || editorFileName || '远程文件编辑' }}
+          <DialogTitle>{{ editorFilePath || '远程文件编辑' }}
           </DialogTitle>
         </DialogHeader>
         <div class="editor-shell">
           <div class="editor-toolbar">
             <div class="editor-title-block">
-              <div class="editor-modal-name" :title="editorFileName || editorFilePath || '远程文件编辑'">
-                {{ editorFileName || '远程文件编辑' }}
+              <div class="editor-modal-title" :title="editorFilePath || '远程文件编辑'">
+                {{ editorFilePath || '远程文件编辑' }}
               </div>
-              <div class="editor-modal-path" :title="editorFilePath">{{ editorFilePath || '-' }}</div>
             </div>
             <div class="editor-toolbar-meta">
               <span class="editor-chip" v-if="editorReadonly">只读</span>
               <span class="editor-chip editor-chip-warning" v-if="editorDirty">未保存</span>
               <span class="editor-chip editor-chip-muted" v-if="editorSaving">保存中</span>
-              <span class="editor-chip editor-chip-muted" v-if="editorLargeFile">轻量模式</span>
+              <span class="editor-chip editor-chip-warning" v-if="editorConnectionLost">连接已断开，内容已保留</span>
               <span class="editor-chip editor-chip-muted" v-if="editorReadFallback">保护模式</span>
             </div>
             <div class="editor-toolbar-actions">
-              <Button variant="ghost" class="editor-action editor-action-subtle"
+              <IconButton :icon="RotateCcw" size="sm" aria-label="还原到上次保存内容"
                 :disabled="!editorDirty || editorSaving || editorReadonly || editorLoading"
-                @click="restoreEditorContent">
-                <RotateCcw :size="14" />
-                还原
-              </Button>
-              <Button class="editor-action editor-action-primary" :disabled="!editorCanSave" @click="() => saveEditor()">
-                <SaveIcon :size="14" />
-                保存
-              </Button>
-            </div>
-            <div class="editor-toolbar-close">
-              <IconButton :icon="X" size="sm" aria-label="关闭编辑弹窗" class="editor-title-close"
-                :action="handleEditorModalCancel" />
+                :action="restoreEditorContent" />
+              <IconButton :icon="SaveIcon" size="sm" :aria-label="editorSaving ? '保存中' : '保存文件'"
+                :disabled="!editorCanSave" :action="() => saveEditor()" />
+              <IconButton :icon="X" size="sm" aria-label="关闭编辑弹窗" :action="handleEditorModalCancel" />
             </div>
           </div>
           <div v-if="editorLoading" class="big-file-loading">正在读取文件...</div>
           <div v-else class="editor-surface">
             <CodeEditor ref="editorRef" :model-value="editorContent" :language="editorLanguage"
-              :readonly="editorReadonly" :large-file="editorLargeFile" class="editor-ace"
+              :readonly="editorReadonly || editorSaving" class="editor-ace"
               @dirty-change="handleEditorDirtyChange" @cursor-change="handleEditorCursorChange"
               @ready="handleEditorReady" @save="saveEditor" />
           </div>
@@ -1946,10 +1926,11 @@ onUnmounted(() => {
             <span class="editor-status-item">修改 {{ localTime(editorMeta) }}</span>
             <span class="editor-status-item">权限 {{ permissionText(editorMeta) }}</span>
             <span class="editor-status-item">用户 {{ editorMeta.owner || '-' }}/{{ editorMeta.group || '-' }}</span>
-            <span class="editor-status-item">语言 {{ editorLargeFile ? 'plaintext' : editorLanguage }}</span>
+            <span class="editor-status-item">语言 {{ editorLanguage }}</span>
+            <span class="editor-status-item">编码 {{ editorEncoding }}</span>
+            <span class="editor-status-item">换行 {{ editorLineEnding.toUpperCase() }}</span>
             <span class="editor-status-item">行 {{ editorCursor.line }}，列 {{ editorCursor.column }}</span>
             <span class="editor-status-item" v-if="editorReadonly">只读</span>
-            <span class="editor-status-item" v-if="editorLargeFile">轻量渲染</span>
           </div>
         </div>
       </DialogContent>
@@ -2406,15 +2387,16 @@ onUnmounted(() => {
   gap: 0;
   padding: 0;
   overflow: hidden;
+  contain: layout paint;
 }
 
 .editor-toolbar {
-  min-height: 50px;
-  padding: 8px 12px 8px 14px;
+  min-height: 42px;
+  padding: 6px 10px 6px 12px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
+  gap: 8px;
   border-bottom: 1px solid var(--app-border-shadow, rgba(255, 255, 255, 0.08));
   font-family: var(--app-font-family);
   background: color-mix(in srgb, var(--app-bg-dialog) 96%, var(--app-text));
@@ -2422,35 +2404,27 @@ onUnmounted(() => {
 
 .editor-title-block {
   min-width: 0;
-  flex: 1 1 280px;
+  flex: 1 1 320px;
 }
 
 .editor-toolbar-meta,
 .editor-toolbar-actions {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
 }
 
 .editor-toolbar-meta {
   flex: 0 1 auto;
   min-width: 0;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: flex-end;
+  overflow: hidden;
 }
 
 .editor-toolbar-actions {
   flex: 0 0 auto;
-  margin-left: 12px;
-  margin-right: 18px;
-}
-
-.editor-toolbar-close {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  padding-left: 10px;
-  border-left: 1px solid var(--app-border-shadow, rgba(255, 255, 255, 0.08));
+  margin-left: 4px;
 }
 
 .editor-surface {
@@ -2506,42 +2480,15 @@ onUnmounted(() => {
   background: color-mix(in srgb, var(--app-bg-dialog) 97%, var(--app-text));
 }
 
-.editor-modal-name {
+.editor-modal-title {
   color: var(--app-text);
-  font-size: 15px;
-  font-weight: 700;
-  line-height: 1.25;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.4;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-
-.editor-modal-path {
-  margin-top: 3px;
-  color: var(--app-text-muted);
-  font-size: 12px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.editor-title-close {
-  flex: 0 0 auto;
-  --icon-btn-color: var(--app-text-muted);
-  --icon-btn-hover-color: var(--app-text);
-  --icon-btn-hover-bg: color-mix(in srgb, var(--app-text-muted, #ABB2BF) 11%, transparent);
-  background: transparent;
-}
-
-.editor-title-close:hover {
-  background: color-mix(in srgb, var(--app-text-muted, #ABB2BF) 11%, transparent);
-  color: var(--app-text);
-}
-
-/* .editor-title-close:focus-visible {
-  outline: 1px solid var(--app-selection-bg);
-  outline-offset: 2px;
-} */
 
 .editor-chip,
 .editor-tip,
@@ -2569,15 +2516,6 @@ onUnmounted(() => {
 .editor-chip-muted {
   background: color-mix(in srgb, var(--app-text-muted) 18%, transparent);
   color: var(--app-text-muted);
-}
-
-.editor-action-subtle {
-  border-radius: var(--niri-radius-md, 8px);
-}
-
-.editor-action-primary {
-  border-radius: var(--niri-radius-md, 8px);
-  box-shadow: none;
 }
 
 .editor-confirm-danger {

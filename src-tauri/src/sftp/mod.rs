@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -6,13 +6,14 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::{connection_log, ssh, ssh_algorithms};
+use encoding_rs::{GBK, UTF_16BE, UTF_16LE, WINDOWS_1252};
 use russh::{
     client,
     keys::{check_known_hosts_path, HashAlg, PublicKey},
 };
 use russh_sftp::{
     client::{error::Error as SftpClientError, RawSftpSession, SftpSession},
-    protocol::{FileAttributes, StatusCode},
+    protocol::{FileAttributes, OpenFlags, StatusCode},
 };
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Manager, Window};
@@ -22,8 +23,13 @@ use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 use zeroize::Zeroize;
 const SFTP_TRANSFER_BUFFER_SIZE: usize = 256 * 1024;
 pub(crate) const SFTP_TRANSFER_CHANNEL_SIZE: usize = 8;
-const SFTP_PROGRESS_EMIT_INTERVAL: Duration = Duration::from_millis(80);
-const SFTP_PROGRESS_EMIT_STEP_BYTES: u64 = 256 * 1024;
+const SFTP_MAX_CONCURRENT_WRITES: usize = 64;
+const SFTP_FALLBACK_READ_SIZE: usize = 32 * 1024;
+const SFTP_TARGET_IN_FLIGHT_BYTES: usize = 16 * 1024 * 1024;
+const SFTP_MIN_CONCURRENT_REQUESTS: usize = 8;
+const SFTP_MAX_CONCURRENT_REQUESTS: usize = 64;
+const SFTP_PROGRESS_EMIT_INTERVAL: Duration = Duration::from_millis(120);
+const SFTP_PROGRESS_EMIT_STEP_BYTES: u64 = 2 * 1024 * 1024;
 
 pub enum SftpStreamMessage {
     Data(Vec<u8>),
@@ -48,7 +54,7 @@ pub struct SftpStreamBridge {
 pub(crate) fn sftp_client_config() -> russh_sftp::client::Config {
     let mut config = russh_sftp::client::Config::default();
     config.request_timeout_secs = 30;
-    config.max_concurrent_writes = 16;
+    config.max_concurrent_writes = SFTP_MAX_CONCURRENT_WRITES;
     config
 }
 const MAX_INLINE_EDITOR_FILE_BYTES: u64 = 8 * 1024 * 1024;
@@ -61,30 +67,119 @@ fn should_emit_transfer_progress(last_emit: &std::time::Instant, bytes_since_emi
         || last_emit.elapsed() >= SFTP_PROGRESS_EMIT_INTERVAL
 }
 
-const EDITABLE_TEXT_EXTENSIONS: &[&str] = &[
-    "txt", "log", "conf", "cfg", "ini", "env", "json", "jsonc", "yaml", "yml", "toml", "xml",
-    "csv", "tsv", "md", "markdown", "sql", "gql", "graphql", "js", "jsx", "mjs", "cjs", "ts",
-    "tsx", "vue", "html", "htm", "css", "scss", "less", "rs", "py", "sh", "bash", "zsh", "ps1",
-    "bat", "c", "h", "cpp", "cc", "cxx", "hpp", "hxx", "java", "go", "php", "rb", "swift", "kt",
+const EDITABLE_TEXT_EXTENSIONS: &[(&str, &str)] = &[
+    ("txt", "plaintext"),
+    ("log", "plaintext"),
+    ("conf", "plaintext"),
+    ("config", "plaintext"),
+    ("cfg", "plaintext"),
+    ("ini", "ini"),
+    ("env", "shell"),
+    ("properties", "ini"),
+    ("prop", "ini"),
+    ("lock", "plaintext"),
+    ("json", "json"),
+    ("jsonc", "json"),
+    ("json5", "json"),
+    ("yaml", "yaml"),
+    ("yml", "yaml"),
+    ("toml", "ini"),
+    ("xml", "xml"),
+    ("csv", "plaintext"),
+    ("tsv", "plaintext"),
+    ("md", "markdown"),
+    ("markdown", "markdown"),
+    ("sql", "sql"),
+    ("gql", "graphql"),
+    ("graphql", "graphql"),
+    ("js", "javascript"),
+    ("jsx", "javascript"),
+    ("mjs", "javascript"),
+    ("cjs", "javascript"),
+    ("ts", "typescript"),
+    ("tsx", "typescript"),
+    ("vue", "html"),
+    ("html", "html"),
+    ("htm", "html"),
+    ("css", "css"),
+    ("scss", "scss"),
+    ("less", "less"),
+    ("rs", "rust"),
+    ("py", "python"),
+    ("pyw", "python"),
+    ("sh", "shell"),
+    ("bash", "shell"),
+    ("zsh", "shell"),
+    ("fish", "shell"),
+    ("ps1", "powershell"),
+    ("psm1", "powershell"),
+    ("bat", "bat"),
+    ("cmd", "bat"),
+    ("c", "c"),
+    ("h", "c"),
+    ("cpp", "cpp"),
+    ("cc", "cpp"),
+    ("cxx", "cpp"),
+    ("hpp", "cpp"),
+    ("hxx", "cpp"),
+    ("java", "java"),
+    ("go", "go"),
+    ("php", "php"),
+    ("rb", "ruby"),
+    ("swift", "swift"),
+    ("kt", "kotlin"),
+    ("kts", "kotlin"),
+    ("lua", "plaintext"),
+    ("pl", "plaintext"),
+    ("pm", "plaintext"),
+    ("gradle", "plaintext"),
+    ("groovy", "plaintext"),
+    ("dart", "plaintext"),
+    ("cs", "plaintext"),
+    ("csproj", "xml"),
+    ("fs", "plaintext"),
+    ("fsx", "plaintext"),
+    ("vb", "plaintext"),
+    ("sln", "plaintext"),
+    ("cmake", "plaintext"),
+    ("service", "ini"),
+    ("socket", "ini"),
+    ("timer", "ini"),
+    ("target", "ini"),
+    ("mount", "ini"),
 ];
 
-const EDITABLE_TEXT_FILE_NAMES: &[&str] = &[
-    "dockerfile",
-    "makefile",
-    "readme",
-    "license",
-    ".gitignore",
-    ".gitattributes",
-    ".editorconfig",
-    ".npmrc",
-    ".prettierrc",
-    ".eslintrc",
-    ".bashrc",
-    ".zshrc",
-    ".profile",
+const EDITABLE_TEXT_FILE_NAMES: &[(&str, &str)] = &[
+    ("dockerfile", "shell"),
+    ("composefile", "yaml"),
+    ("makefile", "plaintext"),
+    ("cmakelists.txt", "plaintext"),
+    ("readme", "plaintext"),
+    ("license", "plaintext"),
+    ("jenkinsfile", "plaintext"),
+    ("vagrantfile", "plaintext"),
+    ("gemfile", "ruby"),
+    ("rakefile", "ruby"),
+    ("procfile", "plaintext"),
+    ("hosts", "plaintext"),
+    ("fstab", "plaintext"),
+    ("known_hosts", "plaintext"),
+    ("authorized_keys", "plaintext"),
+    (".gitignore", "plaintext"),
+    (".dockerignore", "plaintext"),
+    (".gitattributes", "plaintext"),
+    (".editorconfig", "ini"),
+    (".npmrc", "ini"),
+    (".yarnrc", "yaml"),
+    (".prettierrc", "json"),
+    (".eslintrc", "json"),
+    (".bashrc", "shell"),
+    (".zshrc", "shell"),
+    (".profile", "shell"),
+    (".gitconfig", "ini"),
 ];
 
-fn is_supported_text_path(path: &str) -> bool {
+fn text_language_for_path(path: &str) -> Option<&'static str> {
     let file_name = Path::new(path)
         .file_name()
         .and_then(|value| value.to_str())
@@ -93,19 +188,33 @@ fn is_supported_text_path(path: &str) -> bool {
         .to_ascii_lowercase();
 
     if file_name.is_empty() {
-        return false;
+        return None;
     }
 
-    if file_name.starts_with(".env") || EDITABLE_TEXT_FILE_NAMES.contains(&file_name.as_str()) {
-        return true;
+    if file_name.starts_with(".env") {
+        return Some("shell");
+    }
+    if let Some((_, language)) = EDITABLE_TEXT_FILE_NAMES
+        .iter()
+        .find(|(name, _)| *name == file_name)
+    {
+        return Some(*language);
     }
 
     Path::new(&file_name)
         .extension()
         .and_then(|value| value.to_str())
         .map(|value| value.to_ascii_lowercase())
-        .map(|ext| EDITABLE_TEXT_EXTENSIONS.contains(&ext.as_str()))
-        .unwrap_or(false)
+        .and_then(|ext| {
+            EDITABLE_TEXT_EXTENSIONS
+                .iter()
+                .find(|(candidate, _)| *candidate == ext)
+                .map(|(_, language)| *language)
+        })
+}
+
+fn is_supported_text_path(path: &str) -> bool {
+    text_language_for_path(path).is_some()
 }
 
 fn ensure_editable_text_path(path: &str) -> Result<(), String> {
@@ -161,6 +270,32 @@ struct TransferSftpSession {
     owned: Option<Arc<client::Handle<DummyHandler>>>,
     jump_owned: Option<Arc<client::Handle<DummyHandler>>>,
     keepalive: Option<ssh::supervisor::KeepaliveTask>,
+}
+
+struct RawTransferSftpSession {
+    raw: RawSftpSession,
+    max_read_len: Option<usize>,
+    max_packet_len: Option<usize>,
+}
+
+fn effective_transfer_window(request_size: usize) -> usize {
+    SFTP_TARGET_IN_FLIGHT_BYTES
+        .div_ceil(request_size.max(1))
+        .clamp(SFTP_MIN_CONCURRENT_REQUESTS, SFTP_MAX_CONCURRENT_REQUESTS)
+}
+
+fn effective_transfer_size(
+    server_limit: Option<usize>,
+    packet_limit: Option<usize>,
+    fallback: usize,
+) -> usize {
+    let packet_payload_limit = packet_limit.map(|length| length.saturating_sub(1024).max(1));
+    server_limit
+        .into_iter()
+        .chain(packet_payload_limit)
+        .min()
+        .unwrap_or(fallback)
+        .clamp(1, SFTP_TRANSFER_BUFFER_SIZE)
 }
 
 struct DirectoryPagerState {
@@ -840,11 +975,10 @@ pub async fn sftp_save_text_file_runtime(
 
 pub async fn sftp_download_file_runtime(
     window: Window,
-    state: &SftpAppState,
+    _state: &SftpAppState,
     sftp: Arc<SftpSession>,
-    reused_from_ssh: bool,
-    connection_config: SshConfig,
-    pending_hostkey: crate::session::state::SharedHostkeyDecision,
+    client_session: Option<Arc<client::Handle<DummyHandler>>>,
+    shared_ssh_session: Option<crate::ssh::SharedSshSessionSlot>,
     cancel: Arc<AtomicBool>,
     session_id: String,
     remote_path: String,
@@ -853,11 +987,9 @@ pub async fn sftp_download_file_runtime(
 ) -> Result<(), String> {
     sftp_download_file_legacy(
         window,
-        state,
         sftp,
-        reused_from_ssh,
-        connection_config,
-        pending_hostkey,
+        client_session,
+        shared_ssh_session,
         cancel,
         session_id,
         remote_path,
@@ -931,7 +1063,7 @@ pub async fn sftp_drag_download_stream_runtime(
             .await
             .map_err(|error| format!("Open Error: {error}"))?;
 
-        emit_progress(0, "uploading", None);
+        emit_progress(0, "transferring", None);
         let mut buffer = vec![0u8; SFTP_TRANSFER_BUFFER_SIZE];
         let mut last_emit = std::time::Instant::now();
         let mut last_emit_bytes = 0u64;
@@ -962,7 +1094,7 @@ pub async fn sftp_drag_download_stream_runtime(
 
             if should_emit_transfer_progress(&last_emit, downloaded.saturating_sub(last_emit_bytes))
             {
-                emit_progress(downloaded, "uploading", None);
+                emit_progress(downloaded, "transferring", None);
                 last_emit = std::time::Instant::now();
                 last_emit_bytes = downloaded;
             }
@@ -1158,6 +1290,8 @@ pub struct FileEntry {
     permissions: u32,
     owner: Option<String>,
     group: Option<String>,
+    editable: bool,
+    language: String,
 }
 
 #[derive(serde::Serialize)]
@@ -1176,12 +1310,16 @@ pub struct SftpOpenTextFileResult {
     content: String,
     file: FileEntry,
     cas_token: String,
+    encoding: String,
+    line_ending: String,
 }
 
 #[derive(serde::Serialize)]
 pub struct SftpSaveTextFileResult {
     file: FileEntry,
     cas_token: String,
+    encoding: String,
+    line_ending: String,
 }
 
 fn get_sftp_session(handle: &SftpConnectionHandle) -> Arc<SftpSession> {
@@ -1393,7 +1531,7 @@ async fn open_transfer_sftp_session(
 
 async fn open_raw_sftp_subsystem_for_client_session(
     session: &client::Handle<DummyHandler>,
-) -> Result<RawSftpSession, String> {
+) -> Result<RawTransferSftpSession, String> {
     let channel = session
         .channel_open_session()
         .await
@@ -1408,12 +1546,12 @@ async fn open_raw_sftp_subsystem_for_client_session(
     raw.init()
         .await
         .map_err(|e| format!("Failed to init shared raw SFTP session: {}", e))?;
-    Ok(raw)
+    configure_raw_transfer_session(raw).await
 }
 
 async fn open_raw_sftp_subsystem_for_shared_session(
     shared_session_slot: &crate::ssh::SharedSshSessionSlot,
-) -> Result<RawSftpSession, String> {
+) -> Result<RawTransferSftpSession, String> {
     let shared_session = shared_session_slot
         .lock()
         .unwrap()
@@ -1437,7 +1575,43 @@ async fn open_raw_sftp_subsystem_for_shared_session(
     raw.init()
         .await
         .map_err(|e| format!("Failed to init shared raw SFTP session: {}", e))?;
-    Ok(raw)
+    configure_raw_transfer_session(raw).await
+}
+
+async fn configure_raw_transfer_session(
+    mut raw: RawSftpSession,
+) -> Result<RawTransferSftpSession, String> {
+    let limits = raw.limits().await.ok();
+    let max_read_len = limits
+        .as_ref()
+        .and_then(|limits| usize::try_from(limits.max_read_len).ok())
+        .filter(|length| *length > 0);
+    let max_packet_len = limits
+        .as_ref()
+        .and_then(|limits| usize::try_from(limits.max_packet_len).ok())
+        .filter(|length| *length > 0);
+    if let Some(limits) = limits {
+        raw.set_limits(limits.into());
+    }
+
+    Ok(RawTransferSftpSession {
+        raw,
+        max_read_len,
+        max_packet_len,
+    })
+}
+
+async fn open_raw_sftp_subsystem_for_transfer(
+    client_session: Option<&Arc<client::Handle<DummyHandler>>>,
+    shared_session: Option<&crate::ssh::SharedSshSessionSlot>,
+) -> Result<RawTransferSftpSession, String> {
+    if let Some(shared_session) = shared_session {
+        return open_raw_sftp_subsystem_for_shared_session(shared_session).await;
+    }
+    if let Some(client_session) = client_session {
+        return open_raw_sftp_subsystem_for_client_session(client_session).await;
+    }
+    Err("SFTP connection cannot open a parallel transfer channel".to_string())
 }
 
 async fn open_paged_directory_session(
@@ -1446,13 +1620,13 @@ async fn open_paged_directory_session(
     if let Some(shared_session_slot) = handle.shared_ssh_session.as_ref() {
         return open_raw_sftp_subsystem_for_shared_session(shared_session_slot)
             .await
-            .map(Arc::new);
+            .map(|transfer| Arc::new(transfer.raw));
     }
 
     if let Some(session) = handle.session.as_ref() {
         return open_raw_sftp_subsystem_for_client_session(session)
             .await
-            .map(Arc::new);
+            .map(|transfer| Arc::new(transfer.raw));
     }
 
     Err("SFTP connection cannot open a paged directory channel".to_string())
@@ -1600,6 +1774,19 @@ async fn read_remote_size_with_retry(
     Err(format!("Stat Error: {}", path))
 }
 
+async fn remote_metadata_if_exists(
+    sftp: &SftpSession,
+    path: &str,
+) -> Result<Option<FileAttributes>, String> {
+    match sftp.metadata(path).await {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(SftpClientError::Status(status)) if status.status_code == StatusCode::NoSuchFile => {
+            Ok(None)
+        }
+        Err(error) => Err(format!("Stat Error: {}", error)),
+    }
+}
+
 #[cfg(unix)]
 fn local_permissions_from_metadata(metadata: &std::fs::Metadata) -> Option<u32> {
     use std::os::unix::fs::PermissionsExt;
@@ -1611,15 +1798,49 @@ fn local_permissions_from_metadata(_metadata: &std::fs::Metadata) -> Option<u32>
     None
 }
 
+async fn promote_local_download(
+    temp_path: &Path,
+    target_path: &Path,
+    backup_path: &Path,
+) -> Result<(), String> {
+    let had_original = match tokio::fs::metadata(target_path).await {
+        Ok(_) => true,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => false,
+        Err(error) => return Err(format!("Target metadata Error: {}", error)),
+    };
+
+    if had_original {
+        tokio::fs::rename(target_path, backup_path)
+            .await
+            .map_err(|error| format!("Local backup Error: {}", error))?;
+    }
+
+    if let Err(error) = tokio::fs::rename(temp_path, target_path).await {
+        let rollback_error = if had_original {
+            tokio::fs::rename(backup_path, target_path).await.err()
+        } else {
+            None
+        };
+        return Err(match rollback_error {
+            Some(rollback_error) => format!(
+                "Local promote Error: {}; rollback Error: {}",
+                error, rollback_error
+            ),
+            None => format!("Local promote Error: {}", error),
+        });
+    }
+
+    if had_original {
+        let _ = tokio::fs::remove_file(backup_path).await;
+    }
+    Ok(())
+}
+
 async fn read_remote_text(sftp: &SftpSession, path: &str) -> Option<String> {
     let mut file = sftp.open(path).await.ok()?;
     let mut contents = String::new();
     file.read_to_string(&mut contents).await.ok()?;
     Some(contents)
-}
-
-fn normalize_newlines(text: &str) -> String {
-    text.replace("\r\n", "\n")
 }
 
 fn ensure_inline_editor_file_size(path: &str, size: u64) -> Result<(), String> {
@@ -1633,10 +1854,9 @@ fn ensure_inline_editor_file_size(path: &str, size: u64) -> Result<(), String> {
     ))
 }
 
-fn build_text_cas_token(text: &str) -> String {
-    let normalized = normalize_newlines(text);
+fn build_text_cas_token(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(normalized.as_bytes());
+    hasher.update(bytes);
     let digest = hasher.finalize();
     let mut hex = String::with_capacity(digest.len() * 2);
     for byte in digest {
@@ -1646,26 +1866,149 @@ fn build_text_cas_token(text: &str) -> String {
     format!("sha256:{}", hex)
 }
 
-async fn read_remote_editable_text(sftp: &SftpSession, path: &str) -> Result<String, String> {
-    let mut file = sftp
+#[derive(Clone)]
+struct EditableText {
+    content: String,
+    encoding: &'static str,
+    line_ending: &'static str,
+}
+
+struct EncodedEditableText {
+    bytes: Vec<u8>,
+    encoding: &'static str,
+    line_ending: &'static str,
+}
+
+fn normalize_editor_newlines(text: &str) -> String {
+    text.replace("\r\n", "\n").replace('\r', "\n")
+}
+
+fn detect_line_ending(text: &str) -> &'static str {
+    if text.contains("\r\n") {
+        "crlf"
+    } else if text.contains('\r') {
+        "cr"
+    } else {
+        "lf"
+    }
+}
+
+fn decode_editable_text(bytes: &[u8]) -> Result<EditableText, String> {
+    let (decoded, encoding) = if let Some(payload) = bytes.strip_prefix(&[0xef, 0xbb, 0xbf]) {
+        (
+            String::from_utf8(payload.to_vec())
+                .map_err(|_| "Read Error: invalid UTF-8 BOM text".to_string())?,
+            "utf-8-bom",
+        )
+    } else if let Some(payload) = bytes.strip_prefix(&[0xff, 0xfe]) {
+        let decoded = UTF_16LE
+            .decode_without_bom_handling_and_without_replacement(payload)
+            .ok_or_else(|| "Read Error: invalid UTF-16 LE text".to_string())?;
+        (decoded.into_owned(), "utf-16le")
+    } else if let Some(payload) = bytes.strip_prefix(&[0xfe, 0xff]) {
+        let decoded = UTF_16BE
+            .decode_without_bom_handling_and_without_replacement(payload)
+            .ok_or_else(|| "Read Error: invalid UTF-16 BE text".to_string())?;
+        (decoded.into_owned(), "utf-16be")
+    } else {
+        if is_probably_binary(bytes) {
+            return Err(
+                "Read Error: file contains binary content and cannot be edited here".to_string(),
+            );
+        }
+        if let Ok(text) = std::str::from_utf8(bytes) {
+            (text.to_string(), "utf-8")
+        } else if let Some(text) = GBK.decode_without_bom_handling_and_without_replacement(bytes) {
+            (text.into_owned(), "gbk")
+        } else {
+            let (text, _, _) = WINDOWS_1252.decode(bytes);
+            (text.into_owned(), "windows-1252")
+        }
+    };
+
+    let line_ending = detect_line_ending(&decoded);
+    Ok(EditableText {
+        content: normalize_editor_newlines(&decoded),
+        encoding,
+        line_ending,
+    })
+}
+
+fn encode_editable_text(
+    content: &str,
+    encoding: &'static str,
+    line_ending: &'static str,
+) -> Result<EncodedEditableText, String> {
+    let normalized = normalize_editor_newlines(content);
+    let text = match line_ending {
+        "crlf" => normalized.replace('\n', "\r\n"),
+        "cr" => normalized.replace('\n', "\r"),
+        _ => normalized,
+    };
+
+    let bytes = match encoding {
+        "utf-8-bom" => {
+            let mut bytes = Vec::with_capacity(text.len() + 3);
+            bytes.extend_from_slice(&[0xef, 0xbb, 0xbf]);
+            bytes.extend_from_slice(text.as_bytes());
+            bytes
+        }
+        "utf-16le" | "utf-16be" => {
+            let mut bytes = Vec::with_capacity(text.encode_utf16().count() * 2 + 2);
+            bytes.extend_from_slice(if encoding == "utf-16le" {
+                &[0xff, 0xfe]
+            } else {
+                &[0xfe, 0xff]
+            });
+            for unit in text.encode_utf16() {
+                let encoded_unit = if encoding == "utf-16le" {
+                    unit.to_le_bytes()
+                } else {
+                    unit.to_be_bytes()
+                };
+                bytes.extend_from_slice(&encoded_unit);
+            }
+            bytes
+        }
+        "gbk" | "windows-1252" => {
+            let codec = if encoding == "gbk" { GBK } else { WINDOWS_1252 };
+            let (encoded, _, had_errors) = codec.encode(&text);
+            if had_errors {
+                return Err(format!(
+                    "Save Error: content cannot be encoded as {}",
+                    encoding
+                ));
+            }
+            encoded.into_owned()
+        }
+        _ => text.into_bytes(),
+    };
+
+    Ok(EncodedEditableText {
+        bytes,
+        encoding,
+        line_ending,
+    })
+}
+
+async fn read_remote_editable_bytes(sftp: &SftpSession, path: &str) -> Result<Vec<u8>, String> {
+    let file = sftp
         .open(path)
         .await
         .map_err(|e| format!("Open Error: {}", e))?;
-
+    let mut limited = file.take(MAX_INLINE_EDITOR_FILE_BYTES + 1);
     let mut contents = Vec::new();
-    file.read_to_end(&mut contents)
+    limited
+        .read_to_end(&mut contents)
         .await
         .map_err(|e| format!("Read Error: {}", e))?;
+    ensure_inline_editor_file_size(path, contents.len() as u64)?;
+    Ok(contents)
+}
 
-    if is_probably_binary(&contents) {
-        return Err(
-            "Read Error: file contains binary content and cannot be edited here".to_string(),
-        );
-    }
-
-    String::from_utf8(contents).map_err(|_| {
-        "Read Error: file is not valid UTF-8 text and cannot be edited here".to_string()
-    })
+async fn read_remote_editable_text(sftp: &SftpSession, path: &str) -> Result<EditableText, String> {
+    let bytes = read_remote_editable_bytes(sftp, path).await?;
+    decode_editable_text(&bytes)
 }
 
 fn file_entry_from_attrs(
@@ -1675,6 +2018,10 @@ fn file_entry_from_attrs(
     group_map: &HashMap<u32, String>,
 ) -> FileEntry {
     FileEntry {
+        editable: !attrs.is_dir() && is_supported_text_path(&file_name),
+        language: text_language_for_path(&file_name)
+            .unwrap_or("plaintext")
+            .to_string(),
         name: file_name,
         is_dir: attrs.is_dir(),
         size: attrs.size.unwrap_or(0),
@@ -1723,26 +2070,23 @@ async fn read_next_directory_batch(
     }
 }
 
-async fn verify_remote_text_with_retry(
+async fn verify_remote_bytes_with_retry(
     sftp: &SftpSession,
     path: &str,
-    expected: String,
+    expected: &[u8],
     retries: usize,
     delay_ms: u64,
 ) -> Result<(), String> {
-    let expected_normalized = normalize_newlines(&expected);
-    let mut last_observed = String::new();
+    let mut last_observed_len = 0;
 
     for _ in 0..retries {
         match sftp.open(path).await {
             Ok(mut file) => {
-                let mut observed = String::new();
-                match file.read_to_string(&mut observed).await {
+                let mut observed = Vec::new();
+                match file.read_to_end(&mut observed).await {
                     Ok(_) => {
-                        last_observed = observed.clone();
-                        if observed == expected
-                            || normalize_newlines(&observed) == expected_normalized
-                        {
+                        last_observed_len = observed.len();
+                        if observed == expected {
                             return Ok(());
                         }
                     }
@@ -1756,7 +2100,7 @@ async fn verify_remote_text_with_retry(
 
     Err(format!(
         "Write verification failed after retry: observed length {}, expected length {}",
-        last_observed.len(),
+        last_observed_len,
         expected.len()
     ))
 }
@@ -2077,7 +2421,9 @@ pub async fn sftp_read_file_legacy(
 ) -> Result<String, String> {
     ensure_editable_text_path(&path)?;
     let sftp = get_sftp_session(handle);
-    read_remote_editable_text(&sftp, &path).await
+    read_remote_editable_text(&sftp, &path)
+        .await
+        .map(|text| text.content)
 }
 
 #[tauri::command]
@@ -2103,7 +2449,8 @@ pub async fn sftp_open_text_file_legacy(
         .await
         .map_err(|e| format!("Stat Error: {}", e))?;
     ensure_inline_editor_file_size(&path, attrs.size.unwrap_or(0))?;
-    let content = read_remote_editable_text(&sftp, &path).await?;
+    let original_bytes = read_remote_editable_bytes(&sftp, &path).await?;
+    let decoded = decode_editable_text(&original_bytes)?;
     let (passwd_map, group_map) = get_ug_maps(state, &session_id, &sftp).await;
     let file_name = Path::new(&path)
         .file_name()
@@ -2112,9 +2459,11 @@ pub async fn sftp_open_text_file_legacy(
         .to_string();
 
     Ok(SftpOpenTextFileResult {
-        cas_token: build_text_cas_token(&content),
-        content,
+        cas_token: build_text_cas_token(&original_bytes),
+        content: decoded.content,
         file: file_entry_from_attrs(file_name, &attrs, &passwd_map, &group_map),
+        encoding: decoded.encoding.to_string(),
+        line_ending: decoded.line_ending.to_string(),
     })
 }
 
@@ -2137,7 +2486,7 @@ async fn write_text_file_internal(
     expected_modified: Option<u64>,
     expected_size: Option<u64>,
     expected_cas_token: Option<&str>,
-) -> Result<(), String> {
+) -> Result<EncodedEditableText, String> {
     ensure_editable_text_path(&path)?;
     let sftp = get_sftp_session(handle);
 
@@ -2171,21 +2520,53 @@ async fn write_text_file_internal(
         format!("{}/{}", parent_dir, temp_name)
     };
 
-    let original_meta = sftp.metadata(&path).await.ok();
+    let original_meta = remote_metadata_if_exists(&sftp, &path).await?;
     let original_exists = original_meta.is_some();
     let original_permissions = original_meta.as_ref().and_then(|m| m.permissions);
+
+    let original_bytes = if let Some(meta) = original_meta.as_ref() {
+        ensure_inline_editor_file_size(&path, meta.size.unwrap_or(0))?;
+        Some(read_remote_editable_bytes(&sftp, &path).await?)
+    } else {
+        None
+    };
+
+    let original_text = original_bytes
+        .as_deref()
+        .map(decode_editable_text)
+        .transpose()?;
+
+    let encoded = encode_editable_text(
+        &content,
+        original_text
+            .as_ref()
+            .map(|text| text.encoding)
+            .unwrap_or("utf-8"),
+        original_text
+            .as_ref()
+            .map(|text| text.line_ending)
+            .unwrap_or("lf"),
+    )?;
+    ensure_inline_editor_file_size(&path, encoded.bytes.len() as u64)?;
+
+    let mut already_saved = false;
 
     if let Some(expected_token) = expected_cas_token {
         if !original_exists {
             return Err("CAS mismatch: remote file no longer exists".to_string());
         }
 
-        let current_text = read_remote_editable_text(&sftp, &path).await?;
-        let current_token = build_text_cas_token(&current_text);
+        let current_token = build_text_cas_token(original_bytes.as_deref().unwrap_or_default());
         if current_token != expected_token {
-            return Err(
-                "CAS mismatch: remote file changed; please reopen before saving".to_string(),
-            );
+            if original_bytes.as_deref() == Some(encoded.bytes.as_slice()) {
+                // The previous save may have committed remotely while its response was lost.
+                // Treat an exact byte match as an idempotent retry success.
+                already_saved = true;
+            } else {
+                return Err(
+                    "CAS mismatch: remote file changed; please reopen before saving".to_string(),
+                );
+            }
         }
     }
 
@@ -2213,6 +2594,10 @@ async fn write_text_file_internal(
         return Err("CAS mismatch: remote file no longer exists".to_string());
     }
 
+    if already_saved || original_bytes.as_deref() == Some(encoded.bytes.as_slice()) {
+        return Ok(encoded);
+    }
+
     let backup_name = format!(".{}.bak.{}.{}", base_name, std::process::id(), ts);
     let backup_path = if parent_dir == "/" {
         format!("/{}", backup_name)
@@ -2228,23 +2613,74 @@ async fn write_text_file_internal(
             .await
             .map_err(|e| format!("Create/Open Error: {}", e))?;
 
-        file.write_all(content.as_bytes())
-            .await
-            .map_err(|e| format!("Write Error: {}", e))?;
+        if let Err(error) = file.write_all(&encoded.bytes).await {
+            drop(file);
+            let _ = sftp.remove_file(&temp_path).await;
+            return Err(format!("Write Error: {}", error));
+        }
 
-        file.flush()
-            .await
-            .map_err(|e| format!("Flush Error: {}", e))?;
+        if let Err(error) = file.flush().await {
+            drop(file);
+            let _ = sftp.remove_file(&temp_path).await;
+            return Err(format!("Flush Error: {}", error));
+        }
 
-        file.shutdown()
-            .await
-            .map_err(|e| format!("Shutdown Error: {}", e))?;
+        if let Err(error) = file.shutdown().await {
+            drop(file);
+            let _ = sftp.remove_file(&temp_path).await;
+            return Err(format!("Shutdown Error: {}", error));
+        }
     }
 
-    let expected_content = content.clone();
-    verify_remote_text_with_retry(&sftp, temp_path.as_str(), expected_content.clone(), 5, 80)
-        .await
-        .map_err(|e| format!("Temp verify Error: {}", e))?;
+    if let Err(error) =
+        verify_remote_bytes_with_retry(&sftp, temp_path.as_str(), &encoded.bytes, 5, 80).await
+    {
+        let _ = sftp.remove_file(&temp_path).await;
+        return Err(format!("Temp verify Error: {}", error));
+    }
+
+    if let Some(permissions) = original_permissions {
+        let mut attrs = FileAttributes::empty();
+        attrs.permissions = Some(permissions);
+        if let Err(error) = sftp.set_metadata(&temp_path, attrs).await {
+            let _ = sftp.remove_file(&temp_path).await;
+            return Err(format!("Temp metadata Error: {}", error));
+        }
+    }
+
+    // Revalidate immediately before replacement. The initial CAS check can become stale while
+    // the temporary file is being written if another client edits the same remote file.
+    if original_exists {
+        let current_bytes = match read_remote_editable_bytes(&sftp, &path).await {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                let _ = sftp.remove_file(&temp_path).await;
+                return Err(format!("Pre-commit verify Error: {}", error));
+            }
+        };
+        if original_bytes.as_deref() != Some(current_bytes.as_slice()) {
+            let _ = sftp.remove_file(&temp_path).await;
+            return Err(
+                "CAS mismatch: remote file changed while saving; please reopen before saving"
+                    .to_string(),
+            );
+        }
+    } else {
+        match remote_metadata_if_exists(&sftp, &path).await {
+            Ok(None) => {}
+            Ok(Some(_)) => {
+                let _ = sftp.remove_file(&temp_path).await;
+                return Err(
+                    "CAS mismatch: remote file was created while saving; please reopen before saving"
+                        .to_string(),
+                );
+            }
+            Err(error) => {
+                let _ = sftp.remove_file(&temp_path).await;
+                return Err(format!("Pre-commit verify Error: {}", error));
+            }
+        }
+    }
 
     if original_exists {
         if let Err(e) = sftp.rename(&path, &backup_path).await {
@@ -2261,18 +2697,14 @@ async fn write_text_file_internal(
         return Err(format!("Promote Error: {}", e));
     }
 
-    if let Err(e) = verify_remote_text_with_retry(&sftp, &path, expected_content, 6, 100).await {
+    if let Err(e) = verify_remote_bytes_with_retry(&sftp, &path, &encoded.bytes, 6, 100).await {
         if original_exists {
             let _ = sftp.remove_file(&path).await;
             let _ = sftp.rename(&backup_path, &path).await;
+        } else {
+            let _ = sftp.remove_file(&path).await;
         }
         return Err(format!("Final verify Error: {}", e));
-    }
-
-    if let Some(perms) = original_permissions {
-        let mut attrs = FileAttributes::empty();
-        attrs.permissions = Some(perms);
-        let _ = sftp.set_metadata(&path, attrs).await;
     }
 
     if original_exists {
@@ -2280,7 +2712,7 @@ async fn write_text_file_internal(
     }
 
     invalidate_session_cache(state, &session_id);
-    Ok(())
+    Ok(encoded)
 }
 
 pub async fn sftp_write_file_legacy(
@@ -2303,6 +2735,7 @@ pub async fn sftp_write_file_legacy(
         None,
     )
     .await
+    .map(|_| ())
 }
 
 #[tauri::command]
@@ -2328,12 +2761,12 @@ pub async fn sftp_save_text_file_legacy(
     content: String,
     expected_cas_token: String,
 ) -> Result<SftpSaveTextFileResult, String> {
-    write_text_file_internal(
+    let encoded = write_text_file_internal(
         state,
         handle,
         session_id.clone(),
         path.clone(),
-        content.clone(),
+        content,
         None,
         None,
         Some(expected_cas_token.as_str()),
@@ -2353,8 +2786,10 @@ pub async fn sftp_save_text_file_legacy(
         .to_string();
 
     Ok(SftpSaveTextFileResult {
-        cas_token: build_text_cas_token(&content),
+        cas_token: build_text_cas_token(&encoded.bytes),
         file: file_entry_from_attrs(file_name, &attrs, &passwd_map, &group_map),
+        encoding: encoded.encoding.to_string(),
+        line_ending: encoded.line_ending.to_string(),
     })
 }
 
@@ -2416,13 +2851,151 @@ fn ensure_transfer_active(
     }
 }
 
+async fn read_sftp_range(
+    raw: Arc<RawSftpSession>,
+    handle: String,
+    offset: u64,
+    length: usize,
+    cancel: Arc<AtomicBool>,
+) -> Result<(u64, Vec<u8>), String> {
+    let mut data = Vec::with_capacity(length);
+    while data.len() < length {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("Transfer cancelled".to_string());
+        }
+        let read_offset = offset + data.len() as u64;
+        let remaining = length - data.len();
+        let response = raw
+            .read(handle.clone(), read_offset, remaining as u32)
+            .await
+            .map_err(|error| format!("Read Error at offset {}: {}", read_offset, error))?;
+        if response.data.is_empty() {
+            return Err(format!("Premature EOF at offset {}", read_offset));
+        }
+        data.extend_from_slice(&response.data);
+    }
+    Ok((offset, data))
+}
+
+async fn parallel_sftp_download(
+    window: &Window,
+    session_id: &str,
+    req_id: &str,
+    total_size: u64,
+    transfer: RawTransferSftpSession,
+    remote_path: &str,
+    local: &mut tokio::fs::File,
+    cancel: &Arc<AtomicBool>,
+) -> Result<u64, String> {
+    let read_size = effective_transfer_size(
+        transfer.max_read_len,
+        transfer.max_packet_len,
+        SFTP_FALLBACK_READ_SIZE,
+    );
+    let read_window = effective_transfer_window(read_size);
+    connection_log::append(
+        session_id,
+        format!(
+            "sftp download mode=parallel read_window={} read_size={} max_packet_len={}",
+            read_window,
+            read_size,
+            transfer.max_packet_len.unwrap_or(0),
+        ),
+    );
+    let raw = Arc::new(transfer.raw);
+    let opened = raw
+        .open(remote_path, OpenFlags::READ, FileAttributes::empty())
+        .await
+        .map_err(|error| format!("Open Error: {}", error))?;
+    let handle = opened.handle;
+    let mut tasks = tokio::task::JoinSet::new();
+    let mut pending = BTreeMap::<u64, Vec<u8>>::new();
+    let mut next_request_offset = 0u64;
+    let mut next_write_offset = 0u64;
+    let mut last_emit = std::time::Instant::now();
+    let mut last_emit_bytes = 0u64;
+
+    let transfer_result = async {
+        while next_write_offset < total_size {
+            while tasks.len() < read_window && next_request_offset < total_size {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err("Transfer cancelled".to_string());
+                }
+                let length =
+                    usize::try_from((total_size - next_request_offset).min(read_size as u64))
+                        .map_err(|_| "Read size conversion error".to_string())?;
+                let task_raw = raw.clone();
+                let task_handle = handle.clone();
+                let task_cancel = cancel.clone();
+                let offset = next_request_offset;
+                tasks.spawn(read_sftp_range(
+                    task_raw,
+                    task_handle,
+                    offset,
+                    length,
+                    task_cancel,
+                ));
+                next_request_offset += length as u64;
+            }
+
+            let result = tasks
+                .join_next()
+                .await
+                .ok_or_else(|| "Download pipeline stopped before EOF".to_string())?
+                .map_err(|error| format!("Download task failed: {}", error))??;
+            pending.insert(result.0, result.1);
+
+            while let Some(chunk) = pending.remove(&next_write_offset) {
+                local
+                    .write_all(&chunk)
+                    .await
+                    .map_err(|error| format!("Write Error: {}", error))?;
+                next_write_offset += chunk.len() as u64;
+
+                if should_emit_transfer_progress(
+                    &last_emit,
+                    next_write_offset.saturating_sub(last_emit_bytes),
+                ) {
+                    let _ = window.emit(
+                        "sftp-progress",
+                        ProgressPayload {
+                            session_id: session_id.to_string(),
+                            id: req_id.to_string(),
+                            direction: "download".to_string(),
+                            current: next_write_offset,
+                            total: total_size,
+                            percent: ((next_write_offset as f64 / total_size as f64) * 100.0) as u8,
+                            status: "transferring".to_string(),
+                            error: None,
+                        },
+                    );
+                    last_emit = std::time::Instant::now();
+                    last_emit_bytes = next_write_offset;
+                }
+            }
+        }
+        Ok(next_write_offset)
+    }
+    .await;
+
+    if transfer_result.is_err() {
+        // Wait until all in-flight reads are cancelled before closing their shared handle.
+        // Closing immediately after abort_all can race with tasks that have not observed
+        // cancellation yet on high-latency links.
+        tasks.shutdown().await;
+    }
+    let close_result = raw
+        .close(handle)
+        .await
+        .map_err(|error| format!("Close Error: {}", error));
+    transfer_result.and(close_result.map(|_| next_write_offset))
+}
+
 pub async fn sftp_download_file_legacy(
     window: Window,
-    state: &SftpAppState,
     sftp: Arc<SftpSession>,
-    reused_from_ssh: bool,
-    connection_config: SshConfig,
-    pending_hostkey: crate::session::state::SharedHostkeyDecision,
+    client_session: Option<Arc<client::Handle<DummyHandler>>>,
+    shared_ssh_session: Option<crate::ssh::SharedSshSessionSlot>,
     cancel: Arc<AtomicBool>,
     session_id: String,
     remote_path: String,
@@ -2430,37 +3003,6 @@ pub async fn sftp_download_file_legacy(
     req_id: String,
 ) -> Result<(), String> {
     ensure_transfer_active(&window, &cancel, &session_id, &req_id, "download", 0, 0)?;
-    let transfer_session = open_transfer_sftp_session(
-        state,
-        &window.app_handle(),
-        sftp,
-        reused_from_ssh,
-        connection_config,
-        pending_hostkey,
-        &session_id,
-        &req_id,
-    )
-    .await?;
-    let sftp = transfer_session.sftp.clone();
-
-    ensure_transfer_active(&window, &cancel, &session_id, &req_id, "download", 0, 0)?;
-
-    let total_size = sftp
-        .metadata(&remote_path)
-        .await
-        .ok()
-        .and_then(|meta| meta.size)
-        .unwrap_or(0);
-
-    ensure_transfer_active(
-        &window,
-        &cancel,
-        &session_id,
-        &req_id,
-        "download",
-        0,
-        total_size,
-    )?;
 
     let emit_failed = |current: u64, total: u64, err: String| {
         let _ = window.emit(
@@ -2482,16 +3024,65 @@ pub async fn sftp_download_file_legacy(
         );
     };
 
-    let remote = sftp.open(&remote_path).await.map_err(|e| {
-        let err = format!("Open Error: {}", e);
-        emit_failed(0, total_size, err.clone());
-        err
-    })?;
-    let mut local = tokio::fs::File::create(&local_path).await.map_err(|e| {
-        let err = format!("Create Error: {}", e);
-        emit_failed(0, total_size, err.clone());
-        err
-    })?;
+    let total_size = sftp
+        .metadata(&remote_path)
+        .await
+        .map_err(|error| {
+            let error = format!("Stat Error: {}", error);
+            emit_failed(0, 0, error.clone());
+            error
+        })?
+        .size
+        .unwrap_or(0);
+
+    ensure_transfer_active(
+        &window,
+        &cancel,
+        &session_id,
+        &req_id,
+        "download",
+        0,
+        total_size,
+    )?;
+
+    let local_target_path = PathBuf::from(&local_path);
+    let local_file_name = local_target_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            let error = "Invalid local filename or path".to_string();
+            emit_failed(0, total_size, error.clone());
+            error
+        })?;
+    let local_parent = local_target_path.parent().unwrap_or_else(|| Path::new(""));
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_nanos())
+        .unwrap_or(0);
+    let local_temp_path = local_parent.join(format!(
+        ".{}.download.tmp.{}.{}",
+        local_file_name,
+        std::process::id(),
+        ts
+    ));
+    let local_backup_path = local_parent.join(format!(
+        ".{}.download.bak.{}.{}",
+        local_file_name,
+        std::process::id(),
+        ts
+    ));
+
+    let mut local = tokio::fs::File::create(&local_temp_path)
+        .await
+        .map_err(|e| {
+            let err = format!("Create Error: {}", e);
+            emit_failed(0, total_size, err.clone());
+            err
+        })?;
+
+    let raw_transfer =
+        open_raw_sftp_subsystem_for_transfer(client_session.as_ref(), shared_ssh_session.as_ref())
+            .await;
 
     let _ = window.emit(
         "sftp-progress",
@@ -2502,25 +3093,98 @@ pub async fn sftp_download_file_legacy(
             current: 0,
             total: total_size,
             percent: 0,
-            status: "uploading".to_string(),
+            status: "transferring".to_string(),
             error: None,
         },
     );
 
-    let result = pipelined_sftp_download(
-        &window,
-        &session_id,
-        &req_id,
-        total_size,
-        remote,
-        &mut local,
-        &cancel,
-    )
-    .await;
+    let started_at = std::time::Instant::now();
+    let result = match raw_transfer {
+        Ok(raw) if total_size > 0 => {
+            parallel_sftp_download(
+                &window,
+                &session_id,
+                &req_id,
+                total_size,
+                raw,
+                &remote_path,
+                &mut local,
+                &cancel,
+            )
+            .await
+        }
+        Ok(_) => {
+            connection_log::append(
+                &session_id,
+                "sftp download mode=sequential reason=empty_file",
+            );
+            match sftp.open(&remote_path).await {
+                Ok(remote) => {
+                    pipelined_sftp_download(
+                        &window,
+                        &session_id,
+                        &req_id,
+                        total_size,
+                        remote,
+                        &mut local,
+                        &cancel,
+                    )
+                    .await
+                }
+                Err(error) => Err(format!("Open Error: {}", error)),
+            }
+        }
+        Err(error) => {
+            connection_log::append(
+                &session_id,
+                format!("sftp download mode=sequential reason={}", error),
+            );
+            match sftp.open(&remote_path).await {
+                Ok(remote) => {
+                    pipelined_sftp_download(
+                        &window,
+                        &session_id,
+                        &req_id,
+                        total_size,
+                        remote,
+                        &mut local,
+                        &cancel,
+                    )
+                    .await
+                }
+                Err(error) => Err(format!("Open Error: {}", error)),
+            }
+        }
+    };
 
     match result {
         Ok(downloaded) => {
-            ensure_transfer_active(
+            let elapsed = started_at.elapsed().as_secs_f64();
+            connection_log::append(
+                &session_id,
+                format!(
+                    "sftp download data bytes={} elapsed_ms={} rate_mib_s={:.2} read_window={}",
+                    downloaded,
+                    started_at.elapsed().as_millis(),
+                    if elapsed > 0.0 {
+                        downloaded as f64 / 1024.0 / 1024.0 / elapsed
+                    } else {
+                        0.0
+                    },
+                    "adaptive",
+                ),
+            );
+            if downloaded != total_size {
+                drop(local);
+                let _ = tokio::fs::remove_file(&local_temp_path).await;
+                let error = format!(
+                    "Download size mismatch: expected {}, received {}",
+                    total_size, downloaded
+                );
+                emit_failed(downloaded, total_size, error.clone());
+                return Err(error);
+            }
+            if let Err(error) = ensure_transfer_active(
                 &window,
                 &cancel,
                 &session_id,
@@ -2528,13 +3192,57 @@ pub async fn sftp_download_file_legacy(
                 "download",
                 downloaded,
                 total_size,
-            )?;
+            ) {
+                drop(local);
+                let _ = tokio::fs::remove_file(&local_temp_path).await;
+                return Err(error);
+            }
+            let finalizing_started_at = std::time::Instant::now();
+            let _ = window.emit(
+                "sftp-progress",
+                ProgressPayload {
+                    session_id: session_id.clone(),
+                    id: req_id.clone(),
+                    direction: "download".to_string(),
+                    current: downloaded,
+                    total: total_size,
+                    percent: if total_size > 0 { 100 } else { 0 },
+                    status: "finalizing".to_string(),
+                    error: None,
+                },
+            );
+
             use tokio::io::AsyncWriteExt;
-            local.flush().await.map_err(|e| {
-                let err = format!("Flush Error: {}", e);
-                emit_failed(downloaded, total_size, err.clone());
-                err
-            })?;
+            if let Err(error) = local.flush().await {
+                drop(local);
+                let _ = tokio::fs::remove_file(&local_temp_path).await;
+                let error = format!("Flush Error: {}", error);
+                emit_failed(downloaded, total_size, error.clone());
+                return Err(error);
+            }
+            if let Err(error) = local.sync_all().await {
+                drop(local);
+                let _ = tokio::fs::remove_file(&local_temp_path).await;
+                let error = format!("Sync Error: {}", error);
+                emit_failed(downloaded, total_size, error.clone());
+                return Err(error);
+            }
+            drop(local);
+
+            if let Err(error) =
+                promote_local_download(&local_temp_path, &local_target_path, &local_backup_path)
+                    .await
+            {
+                emit_failed(downloaded, total_size, error.clone());
+                return Err(error);
+            }
+            connection_log::append(
+                &session_id,
+                format!(
+                    "sftp download finalizing elapsed_ms={}",
+                    finalizing_started_at.elapsed().as_millis()
+                ),
+            );
 
             let _ = window.emit(
                 "sftp-progress",
@@ -2552,6 +3260,8 @@ pub async fn sftp_download_file_legacy(
             Ok(())
         }
         Err(e) => {
+            drop(local);
+            let _ = tokio::fs::remove_file(&local_temp_path).await;
             if cancel.load(Ordering::Relaxed) {
                 let _ = window.emit(
                     "sftp-progress",
@@ -2566,6 +3276,8 @@ pub async fn sftp_download_file_legacy(
                         error: Some("用户取消了下载".to_string()),
                     },
                 );
+            } else {
+                emit_failed(0, total_size, e.clone());
             }
             Err(e)
         }
@@ -2697,7 +3409,7 @@ async fn pipelined_sftp_download<RemoteReader: tokio::io::AsyncRead + Unpin + Se
                     } else {
                         0
                     },
-                    status: "uploading".to_string(),
+                    status: "transferring".to_string(),
                     error: None,
                 },
             );
@@ -2706,7 +3418,11 @@ async fn pipelined_sftp_download<RemoteReader: tokio::io::AsyncRead + Unpin + Se
         }
     }
 
-    let _ = reader.await;
+    if let Err(error) = reader.await {
+        let error = format!("Download reader task failed: {}", error);
+        emit_failed(downloaded, total_size, error.clone());
+        return Err(error);
+    }
     Ok(downloaded)
 }
 
@@ -2832,7 +3548,13 @@ pub async fn sftp_upload_file_legacy(
         format!("{}/{}", parent_dir, temp_name)
     };
 
-    let original_meta = sftp.metadata(&remote_path).await.ok();
+    let original_meta = match remote_metadata_if_exists(&sftp, &remote_path).await {
+        Ok(metadata) => metadata,
+        Err(error) => {
+            emit_failed(0, total_size, error.clone());
+            return Err(error);
+        }
+    };
     let had_original = original_meta.is_some();
     let original_permissions = original_meta.as_ref().and_then(|meta| meta.permissions);
     let local_permissions = local_permissions_from_metadata(&local_meta);
@@ -2858,12 +3580,19 @@ pub async fn sftp_upload_file_legacy(
 
     let mut remote = match sftp.create(&temp_path).await {
         Ok(file) => file,
-        Err(e) => {
-            let err = format!("Create Error: {}", e);
-            emit_failed(0, total_size, err.clone());
-            return Err(err);
+        Err(error) => {
+            let error = format!("Create Error: {}", error);
+            emit_failed(0, total_size, error.clone());
+            return Err(error);
         }
     };
+    connection_log::append(
+        &session_id,
+        format!(
+            "sftp upload mode=russh_file write_window={}",
+            SFTP_MAX_CONCURRENT_WRITES
+        ),
+    );
 
     let _ = window.emit(
         "sftp-progress",
@@ -2879,6 +3608,7 @@ pub async fn sftp_upload_file_legacy(
         },
     );
 
+    let data_started_at = std::time::Instant::now();
     let result = pipelined_sftp_upload(
         &window,
         &session_id,
@@ -2892,6 +3622,8 @@ pub async fn sftp_upload_file_legacy(
     let uploaded = match result {
         Ok(bytes) => bytes,
         Err(e) => {
+            let _ = remote.shutdown().await;
+            drop(remote);
             let _ = sftp.remove_file(&temp_path).await;
             if cancel.load(Ordering::Relaxed) {
                 let _ = window.emit(
@@ -2912,6 +3644,8 @@ pub async fn sftp_upload_file_legacy(
         }
     };
     if cancel.load(Ordering::Relaxed) {
+        let _ = remote.shutdown().await;
+        drop(remote);
         let _ = sftp.remove_file(&temp_path).await;
         emit_transfer_cancelled(
             &window,
@@ -2923,32 +3657,78 @@ pub async fn sftp_upload_file_legacy(
         );
         return Err("Transfer cancelled".to_string());
     }
-    // 强一致性防御：如果你本地真的扫出了总大小，而传传传...传到最后发现实际上累计传出去的字节(uploaded)
-    // 根本就没有达到本地计算的总文件大小(total_size)，说明读取流在本地提前断了（比如被占用或报了0）。
-    // 这种情况下直接算上传失败，绝不允许继续下一步将残次品替换上去！
-    if uploaded < total_size && total_size > 0 {
+    if uploaded != total_size {
+        let _ = remote.shutdown().await;
+        drop(remote);
         let _ = sftp.remove_file(&temp_path).await;
         let err = format!(
-            "Premature EOF or local stream truncated: expected {}, sent {}",
+            "Upload size mismatch: expected {}, sent {}",
             total_size, uploaded
         );
         emit_failed(uploaded, total_size, err.clone());
         return Err(err);
     }
 
-    if let Err(e) = remote.flush().await {
-        let err = format!("Flush Error: {}", e);
+    if let Err(error) = remote.shutdown().await {
+        let error = format!("Shutdown Error: {}", error);
         let _ = sftp.remove_file(&temp_path).await;
-        emit_failed(uploaded, total_size, err.clone());
-        return Err(err);
-    }
-    if let Err(e) = remote.shutdown().await {
-        let err = format!("Shutdown Error: {}", e);
-        let _ = sftp.remove_file(&temp_path).await;
-        emit_failed(uploaded, total_size, err.clone());
-        return Err(err);
+        emit_failed(uploaded, total_size, error.clone());
+        return Err(error);
     }
     drop(remote);
+
+    let elapsed = data_started_at.elapsed().as_secs_f64();
+    connection_log::append(
+        &session_id,
+        format!(
+            "sftp upload data bytes={} elapsed_ms={} rate_mib_s={:.2} write_window={} ack_drained=true",
+            uploaded,
+            data_started_at.elapsed().as_millis(),
+            if elapsed > 0.0 {
+                uploaded as f64 / 1024.0 / 1024.0 / elapsed
+            } else {
+                0.0
+            },
+            SFTP_MAX_CONCURRENT_WRITES,
+        ),
+    );
+
+    let finalizing_started_at = std::time::Instant::now();
+    let _ = window.emit(
+        "sftp-progress",
+        ProgressPayload {
+            session_id: session_id.clone(),
+            id: req_id.clone(),
+            direction: "upload".to_string(),
+            current: uploaded,
+            total: total_size,
+            percent: if total_size > 0 { 100 } else { 0 },
+            status: "finalizing".to_string(),
+            error: None,
+        },
+    );
+
+    let mut durable_remote = match sftp.open_with_flags(&temp_path, OpenFlags::WRITE).await {
+        Ok(file) => file,
+        Err(error) => {
+            let error = format!("Finalize Open Error: {}", error);
+            let _ = sftp.remove_file(&temp_path).await;
+            emit_failed(uploaded, total_size, error.clone());
+            return Err(error);
+        }
+    };
+    if let Err(error) = durable_remote.flush().await {
+        let error = format!("Flush Error: {}", error);
+        let _ = sftp.remove_file(&temp_path).await;
+        emit_failed(uploaded, total_size, error.clone());
+        return Err(error);
+    }
+    if let Err(error) = durable_remote.shutdown().await {
+        let error = format!("Shutdown Error: {}", error);
+        let _ = sftp.remove_file(&temp_path).await;
+        emit_failed(uploaded, total_size, error.clone());
+        return Err(error);
+    }
 
     if cancel.load(Ordering::Relaxed) {
         let _ = sftp.remove_file(&temp_path).await;
@@ -3092,7 +3872,7 @@ pub async fn sftp_upload_file_legacy(
         }
     };
     // Only strictly rollback if the server definitely reports an unexpected non-zero size mismatch
-    if final_size != total_size && total_size > 0 && final_size > 0 {
+    if final_size != total_size {
         if had_original {
             let _ = sftp.remove_file(&remote_path).await;
             let _ = sftp.rename(&backup_path, &remote_path).await;
@@ -3181,6 +3961,14 @@ pub async fn sftp_upload_file_legacy(
         let _ = sftp.remove_file(&backup_path).await;
     }
 
+    connection_log::append(
+        &session_id,
+        format!(
+            "sftp upload finalizing elapsed_ms={}",
+            finalizing_started_at.elapsed().as_millis()
+        ),
+    );
+
     // Final success event
     let final_percent = if total_size > 0 { 100 } else { 0 };
     let _ = window.emit(
@@ -3229,26 +4017,34 @@ async fn pipelined_sftp_upload<
     remote: &mut RemoteWriter,
     cancel: &Arc<AtomicBool>,
 ) -> Result<u64, String> {
-    let (tx, mut rx) =
+    let (filled_tx, mut filled_rx) =
         tokio::sync::mpsc::channel::<Result<Vec<u8>, String>>(SFTP_TRANSFER_CHANNEL_SIZE);
+    let (free_tx, mut free_rx) = tokio::sync::mpsc::channel::<Vec<u8>>(SFTP_TRANSFER_CHANNEL_SIZE);
+    for _ in 0..SFTP_TRANSFER_CHANNEL_SIZE {
+        free_tx
+            .try_send(vec![0u8; SFTP_TRANSFER_BUFFER_SIZE])
+            .map_err(|_| "Upload buffer pool initialization failed".to_string())?;
+    }
     let read_cancel = cancel.clone();
 
     let reader = tokio::spawn(async move {
-        let mut buffer = vec![0u8; SFTP_TRANSFER_BUFFER_SIZE];
-        loop {
+        while let Some(mut buffer) = free_rx.recv().await {
             if read_cancel.load(Ordering::Relaxed) {
-                let _ = tx.send(Err("cancelled".into())).await;
+                let _ = filled_tx.send(Err("cancelled".into())).await;
                 return;
             }
             match local.read(&mut buffer).await {
                 Ok(0) => return,
                 Ok(n) => {
-                    if tx.send(Ok(buffer[..n].to_vec())).await.is_err() {
+                    buffer.truncate(n);
+                    if filled_tx.send(Ok(buffer)).await.is_err() {
                         return;
                     }
                 }
                 Err(e) => {
-                    let _ = tx.send(Err(format!("Local Read Error: {}", e))).await;
+                    let _ = filled_tx
+                        .send(Err(format!("Local Read Error: {}", e)))
+                        .await;
                     return;
                 }
             }
@@ -3278,10 +4074,12 @@ async fn pipelined_sftp_upload<
         );
     };
 
-    while let Some(chunk_result) = rx.recv().await {
-        let chunk = chunk_result.map_err(|e| {
-            emit_failed(uploaded, total_size, e.clone());
-            e
+    while let Some(chunk_result) = filled_rx.recv().await {
+        let mut chunk = chunk_result.map_err(|error| {
+            if error != "cancelled" {
+                emit_failed(uploaded, total_size, error.clone());
+            }
+            error
         })?;
         let n = chunk.len();
         remote.write_all(&chunk).await.map_err(|e| {
@@ -3290,6 +4088,10 @@ async fn pipelined_sftp_upload<
             err
         })?;
         uploaded += u64::try_from(n).map_err(|_| "Read size conversion error".to_string())?;
+        chunk.resize(SFTP_TRANSFER_BUFFER_SIZE, 0);
+        // The reader drops the free-buffer receiver after a normal EOF. Returning the
+        // final buffer can therefore fail even though every byte was written successfully.
+        let _ = free_tx.send(chunk).await;
 
         if should_emit_transfer_progress(&last_emit, uploaded.saturating_sub(last_emit_bytes)) {
             let _ = window.emit(
@@ -3314,7 +4116,11 @@ async fn pipelined_sftp_upload<
         }
     }
 
-    let _ = reader.await;
+    if let Err(error) = reader.await {
+        let error = format!("Upload reader task failed: {}", error);
+        emit_failed(uploaded, total_size, error.clone());
+        return Err(error);
+    }
     Ok(uploaded)
 }
 
@@ -3566,4 +4372,64 @@ pub async fn sftp_stat(
     path: String,
 ) -> Result<FileEntry, String> {
     supervisor.stat_sftp(session_id, path).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cas_token_uses_exact_remote_bytes() {
+        assert_ne!(build_text_cas_token(b"a\n"), build_text_cas_token(b"a\r\n"));
+    }
+
+    #[test]
+    fn utf8_bom_and_crlf_round_trip_without_format_drift() {
+        let original = b"\xef\xbb\xbfkey=value\r\nnext=line\r\n";
+        let decoded = decode_editable_text(original).expect("decode UTF-8 BOM text");
+
+        assert_eq!(decoded.content, "key=value\nnext=line\n");
+        assert_eq!(decoded.encoding, "utf-8-bom");
+        assert_eq!(decoded.line_ending, "crlf");
+
+        let encoded = encode_editable_text(&decoded.content, decoded.encoding, decoded.line_ending)
+            .expect("encode UTF-8 BOM text");
+        assert_eq!(encoded.bytes, original);
+    }
+
+    #[test]
+    fn utf16le_round_trip_preserves_bom_and_line_endings() {
+        let encoded = encode_editable_text("标题\n正文\n", "utf-16le", "crlf")
+            .expect("encode UTF-16 LE text");
+        let decoded = decode_editable_text(&encoded.bytes).expect("decode UTF-16 LE text");
+
+        assert_eq!(decoded.content, "标题\n正文\n");
+        assert_eq!(decoded.encoding, "utf-16le");
+        assert_eq!(decoded.line_ending, "crlf");
+    }
+
+    #[test]
+    fn gbk_round_trip_preserves_chinese_text() {
+        let encoded =
+            encode_editable_text("中文配置=启用\n", "gbk", "lf").expect("encode GBK text");
+        let decoded = decode_editable_text(&encoded.bytes).expect("decode GBK text");
+
+        assert_eq!(decoded.content, "中文配置=启用\n");
+        assert_eq!(decoded.encoding, "gbk");
+        assert_eq!(decoded.line_ending, "lf");
+    }
+
+    #[test]
+    fn backend_file_type_mapping_is_authoritative() {
+        assert_eq!(
+            text_language_for_path("/opt/app/application.properties"),
+            Some("ini")
+        );
+        assert_eq!(text_language_for_path("/opt/app/Dockerfile"), Some("shell"));
+        assert_eq!(
+            text_language_for_path("/opt/app/.env.production"),
+            Some("shell")
+        );
+        assert_eq!(text_language_for_path("/opt/app/release.jar"), None);
+    }
 }

@@ -64,6 +64,7 @@ const LANG_TO_ACE_MODE = {
   h: 'ace/mode/c_cpp',
   hpp: 'ace/mode/c_cpp',
   hxx: 'ace/mode/c_cpp',
+  go: 'ace/mode/golang',
   markdown: 'ace/mode/markdown',
   ruby: 'ace/mode/ruby',
   graphql: 'ace/mode/graphqlschema',
@@ -80,8 +81,7 @@ function langToAceMode(lang) {
 const props = defineProps({
   modelValue: String,
   language: { type: String, default: 'plaintext' },
-  readonly: { type: Boolean, default: false },
-  largeFile: { type: Boolean, default: false }
+  readonly: { type: Boolean, default: false }
 });
 
 const emit = defineEmits(['ready', 'dirty-change', 'cursor-change', 'save']);
@@ -105,13 +105,37 @@ let _resizeObs = null;
 let _stopThemeWatch = null;
 let _suppressChange = false;
 let _dirty = false;
+let _findDebounceTimer = null;
+let _findCountTimer = null;
+let _findCountGeneration = 0;
+let _resizeFrame = null;
+let _lastCursorLine = 0;
+let _lastCursorColumn = 0;
+const FIND_INPUT_DEBOUNCE_MS = 150;
+const FIND_DOCUMENT_IDLE_MS = 250;
+const FIND_COUNT_SLICE_BUDGET_MS = 4;
+const FIND_COUNT_MAX_ROWS_PER_SLICE = 512;
+const FIND_REGEX_MAX_LINE_LENGTH = 250_000;
 
 function emitCursorPosition() {
   if (!editorInstance) return;
   const position = editorInstance.getCursorPosition();
+  const line = Number(position?.row || 0) + 1;
+  const column = Number(position?.column || 0) + 1;
+  if (line === _lastCursorLine && column === _lastCursorColumn) return;
+  _lastCursorLine = line;
+  _lastCursorColumn = column;
   emit('cursor-change', {
-    line: Number(position?.row || 0) + 1,
-    column: Number(position?.column || 0) + 1
+    line,
+    column
+  });
+}
+
+function scheduleEditorResize() {
+  if (!editorInstance || _resizeFrame !== null) return;
+  _resizeFrame = requestAnimationFrame(() => {
+    _resizeFrame = null;
+    editorInstance?.resize();
   });
 }
 
@@ -123,13 +147,12 @@ function setDirty(nextDirty) {
 
 function applyPerformanceOptions() {
   if (!editorInstance) return;
-  const richRendering = !props.largeFile;
   editorInstance.setOptions({
     useWorker: false,
-    highlightActiveLine: !props.largeFile,
-    highlightSelectedWord: !props.largeFile,
-    displayIndentGuides: !props.largeFile,
-    showFoldWidgets: !props.largeFile,
+    highlightActiveLine: true,
+    highlightSelectedWord: true,
+    displayIndentGuides: true,
+    showFoldWidgets: true,
     animatedScroll: false,
     enableBasicAutocompletion: false,
     enableLiveAutocompletion: false,
@@ -137,7 +160,7 @@ function applyPerformanceOptions() {
     showPrintMargin: false,
     scrollPastEnd: 0,
     fadeFoldWidgets: false,
-    behavioursEnabled: richRendering,
+    behavioursEnabled: true,
   });
   editorInstance.renderer?.setShowGutter(true);
 }
@@ -157,40 +180,112 @@ function searchOptions(backwards = false) {
   };
 }
 
-function updateFindCount() {
+function cancelFindCount() {
+  _findCountGeneration += 1;
+  if (_findCountTimer) {
+    clearTimeout(_findCountTimer);
+    _findCountTimer = null;
+  }
+}
+
+function createFindPattern() {
   const needle = findQuery.value;
-  if (!editorInstance || !needle) {
+  const source = findOptions.regExp ? needle : escapeRegExp(needle);
+  const boundedSource = findOptions.wholeWord ? `\\b(?:${source})\\b` : source;
+  const flags = findOptions.caseSensitive ? 'g' : 'gi';
+  return new RegExp(boundedSource, flags);
+}
+
+function startExactFindCount() {
+  cancelFindCount();
+  if (!editorInstance || !findQuery.value) {
     findCountLabel.value = '0 个结果';
     return;
   }
 
-  const content = editorInstance.getValue();
+  let pattern;
   try {
-    const source = findOptions.regExp ? needle : escapeRegExp(needle);
-    const boundedSource = findOptions.wholeWord ? `\\b(?:${source})\\b` : source;
-    const flags = findOptions.caseSensitive ? 'g' : 'gi';
-    const pattern = new RegExp(boundedSource, flags);
-    let count = 0;
-    let match = pattern.exec(content);
-    while (match) {
-      count += 1;
-      if (match[0] === '') pattern.lastIndex += 1;
-      match = pattern.exec(content);
+    pattern = createFindPattern();
+  } catch {
+    findCountLabel.value = '表达式无效';
+    return;
+  }
+
+  const generation = _findCountGeneration;
+  const session = editorInstance.getSession();
+  const totalRows = session.getLength();
+  let row = 0;
+  let count = 0;
+  findCountLabel.value = '统计中…';
+
+  const countSlice = () => {
+    if (generation !== _findCountGeneration || !editorInstance) return;
+    const startedAt = performance.now();
+    let rowsProcessed = 0;
+    while (
+      row < totalRows
+      && rowsProcessed < FIND_COUNT_MAX_ROWS_PER_SLICE
+      && performance.now() - startedAt < FIND_COUNT_SLICE_BUDGET_MS
+    ) {
+      const line = session.getLine(row) || '';
+      if (findOptions.regExp && line.length > FIND_REGEX_MAX_LINE_LENGTH) {
+        findCountLabel.value = '结果数未统计';
+        return;
+      }
+      pattern.lastIndex = 0;
+      let match = pattern.exec(line);
+      while (match) {
+        count += 1;
+        if (match[0] === '') pattern.lastIndex += 1;
+        match = pattern.exec(line);
+      }
+      row += 1;
+      rowsProcessed += 1;
     }
+
+    if (row < totalRows) {
+      _findCountTimer = setTimeout(countSlice, 0);
+      return;
+    }
+    _findCountTimer = null;
     findCountLabel.value = count > 0 ? `${count} 个结果` : '无结果';
+  };
+  _findCountTimer = setTimeout(countSlice, 0);
+}
+
+function performFind(backwards = false, navigate = true) {
+  if (!editorInstance || !findQuery.value) {
+    findCountLabel.value = '0 个结果';
+    return;
+  }
+  try {
+    createFindPattern();
+    if (navigate) editorInstance.find(findQuery.value, searchOptions(backwards));
+    startExactFindCount();
   } catch {
     findCountLabel.value = '表达式无效';
   }
 }
 
-function runFind(backwards = false) {
-  updateFindCount();
-  if (!editorInstance || !findQuery.value || findCountLabel.value === '表达式无效') return;
+function scheduleFind(options = {}) {
+  const { backwards = false, navigate = true, delay = FIND_INPUT_DEBOUNCE_MS } = options;
+  if (_findDebounceTimer) clearTimeout(_findDebounceTimer);
+  cancelFindCount();
+  if (!findQuery.value) {
+    findCountLabel.value = '0 个结果';
+    return;
+  }
   try {
-    editorInstance.find(findQuery.value, searchOptions(backwards));
+    createFindPattern();
+    findCountLabel.value = '等待查找…';
   } catch {
     findCountLabel.value = '表达式无效';
+    return;
   }
+  _findDebounceTimer = setTimeout(() => {
+    _findDebounceTimer = null;
+    performFind(backwards, navigate);
+  }, delay);
 }
 
 function openFindBar(options = {}) {
@@ -202,7 +297,7 @@ function openFindBar(options = {}) {
     findQuery.value = selectedText;
   }
   nextTick(() => {
-    editorInstance?.resize();
+    scheduleEditorResize();
     if (replaceVisible.value && options.replace) {
       replaceInput.value?.focus();
       replaceInput.value?.select();
@@ -210,15 +305,18 @@ function openFindBar(options = {}) {
       findInput.value?.focus();
       findInput.value?.select();
     }
-    runFind(false);
+    scheduleFind({ navigate: true, delay: 0 });
   });
 }
 
 function closeFindBar() {
+  if (_findDebounceTimer) clearTimeout(_findDebounceTimer);
+  _findDebounceTimer = null;
+  cancelFindCount();
   findVisible.value = false;
   replaceVisible.value = false;
   nextTick(() => {
-    editorInstance?.resize();
+    scheduleEditorResize();
     editorInstance?.focus();
   });
 }
@@ -227,7 +325,6 @@ function findNextMatch() {
   if (!editorInstance || !findQuery.value) return;
   try {
     editorInstance.findNext();
-    updateFindCount();
   } catch {
     findCountLabel.value = '表达式无效';
   }
@@ -237,7 +334,6 @@ function findPreviousMatch() {
   if (!editorInstance || !findQuery.value) return;
   try {
     editorInstance.findPrevious();
-    updateFindCount();
   } catch {
     findCountLabel.value = '表达式无效';
   }
@@ -247,8 +343,7 @@ function replaceCurrentMatch() {
   if (props.readonly || !editorInstance || !findQuery.value) return;
   try {
     editorInstance.replace(replaceText.value);
-    setDirty(true);
-    runFind(false);
+    scheduleFind({ navigate: false, delay: 0 });
   } catch {
     findCountLabel.value = '表达式无效';
   }
@@ -258,8 +353,7 @@ function replaceAllMatches() {
   if (props.readonly || !editorInstance || !findQuery.value) return;
   try {
     editorInstance.replaceAll(replaceText.value);
-    setDirty(true);
-    updateFindCount();
+    scheduleFind({ navigate: false, delay: 0 });
   } catch {
     findCountLabel.value = '表达式无效';
   }
@@ -267,13 +361,13 @@ function replaceAllMatches() {
 
 function toggleFindOption(option) {
   findOptions[option] = !findOptions[option];
-  runFind(false);
+  scheduleFind({ navigate: true, delay: 0 });
 }
 
 function toggleReplaceBar() {
   replaceVisible.value = !replaceVisible.value;
   nextTick(() => {
-    editorInstance?.resize();
+    scheduleEditorResize();
     if (replaceVisible.value) {
       replaceInput.value?.focus();
       replaceInput.value?.select();
@@ -300,7 +394,10 @@ function setValue(value = '', options = {}) {
   _suppressChange = true;
   editorInstance.setValue(value || '', -1);
   _suppressChange = false;
-  if (options.clean) setDirty(false);
+  if (options.clean) {
+    editorInstance.getSession().getUndoManager()?.markClean?.();
+    setDirty(false);
+  }
   emitCursorPosition();
 }
 
@@ -309,6 +406,7 @@ function markClean(value) {
     setValue(value, { clean: true });
     return;
   }
+  editorInstance?.getSession().getUndoManager()?.markClean?.();
   setDirty(false);
 }
 
@@ -317,7 +415,7 @@ function focus() {
 }
 
 function resize() {
-  editorInstance?.resize();
+  scheduleEditorResize();
 }
 
 defineExpose({
@@ -331,9 +429,9 @@ defineExpose({
 onMounted(async () => {
   if (!editorContainer.value) return;
 
-  const requestedMode = langToAceMode(props.language);
-  const mode = props.largeFile ? 'ace/mode/text' : requestedMode;
+  const mode = langToAceMode(props.language);
   await ensureModeLoaded(mode);
+  if (!editorContainer.value) return;
 
   editorInstance = ace.edit(editorContainer.value, {
     value: props.modelValue || '',
@@ -349,7 +447,7 @@ onMounted(async () => {
 
   applyPerformanceOptions();
 
-  _resizeObs = new ResizeObserver(() => editorInstance?.resize());
+  _resizeObs = new ResizeObserver(scheduleEditorResize);
   _resizeObs.observe(editorContainer.value);
 
   editorInstance.commands.removeCommand('gotoline');
@@ -373,7 +471,11 @@ onMounted(async () => {
 
   editorInstance.on('change', () => {
     if (_suppressChange) return;
-    setDirty(true);
+    const undoManager = editorInstance?.getSession().getUndoManager();
+    setDirty(!(undoManager?.isClean?.() ?? false));
+    if (findVisible.value && findQuery.value) {
+      scheduleFind({ navigate: false, delay: FIND_DOCUMENT_IDLE_MS });
+    }
   });
   editorInstance.selection.on('changeCursor', emitCursorPosition);
   editorInstance.selection.on('changeSelection', emitCursorPosition);
@@ -388,10 +490,15 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  if (_findDebounceTimer) clearTimeout(_findDebounceTimer);
+  _findDebounceTimer = null;
+  cancelFindCount();
   _stopThemeWatch?.();
   _stopThemeWatch = null;
   _resizeObs?.disconnect();
   _resizeObs = null;
+  if (_resizeFrame !== null) cancelAnimationFrame(_resizeFrame);
+  _resizeFrame = null;
   editorInstance?.destroy();
   editorInstance?.container?.remove();
   editorInstance = null;
@@ -406,8 +513,7 @@ watch(() => props.modelValue, (value) => {
 
 watch(() => props.language, async (language) => {
   if (!editorInstance) return;
-  const requestedMode = langToAceMode(language);
-  const mode = props.largeFile ? 'ace/mode/text' : requestedMode;
+  const mode = langToAceMode(language);
   await ensureModeLoaded(mode);
   editorInstance.getSession().setMode(mode);
 });
@@ -416,14 +522,6 @@ watch(() => props.readonly, (readonly) => {
   editorInstance?.setReadOnly(readonly);
 });
 
-watch(() => props.largeFile, async () => {
-  if (!editorInstance) return;
-  const requestedMode = langToAceMode(props.language);
-  const mode = props.largeFile ? 'ace/mode/text' : requestedMode;
-  await ensureModeLoaded(mode);
-  editorInstance.getSession().setMode(mode);
-  applyPerformanceOptions();
-});
 </script>
 
 <template>
@@ -432,7 +530,7 @@ watch(() => props.largeFile, async () => {
       <div class="editor-find-row editor-find-main-row">
         <div class="find-input-shell search-input-shell">
           <input ref="findInput" v-model="findQuery" class="find-input" type="text" placeholder="查找"
-            @input="() => runFind(false)" @keydown.enter.prevent="handleFindEnter"
+            @input="() => scheduleFind()" @keydown.enter.prevent="handleFindEnter"
             @keydown.esc.prevent="closeFindBar" />
           <span class="find-count">{{ findCountLabel }}</span>
         </div>

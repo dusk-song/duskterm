@@ -16,7 +16,7 @@ import {
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
 import { ChevronDown, ChevronUp, FolderOpen, LoaderCircle, Pause, Trash2, X } from '@lucide/vue';
 import { storeToRefs } from 'pinia';
-import { computed, nextTick, ref } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 
 defineProps({ expanded: Boolean });
 const emit = defineEmits(['toggle', 'close']);
@@ -26,6 +26,36 @@ const sshStore = useSshStore();
 const { dockStatus: status } = storeToRefs(transferStore);
 const activeFilter = ref('all');
 const locatingTaskKey = ref('');
+const clock = ref(typeof performance !== 'undefined' ? performance.now() : Date.now());
+let clockTimer = null;
+let stopClockWatch = null;
+
+const needsLiveClock = () => status.value.items.some((item) => (
+  (Number.isFinite(item.transferStartedAt) && !Number.isFinite(item.transferElapsedMs))
+  || (Number.isFinite(item.finalizingStartedAt) && !Number.isFinite(item.finalizingElapsedMs))
+));
+
+const stopClock = () => {
+  if (clockTimer === null) return;
+  window.clearInterval(clockTimer);
+  clockTimer = null;
+};
+
+onMounted(() => {
+  stopClockWatch = watch(needsLiveClock, (active) => {
+    stopClock();
+    if (!active) return;
+    clock.value = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    clockTimer = window.setInterval(() => {
+      clock.value = typeof performance !== 'undefined' ? performance.now() : Date.now();
+    }, 250);
+  }, { immediate: true });
+});
+
+onUnmounted(() => {
+  stopClockWatch?.();
+  stopClock();
+});
 
 const statusOrder = {
   uploading: 0,
@@ -64,6 +94,22 @@ const formatEta = (seconds) => {
   const rest = total % 60;
   if (hours) return `${hours}:${String(minutes).padStart(2, '0')}:${String(rest).padStart(2, '0')}`;
   return minutes ? `${minutes}:${String(rest).padStart(2, '0')}` : `${rest}s`;
+};
+const formatDuration = (milliseconds) => {
+  if (!Number.isFinite(milliseconds)) return '--';
+  const seconds = Math.max(0, milliseconds) / 1000;
+  if (seconds < 10) return `${seconds.toFixed(1)}s`;
+  return formatEta(seconds);
+};
+const transferElapsed = (item) => {
+  if (Number.isFinite(item.transferElapsedMs)) return item.transferElapsedMs;
+  if (Number.isFinite(item.transferStartedAt)) return Math.max(0, clock.value - item.transferStartedAt);
+  return null;
+};
+const finalizingElapsed = (item) => {
+  if (Number.isFinite(item.finalizingElapsedMs)) return item.finalizingElapsedMs;
+  if (Number.isFinite(item.finalizingStartedAt)) return Math.max(0, clock.value - item.finalizingStartedAt);
+  return null;
 };
 const formatProgressSize = (item) => (
   `${formatSize(item.loaded)} / ${item.total > 0 ? formatSize(item.total) : '--'}`
@@ -111,7 +157,14 @@ const displayStatusLabel = (item) => (
 
 const secondaryText = (item) => {
   if (item.status === 'failed') return item.error || '传输失败';
-  if (item.status === 'success') return formatSize(item.total || item.loaded);
+  if (item.status === 'success') {
+    const parts = [formatSize(item.total || item.loaded)];
+    const transferMs = transferElapsed(item);
+    const finalizingMs = finalizingElapsed(item);
+    if (Number.isFinite(transferMs)) parts.push(`传输 ${formatDuration(transferMs)}`);
+    if (Number.isFinite(finalizingMs)) parts.push(`完成 ${formatDuration(finalizingMs)}`);
+    return parts.join(' · ');
+  }
   if (item.status === 'cancelled' || item.status === 'skipped') {
     return item.error || statusLabel(item);
   }
@@ -119,9 +172,17 @@ const secondaryText = (item) => {
   if (item.status === 'negotiating') return '正在与远端协商';
 
   const parts = [formatProgressSize(item)];
+  const transferMs = transferElapsed(item);
+  const finalizingMs = finalizingElapsed(item);
+  if (item.status === 'finalizing') {
+    if (Number.isFinite(transferMs)) parts.push(`传输 ${formatDuration(transferMs)}`);
+    if (Number.isFinite(finalizingMs)) parts.push(`完成中 ${formatDuration(finalizingMs)}`);
+    return parts.join(' · ');
+  }
   if (item.status !== 'paused' && Number(item.rate || 0) > 0) {
     parts.push(formatRate(item.rate));
   }
+  if (Number.isFinite(transferMs)) parts.push(`已传输 ${formatDuration(transferMs)}`);
   if (item.status !== 'paused' && Number.isFinite(item.etaSeconds)) {
     parts.push(`剩余 ${formatEta(item.etaSeconds)}`);
   }

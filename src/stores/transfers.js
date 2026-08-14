@@ -3,6 +3,7 @@ import { defineStore } from 'pinia';
 
 const TELEMETRY_WINDOW_MS = 1500;
 const TELEMETRY_MIN_SAMPLE_MS = 150;
+const TELEMETRY_WARMUP_MS = 750;
 const MAX_FINISHED_TASKS = 200;
 const ACTIVE_STATUSES = new Set([
   'waiting',
@@ -13,6 +14,8 @@ const ACTIVE_STATUSES = new Set([
   'cancelling',
 ]);
 const CLEARABLE_STATUSES = new Set(['success', 'cancelled', 'skipped']);
+const DATA_TRANSFER_STATUSES = new Set(['uploading', 'transferring']);
+const TERMINAL_STATUSES = new Set(['success', 'failed', 'cancelled', 'skipped']);
 
 const nowMs = () => (typeof performance !== 'undefined' && typeof performance.now === 'function'
   ? performance.now()
@@ -24,7 +27,7 @@ function updateTelemetry(task, payload) {
   const total = Number(payload.total || 0);
   const stamp = nowMs();
 
-  if (['failed', 'skipped', 'waiting', 'negotiating'].includes(payload.status)) {
+  if (['failed', 'skipped', 'waiting', 'negotiating', 'finalizing'].includes(payload.status)) {
     task.rate = 0;
     task.etaSeconds = null;
     task.telemetrySamples = [{ at: stamp, bytes: current }];
@@ -50,11 +53,44 @@ function updateTelemetry(task, payload) {
   const last = task.telemetrySamples[task.telemetrySamples.length - 1];
   const deltaBytes = Number(last?.bytes || 0) - Number(first?.bytes || 0);
   const deltaMs = Number(last?.at || 0) - Number(first?.at || 0);
-  const measuredRate = deltaBytes > 0 && deltaMs > 0 ? deltaBytes / (deltaMs / 1000) : 0;
-  task.rate = measuredRate > 0 ? measuredRate : (payload.status === 'success' ? Number(task.rate || 0) : 0);
+  const measuredRate = deltaBytes > 0 && deltaMs >= TELEMETRY_WARMUP_MS
+    ? deltaBytes / (deltaMs / 1000)
+    : 0;
+  task.rate = measuredRate > 0
+    ? (Number(task.rate || 0) > 0 ? (Number(task.rate) * 0.65) + (measuredRate * 0.35) : measuredRate)
+    : (payload.status === 'success' ? Number(task.rate || 0) : 0);
   task.etaSeconds = task.rate > 0 && total > current
     ? Math.ceil((total - current) / task.rate)
     : (total > 0 && total <= current ? 0 : null);
+}
+
+function updatePhaseTimings(task, status) {
+  if (!status) return;
+  const stamp = nowMs();
+
+  if (DATA_TRANSFER_STATUSES.has(status) && !Number.isFinite(task.transferStartedAt)) {
+    task.transferStartedAt = stamp;
+  }
+
+  if (status === 'finalizing') {
+    if (!Number.isFinite(task.transferStartedAt)) task.transferStartedAt = stamp;
+    if (!Number.isFinite(task.transferElapsedMs)) {
+      task.transferElapsedMs = Math.max(0, stamp - task.transferStartedAt);
+    }
+    if (!Number.isFinite(task.finalizingStartedAt)) task.finalizingStartedAt = stamp;
+  }
+
+  if (TERMINAL_STATUSES.has(status)) {
+    if (!Number.isFinite(task.transferElapsedMs) && Number.isFinite(task.transferStartedAt)) {
+      const transferEndedAt = Number.isFinite(task.finalizingStartedAt)
+        ? task.finalizingStartedAt
+        : stamp;
+      task.transferElapsedMs = Math.max(0, transferEndedAt - task.transferStartedAt);
+    }
+    if (Number.isFinite(task.finalizingStartedAt) && !Number.isFinite(task.finalizingElapsedMs)) {
+      task.finalizingElapsedMs = Math.max(0, stamp - task.finalizingStartedAt);
+    }
+  }
 }
 
 export const useTransfersStore = defineStore('transfers', () => {
@@ -85,6 +121,10 @@ export const useTransfersStore = defineStore('transfers', () => {
       progress: Number(task.percent || 0),
       rate: Number(task.rate || 0),
       etaSeconds: Number.isFinite(task.etaSeconds) ? Number(task.etaSeconds) : null,
+      transferStartedAt: Number.isFinite(task.transferStartedAt) ? Number(task.transferStartedAt) : null,
+      finalizingStartedAt: Number.isFinite(task.finalizingStartedAt) ? Number(task.finalizingStartedAt) : null,
+      transferElapsedMs: Number.isFinite(task.transferElapsedMs) ? Number(task.transferElapsedMs) : null,
+      finalizingElapsedMs: Number.isFinite(task.finalizingElapsedMs) ? Number(task.finalizingElapsedMs) : null,
       status: task.status,
       phase: task.phase || '',
       terminalRestored: task.terminalRestored,
@@ -136,6 +176,10 @@ export const useTransfersStore = defineStore('transfers', () => {
       rate: 0,
       etaSeconds: null,
       telemetrySamples: [],
+      transferStartedAt: null,
+      finalizingStartedAt: null,
+      transferElapsedMs: null,
+      finalizingElapsedMs: null,
       status: 'waiting',
       phase: 'waiting',
       terminalRestored: protocol !== 'zmodem',
@@ -180,6 +224,7 @@ export const useTransfersStore = defineStore('transfers', () => {
     if (typeof payload.terminalRestored === 'boolean') {
       task.terminalRestored = payload.terminalRestored;
     }
+    updatePhaseTimings(task, payload.status);
     updateTelemetry(task, payload);
 
     if (payload.status === 'failed') {

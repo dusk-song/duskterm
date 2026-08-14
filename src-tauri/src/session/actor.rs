@@ -504,11 +504,10 @@ pub fn spawn_session_actor(
                         (
                             runtime.state.clone(),
                             runtime.handle.sftp.clone(),
-                            runtime.handle.reused_from_ssh,
-                            runtime.handle.connection_config.clone(),
+                            runtime.handle.session.clone(),
+                            runtime.handle.shared_ssh_session.clone(),
                         )
                     });
-                    let pending_sftp_hostkey = runtime_state.security.pending_sftp_hostkey.clone();
                     let transfers = runtime_state.transfers.clone();
                     let cancel = transfers.register_cancel_token(&req_id);
                     let transfer_req_id = req_id.clone();
@@ -518,17 +517,16 @@ pub fn spawn_session_actor(
                         let result = if let Some((
                             runtime_state,
                             sftp_handle,
-                            reused_from_ssh,
-                            connection_config,
+                            client_session,
+                            shared_ssh_session,
                         )) = transfer_runtime
                         {
                             sftp::sftp_download_file_runtime(
                                 window,
                                 &runtime_state,
                                 sftp_handle,
-                                reused_from_ssh,
-                                connection_config,
-                                pending_sftp_hostkey,
+                                client_session,
+                                shared_ssh_session,
                                 cancel,
                                 transfer_session_id,
                                 remote_path,
