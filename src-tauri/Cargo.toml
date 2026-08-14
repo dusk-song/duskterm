@@ -1,6 +1,6 @@
 [package]
 name = "duskterm"
-version = "1.2.1"
+version = "1.2.2"
 description = "跨平台SSH/Telnet/Serial终端，基于Tauri和Rust开发，支持SFTP文件传输"
 authors = ["xiaosong <yushan00514@gmail.com>"]
 edition = "2021"
