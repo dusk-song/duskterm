@@ -99,7 +99,8 @@ const keybindingItems = [
   { key: 'overview', label: '总览模式', placeholder: 'Ctrl+`' },
   { key: 'copySession', label: '复制当前会话', placeholder: 'Ctrl+P' },
   { key: 'toggleLineNumbers', label: '切换行号', placeholder: 'Ctrl+Alt+L' },
-  { key: 'toggleFind', label: '终端搜索', placeholder: 'Ctrl+Shift+F' }
+  { key: 'toggleFind', label: '终端搜索', placeholder: 'Ctrl+Shift+F' },
+  { key: 'selectTerminalSuggestion', label: '选择终端命令建议', placeholder: 'Alt+ArrowDown' }
 ];
 
 const keybindings = ref({ ...defaultKeybindings });

@@ -24,7 +24,8 @@ const PREFERENCE_DEFINITIONS = {
       overview: 'Ctrl+`',
       copySession: 'Ctrl+P',
       toggleLineNumbers: 'Ctrl+Alt+L',
-      toggleFind: 'Ctrl+Shift+F'
+      toggleFind: 'Ctrl+Shift+F',
+      selectTerminalSuggestion: 'Alt+ArrowDown'
     }
   },
   terminalTheme: {

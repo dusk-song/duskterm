@@ -35,6 +35,7 @@ import { useSecurityStore } from '@/stores/security';
 import { useSshStore } from '@/stores/ssh';
 import { useTransfersStore } from '@/stores/transfers';
 import { invokeCommand, listenEvent } from '@/utils/ipc';
+import { getPreferenceDefaults, loadPreference } from '@/utils/preferences';
 import { findMatchedCommandInPayload, matchSensitiveCommand } from '@/utils/sensitiveCommand';
 import { getSessionSyncBadgeState, SYNC_INPUT_CHANNELS_STORAGE_KEY } from '@/utils/syncInputChannels';
 import {
@@ -82,6 +83,25 @@ const QUICK_HINT_PANEL_MAX_HEIGHT_PX = 200;
 const QUICK_HINT_PANEL_MIN_WIDTH_PX = 320;
 const QUICK_HINT_PANEL_MARGIN_PX = 10;
 const QUICK_HINT_PANEL_GAP_PX = 8;
+const defaultKeybindings = getPreferenceDefaults('keybindings');
+const quickHintActivateBinding = ref(defaultKeybindings.selectTerminalSuggestion || 'Alt+ArrowDown');
+const quickHintActivateLabel = computed(() => String(quickHintActivateBinding.value || '')
+  .replace(/ArrowDown/gi, '↓')
+  .replace(/ArrowUp/gi, '↑')
+  .replace(/ArrowLeft/gi, '←')
+  .replace(/ArrowRight/gi, '→'));
+
+const refreshQuickHintActivateBinding = () => {
+  try {
+    const keybindings = loadPreference('keybindings');
+    quickHintActivateBinding.value = String(
+      keybindings.selectTerminalSuggestion ?? defaultKeybindings.selectTerminalSuggestion ?? ''
+    ).trim();
+  } catch (error) {
+    quickHintActivateBinding.value = defaultKeybindings.selectTerminalSuggestion || 'Alt+ArrowDown';
+  }
+};
+refreshQuickHintActivateBinding();
 // --- Security Interceptor ---
 const securityModalVisible = ref(false);
 const blockedCommandContent = ref('');
@@ -104,6 +124,7 @@ const quickHintFocused = ref(false);
 const quickHintPanelRef = ref(null);
 const quickHintPanelStyle = ref({});
 let quickHintDismissedInput = '';
+let quickHintHistoryNavigation = false;
 let pendingKnowledgeUsageId = '';
 const SERIAL_RECEIVE_VISIBLE_KEY_PREFIX = 'serial-receive-visible-v1:';
 const SERIAL_CAPTURE_MAX_CHARS = 5 * 1024 * 1024;
@@ -113,6 +134,7 @@ const knowledgeSensitiveRules = computed(() => commandKnowledgeStore.sensitiveRu
 const resetCurrentInputState = () => {
   currentInputState.value = createTerminalInputState();
   inputLinePrefix = '';
+  quickHintHistoryNavigation = false;
 };
 
 const captureInputLinePrefix = () => {
@@ -1099,7 +1121,7 @@ const scheduleShellCompletionSync = () => {
   shellCompletionSyncTimer = setTimeout(() => {
     shellCompletionSyncTimer = null;
     if (!shellCompletionSyncPending) return;
-    syncInputBufferFromTerminal();
+    syncInputBufferFromTerminal({ refreshHints: !quickHintHistoryNavigation });
     shellCompletionSyncPending = false;
   }, 80);
 };
@@ -1246,6 +1268,10 @@ const collectQuickHintMatchesAsync = async (query, token) => {
 };
 
 const updateQuickHintMatches = async (rawInput) => {
+  if (quickHintHistoryNavigation) {
+    closeQuickHint();
+    return;
+  }
   const query = normalizeQuickHintQuery(rawInput);
   if (!query) {
     closeQuickHint();
@@ -1300,6 +1326,10 @@ const updateQuickHintMatches = async (rawInput) => {
 };
 
 const scheduleQuickHintUpdate = (rawInput) => {
+  if (quickHintHistoryNavigation) {
+    closeQuickHint();
+    return;
+  }
   const input = String(rawInput ?? '');
   if (quickHintDismissedInput) {
     if (input === quickHintDismissedInput) {
@@ -1318,11 +1348,43 @@ const scheduleQuickHintUpdate = (rawInput) => {
   }, resolveQuickHintDebounceMs(query));
 };
 
+const activateQuickHintSelection = async () => {
+  if (isSerialSession.value || securityModalVisible.value) return false;
+
+  quickHintHistoryNavigation = false;
+  quickHintDismissedInput = '';
+  if (quickHintVisible.value && quickHintItems.value.length > 0) {
+    quickHintFocused.value = true;
+    quickHintSelectedIndex.value = Math.min(
+      quickHintSelectedIndex.value,
+      quickHintItems.value.length - 1,
+    );
+    ensureQuickHintItemVisible();
+    return true;
+  }
+
+  captureInputLinePrefix();
+  const synchronizedInput = syncInputBufferFromTerminal({ refreshHints: false });
+  const input = synchronizedInput || currentInputBuffer.value;
+  if (!normalizeQuickHintQuery(input)) return false;
+
+  await updateQuickHintMatches(input);
+  if (!quickHintVisible.value || quickHintItems.value.length === 0) return false;
+  quickHintFocused.value = true;
+  quickHintSelectedIndex.value = Math.min(
+    quickHintSelectedIndex.value,
+    quickHintItems.value.length - 1,
+  );
+  ensureQuickHintItemVisible();
+  return true;
+};
+
 const replaceCurrentTerminalLine = (command) => {
   const text = String(command || '').trim();
   if (!text) return null;
 
   const currentInput = currentInputBuffer.value;
+  quickHintHistoryNavigation = false;
   quickHintDismissedInput = text;
   closeQuickHint();
   const sent = forwardTerminalInput(buildTerminalLineReplacementPayload(text, currentInput));
@@ -1555,6 +1617,8 @@ let searchInputDebounceTimer = null;
 let searchOutputIdleTimer = null;
 let searchCountTimer = null;
 let searchCountTaskToken = 0;
+let searchNavigationDirection = 0;
+let searchInitialPositionPending = false;
 let searchOutputHot = false;
 let searchResultsDisposable = null;
 let lastTerminalOutputAt = 0;
@@ -1581,6 +1645,23 @@ const searchCountLabel = computed(() => {
   return `${current}/${count}`;
 });
 
+const moveSearchCurrentMatch = (direction) => {
+  const current = Math.max(0, Number(searchCurrentMatch.value || 0));
+  const total = searchExactCountReady.value
+    ? Math.max(0, Number(searchMatchCount.value || 0))
+    : 0;
+
+  if (direction > 0) {
+    if (current <= 0) return 1;
+    return total > 0 && current >= total ? 1 : current + 1;
+  }
+  if (direction < 0) {
+    if (current > 1) return current - 1;
+    return total > 0 ? total : 0;
+  }
+  return current;
+};
+
 const cancelExactSearchCount = () => {
   searchCountTaskToken += 1;
   if (searchCountTimer) {
@@ -1595,6 +1676,8 @@ const resetSearchStats = () => {
   cancelExactSearchCount();
   searchMatchCount.value = 0;
   searchCurrentMatch.value = 0;
+  searchNavigationDirection = 0;
+  searchInitialPositionPending = false;
   searchResultsPending.value = false;
 };
 
@@ -1659,7 +1742,7 @@ const isWholeWordMatch = (text, index, length) => (
   && (index + length === text.length || SEARCH_WORD_SEPARATORS.includes(text[index + length]))
 );
 
-const countSearchMatchesInText = (text, regex) => {
+const countSearchMatchesInText = (text, regex, maxMatchStart = Number.POSITIVE_INFINITY) => {
   let count = 0;
   let offset = 0;
 
@@ -1667,6 +1750,7 @@ const countSearchMatchesInText = (text, regex) => {
     regex.lastIndex = offset;
     const match = regex.exec(text);
     if (!match) break;
+    if (match.index > maxMatchStart) break;
 
     const matchLength = match[0].length;
     if (matchLength > 0
@@ -1680,9 +1764,11 @@ const countSearchMatchesInText = (text, regex) => {
   return count;
 };
 
-const readLogicalBufferLine = (buffer, startIndex, bufferLength) => {
+const readLogicalBufferLine = (buffer, startIndex, bufferLength, selectedPosition = null) => {
   const parts = [];
   let index = startIndex;
+  let textLength = 0;
+  let selectionOffset = null;
 
   while (index < bufferLength) {
     const line = buffer.getLine(index);
@@ -1698,12 +1784,19 @@ const readLogicalBufferLine = (buffer, startIndex, bufferLength) => {
       }
     }
 
+    if (selectedPosition?.y === index && line) {
+      const selectedColumn = Math.max(0, Math.min(Number(selectedPosition.x || 0), line.length));
+      const rowPrefix = line.translateToString(false, 0, selectedColumn);
+      selectionOffset = textLength + rowPrefix.length;
+    }
+
     parts.push(text);
+    textLength += text.length;
     index += 1;
     if (!wrapsToNext) break;
   }
 
-  return { text: parts.join(''), nextIndex: index };
+  return { text: parts.join(''), nextIndex: index, selectionOffset };
 };
 
 function startExactSearchCount() {
@@ -1714,8 +1807,12 @@ function startExactSearchCount() {
 
   const taskToken = searchCountTaskToken;
   const bufferLength = buffer.length;
+  const selectedPosition = searchInitialPositionPending
+    ? term?.getSelectionPosition?.()?.start || null
+    : null;
   let lineIndex = 0;
   let matchCount = 0;
+  let selectedMatchIndex = 0;
   searchCountPending.value = true;
 
   const countSlice = () => {
@@ -1727,7 +1824,14 @@ function startExactSearchCount() {
     while (lineIndex < bufferLength
       && processedLines < SEARCH_COUNT_MAX_LINES_PER_SLICE
       && performance.now() - sliceStartedAt < SEARCH_COUNT_SLICE_BUDGET_MS) {
-      const logicalLine = readLogicalBufferLine(buffer, lineIndex, bufferLength);
+      const logicalLine = readLogicalBufferLine(buffer, lineIndex, bufferLength, selectedPosition);
+      if (logicalLine.selectionOffset !== null) {
+        selectedMatchIndex = matchCount + countSearchMatchesInText(
+          logicalLine.text,
+          regex,
+          logicalLine.selectionOffset,
+        );
+      }
       matchCount += countSearchMatchesInText(logicalLine.text, regex);
       processedLines += Math.max(1, logicalLine.nextIndex - lineIndex);
       lineIndex = logicalLine.nextIndex;
@@ -1743,6 +1847,10 @@ function startExactSearchCount() {
     searchCountPending.value = false;
     searchExactCountReady.value = true;
     if (matchCount === 0) searchCurrentMatch.value = 0;
+    if (searchInitialPositionPending) {
+      if (selectedMatchIndex > 0) searchCurrentMatch.value = selectedMatchIndex;
+      searchInitialPositionPending = false;
+    }
   };
 
   searchCountTimer = setTimeout(countSlice, 0);
@@ -2323,10 +2431,17 @@ function findNext() {
   if (withDecorations && searchResultsPending.value) {
     searchAddon.clearDecorations();
   }
-  const found = searchAddon.findNext(searchText.value, getSearchFindOptions(false, withDecorations));
+  let found = false;
+  searchInitialPositionPending = false;
+  searchNavigationDirection = 1;
+  try {
+    found = searchAddon.findNext(searchText.value, getSearchFindOptions(false, withDecorations));
+  } finally {
+    searchNavigationDirection = 0;
+  }
   if (!withDecorations) {
     searchResultsPending.value = true;
-    searchCurrentMatch.value = found ? Math.max(1, searchCurrentMatch.value) : 0;
+    searchCurrentMatch.value = found ? moveSearchCurrentMatch(1) : 0;
     scheduleSearchIdleRefresh();
   } else if (!searchExactCountReady.value && !searchCountPending.value) {
     startExactSearchCount();
@@ -2340,10 +2455,17 @@ function findPrev() {
   if (withDecorations && searchResultsPending.value) {
     searchAddon.clearDecorations();
   }
-  const found = searchAddon.findPrevious(searchText.value, getSearchFindOptions(false, withDecorations));
+  let found = false;
+  searchInitialPositionPending = false;
+  searchNavigationDirection = -1;
+  try {
+    found = searchAddon.findPrevious(searchText.value, getSearchFindOptions(false, withDecorations));
+  } finally {
+    searchNavigationDirection = 0;
+  }
   if (!withDecorations) {
     searchResultsPending.value = true;
-    searchCurrentMatch.value = found ? Math.max(1, searchCurrentMatch.value) : 0;
+    searchCurrentMatch.value = found ? moveSearchCurrentMatch(-1) : 0;
     scheduleSearchIdleRefresh();
   } else if (!searchExactCountReady.value && !searchCountPending.value) {
     startExactSearchCount();
@@ -2387,8 +2509,38 @@ function isTerminalFocused() {
   return !!activeElement && !!terminalContainer.value?.contains(activeElement);
 }
 
+function normalizeTerminalShortcutEvent(event) {
+  const parts = [];
+  if (event.ctrlKey) parts.push('Ctrl');
+  if (event.shiftKey) parts.push('Shift');
+  if (event.altKey) parts.push('Alt');
+  if (event.metaKey) parts.push('Meta');
+
+  if (['Control', 'Shift', 'Alt', 'Meta'].includes(event.key)) return '';
+  let key = event.key === ' ' ? 'Space' : String(event.key || '');
+  if (key === 'Esc') key = 'Escape';
+  if (key.length === 1) key = key.toUpperCase();
+  parts.push(key);
+  return parts.join('+');
+}
+
+function matchesTerminalShortcut(event, binding) {
+  const expected = String(binding || '').trim().replace(/\s+/g, '').toLowerCase();
+  if (!expected) return false;
+  return normalizeTerminalShortcutEvent(event).replace(/\s+/g, '').toLowerCase() === expected;
+}
+
 function handleTerminalCustomKeyEvent(event) {
   if (event.type !== 'keydown' || event.isComposing) return true;
+
+  if (matchesTerminalShortcut(event, quickHintActivateBinding.value)) {
+    event.preventDefault();
+    event.stopPropagation();
+    void activateQuickHintSelection().catch((error) => {
+      console.error('Activate terminal suggestion failed:', error);
+    });
+    return false;
+  }
 
   const key = String(event.key || '').toLowerCase();
   if (event.ctrlKey && event.shiftKey && key === 'c') {
@@ -2887,51 +3039,35 @@ onMounted(async () => {
           return;
         }
 
-        if (quickHintVisible.value) {
-          // Arrow Up
+        if (quickHintVisible.value && quickHintFocused.value) {
           if (data === '\x1b[A') {
-            if (!quickHintFocused.value) {
-              quickHintFocused.value = true;
-              quickHintSelectedIndex.value = quickHintItems.value.length - 1;
-              ensureQuickHintItemVisible();
-            } else if (quickHintSelectedIndex.value === 0) {
-              quickHintFocused.value = false;
-            } else {
-              moveQuickHintSelection(-1);
-            }
+            moveQuickHintSelection(-1);
             return;
           }
-          // Arrow Down
           if (data === '\x1b[B') {
-            if (!quickHintFocused.value) {
-              quickHintFocused.value = true;
-              quickHintSelectedIndex.value = 0;
-              ensureQuickHintItemVisible();
-            } else if (quickHintSelectedIndex.value >= quickHintItems.value.length - 1) {
-              // At bottom: stay, don't wrap
-            } else {
-              moveQuickHintSelection(1);
-            }
+            moveQuickHintSelection(1);
             return;
           }
-          // Escape
           if (data === '\x1b') {
             closeQuickHint();
             return;
           }
-          // Enter: apply only when hint is focused
-          if (data === '\r' || data === '\n') {
-            if (quickHintFocused.value && applyQuickHintSelection()) {
-              return;
-            }
-            // Not focused: Enter falls through to normal terminal input
+          if (data === '\r' || data === '\n' || data === '\t') {
+            applyQuickHintSelection();
+            return;
           }
-          // Tab: apply when hint is focused
-          if (data === '\t') {
-            if (quickHintFocused.value && applyQuickHintSelection()) {
-              return;
-            }
-          }
+
+          // 选择模式下输入其他按键时，退出弹层并将按键继续交给终端。
+          closeQuickHint();
+        } else if (quickHintVisible.value && data === '\x1b') {
+          closeQuickHint();
+          return;
+        }
+
+        if (data === '\x1b[A' || data === '\x1b[B') {
+          // 未通过快捷键进入选择模式时，方向键始终属于 shell history。
+          quickHintHistoryNavigation = true;
+          closeQuickHint();
         }
 
         if (data === '\t') {
@@ -2995,6 +3131,7 @@ onMounted(async () => {
         }
 
         if (data === '\u007f' || data === '\b') {
+          quickHintHistoryNavigation = false;
           captureInputLinePrefix();
           currentInputState.value = updateTerminalInputState(currentInputState.value, data);
           scheduleQuickHintUpdate(currentInputBuffer.value);
@@ -3012,6 +3149,7 @@ onMounted(async () => {
 
         const isControlSequence = data.startsWith('\x1b') || /^[\u0000-\u001F\u007F]$/.test(data);
         if (!isControlSequence) {
+          quickHintHistoryNavigation = false;
           captureInputLinePrefix();
           currentInputState.value = updateTerminalInputState(currentInputState.value, data);
           scheduleQuickHintUpdate(currentInputBuffer.value);
@@ -3244,11 +3382,18 @@ onMounted(async () => {
     if (!searchExactCountReady.value) searchMatchCount.value = count;
     searchResultsPending.value = false;
     if (resultIndex >= 0) {
+      searchInitialPositionPending = false;
       searchCurrentMatch.value = resultIndex + 1;
     } else if (count === 0) {
+      searchInitialPositionPending = false;
       searchCurrentMatch.value = 0;
+    } else if (searchNavigationDirection !== 0) {
+      // SearchAddon 只跟踪有限数量的高亮项，超出上限后用导航方向继续维护精确位置。
+      searchCurrentMatch.value = moveSearchCurrentMatch(searchNavigationDirection);
     } else {
-      searchCurrentMatch.value = 0;
+      // 首次命中位于高亮跟踪范围外时，在分片总数统计中一并解析其精确位置。
+      searchInitialPositionPending = true;
+      searchCurrentMatch.value = Math.max(0, searchCurrentMatch.value);
     }
   }) || null;
 
@@ -3260,6 +3405,7 @@ onMounted(async () => {
   window.addEventListener('terminal-layout-resize', handleLayoutResize);
   window.addEventListener('terminal-layout-dragging', handleLayoutDragging);
   window.addEventListener('terminal:toggle-line-numbers', handleExternalLineNumberToggle);
+  window.addEventListener('keybindings-changed', refreshQuickHintActivateBinding);
   window.addEventListener('mousedown', handleQuickHintPointerDown, true);
   window.addEventListener('sync-input-changed', onSyncInputChanged);
 
@@ -3392,6 +3538,7 @@ onUnmounted(() => {
   window.removeEventListener('terminal-layout-resize', handleLayoutResize);
   window.removeEventListener('terminal-layout-dragging', handleLayoutDragging);
   window.removeEventListener('terminal:toggle-line-numbers', handleExternalLineNumberToggle);
+  window.removeEventListener('keybindings-changed', refreshQuickHintActivateBinding);
   window.removeEventListener('mousedown', handleQuickHintPointerDown, true);
   window.removeEventListener('sync-input-changed', onSyncInputChanged);
   detachViewportScrollListener();
@@ -3620,6 +3767,10 @@ onUnmounted(() => {
           <div class="quick-hint-command">{{ item.command }}</div>
         </div>
       </div>
+      <div class="quick-hint-guide" role="presentation">
+        <template v-if="quickHintFocused">↑/↓ 选择 · Enter 填入 · Esc 返回</template>
+        <template v-else>{{ quickHintActivateLabel || '未设置快捷键' }} 进入选择</template>
+      </div>
     </div>
 
   </div>
@@ -3792,7 +3943,9 @@ onUnmounted(() => {
   border: 1px solid var(--app-border-shadow);
   border-radius: 6px;
   gap: 4px;
+  width: min(680px, calc(100% - 44px));
   max-width: calc(100% - 16px);
+  box-sizing: border-box;
   pointer-events: auto;
   isolation: isolate;
 }
@@ -3801,8 +3954,8 @@ onUnmounted(() => {
   position: relative;
   display: flex;
   align-items: center;
-  flex: 1 1 220px;
-  min-width: 120px;
+  flex: 1 1 auto;
+  min-width: 80px;
 }
 
 .search-icon {
@@ -3815,8 +3968,8 @@ onUnmounted(() => {
 }
 
 .terminal-search-input {
-  width: 220px;
-  max-width: 100%;
+  width: 100%;
+  min-width: 0;
   height: 28px;
   box-sizing: border-box;
   padding: 3px 8px 3px 28px;
@@ -3843,7 +3996,9 @@ onUnmounted(() => {
   color: var(--app-text-muted);
   font-weight: 600;
   white-space: nowrap;
-  min-width: 80px;
+  min-width: 7ch;
+  padding: 0 4px;
+  box-sizing: content-box;
   flex: 0 0 auto;
   font-variant-numeric: tabular-nums;
   text-align: center;
@@ -3935,6 +4090,19 @@ onUnmounted(() => {
 
 .quick-hint-item.active {
   background: hsl(var(--accent));
+}
+
+.quick-hint-guide {
+  position: sticky;
+  bottom: 0;
+  padding: 4px 10px;
+  background: hsl(var(--popover));
+  color: hsl(var(--muted-foreground));
+  font-size: 10px;
+  line-height: 16px;
+  text-align: right;
+  white-space: nowrap;
+  pointer-events: none;
 }
 
 .quick-hint-main {
