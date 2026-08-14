@@ -3,6 +3,7 @@ import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import { invokeCommand } from '../utils/ipc';
 import { loadMainUiSettings } from '../utils/mainUi';
+import { ensureSessionDisplayMetadata } from '../utils/sessionOverview';
 
 export const useSshStore = defineStore('ssh', () => {
   const TERMINAL_READY_EVENT = 'terminal-ready';
@@ -112,6 +113,7 @@ export const useSshStore = defineStore('ssh', () => {
   function addSession(session) {
     // Ensure cwd property exists
     if (!session.cwd) session.cwd = '';
+    ensureSessionDisplayMetadata([...sessions.value, session]);
     sessions.value.push(session);
     if (!session.noActivate) {
       activeSessionId.value = session.id;

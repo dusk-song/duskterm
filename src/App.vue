@@ -834,6 +834,29 @@ const isAnyModalOpen = computed(() =>
 const isOverviewVisible = ref(false);
 let mainUiSettingsPersistTimer = null;
 
+const closeAllSessionsFromOverview = async () => {
+  const sessionCount = visibleSessions.value.length;
+  if (sessionCount === 0) return;
+
+  isOverviewVisible.value = false;
+  try {
+    await confirm({
+      title: '关闭所有会话',
+      content: `将关闭当前 ${sessionCount} 个会话及其分屏，所有连接会立即断开。`,
+      okText: '关闭全部',
+      cancelText: '取消',
+      danger: true,
+    });
+  } catch {
+    if (visibleSessions.value.length > 0) isOverviewVisible.value = true;
+    return;
+  }
+
+  window.dispatchEvent(new CustomEvent('app:sync-input-stop'));
+  const rootSessionIds = visibleSessions.value.map((session) => session.id);
+  rootSessionIds.forEach((sessionId) => removePanelRoot(sessionId));
+};
+
 const persistMainUiSettings = (nextSettings, dispatchEvent = true) => {
   mainUiSettings.value = nextSettings;
   if (mainUiSettingsPersistTimer) clearTimeout(mainUiSettingsPersistTimer);
@@ -1269,7 +1292,8 @@ const handleTabContext = (key, session) => {
       <!-- Session Overview (Ctrl+`) -->
       <SessionOverview :visible="isOverviewVisible" :sessions="visibleSessions" :sync-channels="syncChannels"
         :active-session-id="activeKey"
-        @close="isOverviewVisible = false" @select="(id) => { setActivePanel(id); }" />
+        @close="isOverviewVisible = false" @select="(id) => { setActivePanel(id); }"
+        @close-all="closeAllSessionsFromOverview" />
 
     </div>
 

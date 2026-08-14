@@ -70,6 +70,11 @@ const props = defineProps({
     type: Number,
     default: 8,
   },
+
+  tooltipZIndex: {
+    type: [Number, String],
+    default: null,
+  },
 })
 
 const sizeMap = {
@@ -128,6 +133,7 @@ const handleClick = (event) => {
 
       <TooltipContent
         class="icon-button-tooltip"
+        :style="tooltipZIndex == null ? undefined : { zIndex: tooltipZIndex }"
         :side="tooltipSide"
         :side-offset="tooltipSideOffset"
         :avoid-collisions="true"
