@@ -43,7 +43,7 @@ const forwarded = useForwardPropsEmits(delegatedProps, emits);
       data-slot="tooltip-content"
       v-bind="{ ...forwarded, ...$attrs }"
       :class="cn(
-        'data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=open]:zoom-in-95 data-[state=delayed-open]:animate-in data-[state=delayed-open]:fade-in-0 data-[state=delayed-open]:zoom-in-95 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=closed]:zoom-out-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs has-data-[slot=kbd]:pr-1.5 **:data-[slot=kbd]:relative **:data-[slot=kbd]:isolate **:data-[slot=kbd]:z-[1] **:data-[slot=kbd]:rounded-sm bg-foreground text-background z-[var(--z-popover)] w-fit max-w-xs origin-(--reka-tooltip-content-transform-origin)',
+        'app-tooltip-content data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=delayed-open]:animate-in data-[state=delayed-open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 inline-flex items-center gap-1.5 has-data-[slot=kbd]:pr-1.5 **:data-[slot=kbd]:relative **:data-[slot=kbd]:isolate **:data-[slot=kbd]:z-[1] **:data-[slot=kbd]:rounded-sm z-[var(--z-popover)] w-fit origin-(--reka-tooltip-content-transform-origin)',
         props.class,
       )"
     >
@@ -51,3 +51,30 @@ const forwarded = useForwardPropsEmits(delegatedProps, emits);
     </TooltipContent>
   </TooltipPortal>
 </template>
+
+<style>
+.app-tooltip-content {
+  max-width: min(260px, calc(100vw - 16px));
+  padding: 5px 8px;
+  border: 1px solid var(--app-border-shadow);
+  border-radius: 6px;
+  background: var(--app-bg-dialog);
+  box-shadow: none;
+  color: var(--app-text);
+  font-family: var(--app-font-family);
+  font-size: 12px;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  pointer-events: none;
+  user-select: none;
+}
+
+.app-tooltip-content.icon-button-tooltip {
+  white-space: nowrap;
+}
+
+.app-tooltip-content.tooltip-hint-content {
+  white-space: pre-line;
+}
+</style>

@@ -12,6 +12,7 @@ import DialogHeader from '@/components/ui/dialog/DialogHeader.vue';
 import DialogTitle from '@/components/ui/dialog/DialogTitle.vue';
 import Input from '@/components/ui/input/Input.vue';
 import LoadingSpinner from '@/components/ui/loading-spinner/LoadingSpinner.vue';
+import { TooltipHint } from '@/components/ui/tooltip';
 import { confirm } from '@/composables/useConfirm';
 import { toast } from '@/composables/useToast';
 import {
@@ -1957,9 +1958,11 @@ onUnmounted(() => {
         <div class="editor-shell">
           <div class="editor-toolbar">
             <div class="editor-title-block">
-              <div class="editor-modal-title" :title="editorFilePath || '远程文件编辑'">
-                {{ editorFilePath || '远程文件编辑' }}
-              </div>
+              <TooltipHint :text="editorFilePath || '远程文件编辑'">
+                <div class="editor-modal-title">
+                  {{ editorFilePath || '远程文件编辑' }}
+                </div>
+              </TooltipHint>
             </div>
             <div class="editor-toolbar-meta">
               <span class="editor-chip" v-if="editorReadonly">只读</span>

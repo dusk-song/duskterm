@@ -14,7 +14,7 @@ import SelectTrigger from '@/components/ui/select/SelectTrigger.vue';
 import SelectValue from '@/components/ui/select/SelectValue.vue';
 import EditableSelect from '@/components/ui/select/EditableSelect.vue';
 import Textarea from '@/components/ui/textarea/Textarea.vue';
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
+import { Tooltip, TooltipContent, TooltipHint, TooltipTrigger } from '@/components/ui/tooltip';
 import { toast } from '@/composables/useToast';
 import { open } from '@tauri-apps/plugin-dialog';
 import {
@@ -746,10 +746,12 @@ const groupOptions = computed(() => {
                         :options="serialPortSelectOptions" class="w-[244px] flex-none"
                         placeholder="COM3 / /dev/ttyUSB0" automatic-label="自动检测" custom-label="自定义"
                         aria-label="串口设备" />
-                      <Button type="button" variant="ghost" size="sm" class="serial-refresh-button"
-                        :disabled="serialPortsLoading" title="刷新串口列表" @click="loadSerialPortOptions">
-                        <RefreshCw :size="14" :class="{ 'is-loading': serialPortsLoading }" />
-                      </Button>
+                      <TooltipHint text="刷新串口列表">
+                        <Button type="button" variant="ghost" size="sm" class="serial-refresh-button"
+                          :disabled="serialPortsLoading" @click="loadSerialPortOptions">
+                          <RefreshCw :size="14" :class="{ 'is-loading': serialPortsLoading }" />
+                        </Button>
+                      </TooltipHint>
                     </div>
                   </div>
                   <div class="form-item mb-2" name="baud_rate"><label

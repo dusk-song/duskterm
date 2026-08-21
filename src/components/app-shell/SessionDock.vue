@@ -1,16 +1,31 @@
 <script setup>
 import { computed } from 'vue';
 import { useSshStore } from '@/stores/ssh';
-import { buildSessionDisplayNameMap } from '@/utils/sessionOverview';
+import {
+  buildSessionDisplayNameMap,
+  getSessionBaseDisplayName,
+  getSessionSourceKey,
+} from '@/utils/sessionOverview';
 import DuskDock from './DuskDock.vue';
 
 const sshStore = useSshStore();
 const sessions = computed(() => (sshStore.sessions || []).filter((session) => !session.isSplitChild));
 const active = computed(() => sessions.value.find((session) => session.id === sshStore.activeSessionId) || null);
-const sessionDisplayNames = computed(() => buildSessionDisplayNameMap(sessions.value));
 const sessionDisplayName = computed(() => {
   if (!active.value) return '暂无活动会话';
-  return sessionDisplayNames.value.get(active.value.id) || active.value.name || '暂无活动会话';
+  const session = active.value;
+  const hasStableIndex = session.runtimeDisplaySourceKey === getSessionSourceKey(session)
+    && Number.isInteger(session.runtimeDisplayIndex)
+    && session.runtimeDisplayIndex >= 0;
+  if (hasStableIndex) {
+    const baseName = session.runtimeDisplayBaseName || getSessionBaseDisplayName(session);
+    return session.runtimeDisplayIndex === 0
+      ? baseName
+      : `${baseName} (${session.runtimeDisplayIndex})`;
+  }
+  return buildSessionDisplayNameMap(sessions.value).get(session.id)
+    || session.name
+    || '暂无活动会话';
 });
 const stateClass = (session) => ({
   connected: session.status === 'connected',

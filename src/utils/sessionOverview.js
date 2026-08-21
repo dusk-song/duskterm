@@ -1,7 +1,7 @@
 const normalizeComparable = (value) => String(value || '').trim().toLowerCase();
 const getSessionConfig = (session) => session?.config || session || {};
 
-const getSessionSourceKey = (session) => {
+export const getSessionSourceKey = (session) => {
   const config = getSessionConfig(session);
   const configId = String(config.id || session?.configId || session?.profileId || '').trim();
   if (configId) return `config:${configId}`;

@@ -2,6 +2,7 @@
 import { X } from '@lucide/vue';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { computeSplitLayout } from '@/utils/splitTree';
+import { TooltipHint } from '@/components/ui/tooltip';
 import Terminal from './Terminal.vue';
 
 const props = defineProps({
@@ -161,11 +162,12 @@ const dividerStyle = (divider) => divider.direction === 'vertical'
 
 <template>
   <div ref="rootRef" class="terminal-panel-manager">
-    <button v-if="hasPanels && activePanelId" type="button" class="terminal-session-close"
-      title="关闭当前会话（Ctrl+Shift+W）" aria-label="关闭当前会话"
-      @mousedown.stop @click.stop="closeActivePanel">
-      <X :size="15" stroke-width="1.9" />
-    </button>
+    <TooltipHint v-if="hasPanels && activePanelId" text="关闭当前会话（Ctrl+Shift+W）" side="bottom">
+      <button type="button" class="terminal-session-close" aria-label="关闭当前会话"
+        @mousedown.stop @click.stop="closeActivePanel">
+        <X :size="15" stroke-width="1.9" />
+      </button>
+    </TooltipHint>
     <div v-if="hasPanels" class="panel-scroll-track">
       <div class="panel-scroll-strip" :style="{ transform: `translateX(-${scrollIndex * 100}%)` }"
         :class="{ transitioning: isTransitioning }" @transitionend="onTransitionEnd">

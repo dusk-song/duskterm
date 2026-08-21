@@ -3,9 +3,10 @@ import { computed } from 'vue'
 import {
   Tooltip,
   TooltipContent,
-  TooltipProvider,
   TooltipTrigger,
 } from '@/components/ui/tooltip'
+
+defineOptions({ inheritAttrs: false })
 
 const props = defineProps({
   icon: {
@@ -21,6 +22,11 @@ const props = defineProps({
   active: {
     type: Boolean,
     default: false,
+  },
+
+  tone: {
+    type: String,
+    default: 'default',
   },
 
   disabled: {
@@ -51,7 +57,7 @@ const props = defineProps({
    */
   tooltipDelay: {
     type: Number,
-    default: 350,
+    default: 200,
   },
 
   /**
@@ -95,54 +101,53 @@ const handleClick = (event) => {
 </script>
 
 <template>
-  <TooltipProvider :delay-duration="tooltipDelay">
-    <Tooltip :disabled="disabled || !tooltip">
-      <TooltipTrigger as-child>
-        <button
-          class="icon-button"
-          :class="{
-            active,
-            disabled,
-          }"
-          :style="{
-            '--icon-btn-size': computedSize,
-          }"
-          :aria-label="ariaLabel"
-          :disabled="disabled"
-          type="button"
-          @click="handleClick"
-        >
-          <span class="icon-wrapper">
-            <component
-              v-if="typeof icon === 'object' || typeof icon === 'function'"
-              :is="icon"
-              class="icon-svg"
-            />
-
-            <img
-              v-else-if="typeof icon === 'string'"
-              :src="icon"
-              alt=""
-              class="icon-img"
-            />
-
-            <slot v-else />
-          </span>
-        </button>
-      </TooltipTrigger>
-
-      <TooltipContent
-        class="icon-button-tooltip"
-        :style="tooltipZIndex == null ? undefined : { zIndex: tooltipZIndex }"
-        :side="tooltipSide"
-        :side-offset="tooltipSideOffset"
-        :avoid-collisions="true"
-        :collision-padding="8"
+  <Tooltip :disabled="disabled || !tooltip" :delay-duration="tooltipDelay">
+    <TooltipTrigger as-child>
+      <button
+        v-bind="$attrs"
+        class="icon-button"
+        :class="[
+          `tone-${tone}`,
+          { active, disabled },
+        ]"
+        :style="{
+          '--icon-btn-size': computedSize,
+        }"
+        :aria-label="ariaLabel"
+        :disabled="disabled"
+        type="button"
+        @click="handleClick"
       >
-        {{ ariaLabel }}
-      </TooltipContent>
-    </Tooltip>
-  </TooltipProvider>
+        <span class="icon-wrapper">
+          <component
+            v-if="typeof icon === 'object' || typeof icon === 'function'"
+            :is="icon"
+            class="icon-svg"
+          />
+
+          <img
+            v-else-if="typeof icon === 'string'"
+            :src="icon"
+            alt=""
+            class="icon-img"
+          />
+
+          <slot v-else />
+        </span>
+      </button>
+    </TooltipTrigger>
+
+    <TooltipContent
+      class="icon-button-tooltip"
+      :style="tooltipZIndex == null ? undefined : { zIndex: tooltipZIndex }"
+      :side="tooltipSide"
+      :side-offset="tooltipSideOffset"
+      :avoid-collisions="true"
+      :collision-padding="8"
+    >
+      {{ ariaLabel }}
+    </TooltipContent>
+  </Tooltip>
 </template>
 
 <style src="../../assets/styles/icon-button.css"></style>

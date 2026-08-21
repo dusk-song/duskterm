@@ -11,6 +11,7 @@ import DialogFooter from '@/components/ui/dialog/DialogFooter.vue';
 import DialogHeader from '@/components/ui/dialog/DialogHeader.vue';
 import DialogTitle from '@/components/ui/dialog/DialogTitle.vue';
 import Input from '@/components/ui/input/Input.vue';
+import { TooltipHint } from '@/components/ui/tooltip';
 import { toast } from '@/composables/useToast';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { FitAddon } from '@xterm/addon-fit';
@@ -3647,8 +3648,9 @@ onUnmounted(() => {
           <Button type="button" variant="outline" size="sm" :disabled="serialStatus.sendingFile" @click="sendSerialFile">
             {{ serialStatus.sendingFile ? '文件发送中' : '发送文件' }}
           </Button>
-          <Input v-model="serialPeriodicInterval" class="serial-interval-input" aria-label="周期发送间隔"
-            title="周期发送间隔（毫秒）" />
+          <TooltipHint text="周期发送间隔（毫秒）">
+            <Input v-model="serialPeriodicInterval" class="serial-interval-input" aria-label="周期发送间隔" />
+          </TooltipHint>
           <span class="serial-unit">ms</span>
           <Button type="button" :variant="serialPeriodicSending ? 'destructive' : 'outline'" size="sm"
             :disabled="serialStatus.sendingFile"
@@ -3680,34 +3682,46 @@ onUnmounted(() => {
         :class="{ empty: !searchResultsPending && !searchCountPending && searchMatchCount === 0 }">
         {{ searchCountLabel }}
       </span>
-      <button type="button" class="terminal-find-button terminal-find-icon-button option-button"
-        :class="{ active: searchOptions.matchCase }" title="区分大小写" aria-label="区分大小写"
-        @click="toggleSearchOption('matchCase')">
-        <CaseSensitive :size="15" stroke-width="1.9" />
-      </button>
-      <button type="button" class="terminal-find-button terminal-find-icon-button option-button"
-        :class="{ active: searchOptions.wholeWord }" title="全词匹配" aria-label="全词匹配"
-        @click="toggleSearchOption('wholeWord')">
-        <WholeWord :size="15" stroke-width="1.9" />
-      </button>
-      <button type="button" class="terminal-find-button terminal-find-icon-button option-button"
-        :class="{ active: searchOptions.regex }" title="正则表达式" aria-label="正则表达式"
-        @click="toggleSearchOption('regex')">
-        <Regex :size="15" stroke-width="1.9" />
-      </button>
+      <TooltipHint text="区分大小写" side="bottom">
+        <button type="button" class="terminal-find-button terminal-find-icon-button option-button"
+          :class="{ active: searchOptions.matchCase }" aria-label="区分大小写"
+          @click="toggleSearchOption('matchCase')">
+          <CaseSensitive :size="15" stroke-width="1.9" />
+        </button>
+      </TooltipHint>
+      <TooltipHint text="全词匹配" side="bottom">
+        <button type="button" class="terminal-find-button terminal-find-icon-button option-button"
+          :class="{ active: searchOptions.wholeWord }" aria-label="全词匹配"
+          @click="toggleSearchOption('wholeWord')">
+          <WholeWord :size="15" stroke-width="1.9" />
+        </button>
+      </TooltipHint>
+      <TooltipHint text="正则表达式" side="bottom">
+        <button type="button" class="terminal-find-button terminal-find-icon-button option-button"
+          :class="{ active: searchOptions.regex }" aria-label="正则表达式"
+          @click="toggleSearchOption('regex')">
+          <Regex :size="15" stroke-width="1.9" />
+        </button>
+      </TooltipHint>
       <span class="terminal-find-divider"></span>
-      <button type="button" class="terminal-find-button terminal-find-icon-button" title="上一个匹配（Shift+J）"
-        aria-label="上一个匹配" @click="findPrev">
-        <ChevronUp :size="15" stroke-width="1.9" />
-      </button>
-      <button type="button" class="terminal-find-button terminal-find-icon-button" title="下一个匹配（Enter / Shift+K）"
-        aria-label="下一个匹配" @click="findNext">
-        <ChevronDown :size="15" stroke-width="1.9" />
-      </button>
-      <button type="button" class="terminal-find-close terminal-find-icon-button" title="关闭查找（Esc）"
-        aria-label="关闭查找" @click="closeSearch">
-        <X :size="15" stroke-width="1.9" />
-      </button>
+      <TooltipHint text="上一个匹配（Shift+J）" side="bottom">
+        <button type="button" class="terminal-find-button terminal-find-icon-button"
+          aria-label="上一个匹配" @click="findPrev">
+          <ChevronUp :size="15" stroke-width="1.9" />
+        </button>
+      </TooltipHint>
+      <TooltipHint text="下一个匹配（Enter / Shift+K）" side="bottom">
+        <button type="button" class="terminal-find-button terminal-find-icon-button"
+          aria-label="下一个匹配" @click="findNext">
+          <ChevronDown :size="15" stroke-width="1.9" />
+        </button>
+      </TooltipHint>
+      <TooltipHint text="关闭查找（Esc）" side="bottom">
+        <button type="button" class="terminal-find-close terminal-find-icon-button"
+          aria-label="关闭查找" @click="closeSearch">
+          <X :size="15" stroke-width="1.9" />
+        </button>
+      </TooltipHint>
     </div>
 
     <Dialog :open="securityModalVisible" @update:open="(v) => { if (!v) handleSecurityCancel(); }">

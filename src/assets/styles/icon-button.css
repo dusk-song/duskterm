@@ -144,6 +144,19 @@
   background: var(--icon-btn-active-bg);
 }
 
+.icon-button.tone-primary.active:not(:disabled):not(.disabled) {
+  color: var(--color-primary);
+}
+
+.icon-button.tone-danger:hover:not(:disabled):not(.disabled) {
+  color: var(--tb-close-hover-text, var(--color-danger-foreground));
+}
+
+.icon-button.tone-danger:hover:not(:disabled):not(.disabled)::before,
+.icon-button.tone-danger:active:not(:disabled):not(.disabled)::before {
+  background: var(--tb-close-hover, var(--color-danger));
+}
+
 /* ------------------------------
    Focus
 ------------------------------ */
@@ -190,32 +203,6 @@ html.dark .icon-button {
 html.dark .icon-button .icon-img,
 html.dark .icon-button img {
   filter: brightness(0) invert(1) saturate(150%);
-}
-
-/* ------------------------------
-   Tooltip
------------------------------- */
-
-.icon-button-tooltip {
-  z-index: var(--z-popover, 1000);
-
-  max-width: min(260px, calc(100vw - 16px));
-  padding: 5px 8px;
-
-  border: 1px solid var(--app-border-shadow);
-  border-radius: 6px;
-
-  background: var(--app-bg-dialog);
-  color: var(--app-text);
-
-  box-shadow: none;
-
-  font-size: 12px;
-  line-height: 1.35;
-  white-space: nowrap;
-
-  pointer-events: none;
-  user-select: none;
 }
 
 /* ------------------------------

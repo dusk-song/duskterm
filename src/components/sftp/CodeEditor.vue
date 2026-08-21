@@ -1,5 +1,6 @@
 <script setup>
 import { useTheme } from '@/composables/useTheme';
+import { TooltipHint } from '@/components/ui/tooltip';
 import ace from 'ace-builds';
 import 'ace-builds/src-noconflict/theme-github';
 import 'ace-builds/src-noconflict/theme-tomorrow_night_bright';
@@ -615,51 +616,70 @@ watch(() => props.readonly, (readonly) => {
             @keydown.esc.prevent="closeFindBar" />
           <span class="find-count">{{ findCountLabel }}</span>
         </div>
-        <button type="button" class="find-button find-icon-button option-button"
-          :class="{ active: findOptions.caseSensitive }" aria-label="区分大小写" title="区分大小写"
-          @click="toggleFindOption('caseSensitive')">
-          <CaseSensitive :size="15" stroke-width="1.9" />
-        </button>
-        <button type="button" class="find-button find-icon-button option-button"
-          :class="{ active: findOptions.wholeWord }" aria-label="全词匹配" title="全词匹配"
-          @click="toggleFindOption('wholeWord')">
-          <WholeWord :size="15" stroke-width="1.9" />
-        </button>
-        <button type="button" class="find-button find-icon-button option-button" :class="{ active: findOptions.regExp }"
-          aria-label="正则表达式" title="正则表达式" @click="toggleFindOption('regExp')">
-          <Regex :size="15" stroke-width="1.9" />
-        </button>
+        <TooltipHint text="区分大小写">
+          <button type="button" class="find-button find-icon-button option-button"
+            :class="{ active: findOptions.caseSensitive }" aria-label="区分大小写"
+            @click="toggleFindOption('caseSensitive')">
+            <CaseSensitive :size="15" stroke-width="1.9" />
+          </button>
+        </TooltipHint>
+        <TooltipHint text="全词匹配">
+          <button type="button" class="find-button find-icon-button option-button"
+            :class="{ active: findOptions.wholeWord }" aria-label="全词匹配"
+            @click="toggleFindOption('wholeWord')">
+            <WholeWord :size="15" stroke-width="1.9" />
+          </button>
+        </TooltipHint>
+        <TooltipHint text="正则表达式">
+          <button type="button" class="find-button find-icon-button option-button"
+            :class="{ active: findOptions.regExp }" aria-label="正则表达式"
+            @click="toggleFindOption('regExp')">
+            <Regex :size="15" stroke-width="1.9" />
+          </button>
+        </TooltipHint>
         <span class="find-divider"></span>
-        <button type="button" class="find-button find-icon-button" aria-label="上一个" title="上一个"
-          @click="findPreviousMatch">
-          <ChevronUp :size="15" stroke-width="1.9" />
-        </button>
-        <button type="button" class="find-button find-icon-button" aria-label="下一个" title="下一个"
-          @click="findNextMatch">
-          <ChevronDown :size="15" stroke-width="1.9" />
-        </button>
-        <button type="button" class="find-button find-icon-button" :class="{ active: replaceVisible }"
-          aria-label="显示替换" title="显示替换" @click="toggleReplaceBar">
-          <Replace :size="15" stroke-width="1.9" />
-        </button>
-        <button type="button" class="find-close find-icon-button" aria-label="关闭查找" title="关闭查找"
-          @click="closeFindBar">
-          <X :size="15" stroke-width="1.9" />
-        </button>
+        <TooltipHint text="上一个">
+          <button type="button" class="find-button find-icon-button" aria-label="上一个"
+            @click="findPreviousMatch">
+            <ChevronUp :size="15" stroke-width="1.9" />
+          </button>
+        </TooltipHint>
+        <TooltipHint text="下一个">
+          <button type="button" class="find-button find-icon-button" aria-label="下一个"
+            @click="findNextMatch">
+            <ChevronDown :size="15" stroke-width="1.9" />
+          </button>
+        </TooltipHint>
+        <TooltipHint text="显示替换">
+          <button type="button" class="find-button find-icon-button" :class="{ active: replaceVisible }"
+            aria-label="显示替换" @click="toggleReplaceBar">
+            <Replace :size="15" stroke-width="1.9" />
+          </button>
+        </TooltipHint>
+        <TooltipHint text="关闭查找">
+          <button type="button" class="find-close find-icon-button" aria-label="关闭查找"
+            @click="closeFindBar">
+            <X :size="15" stroke-width="1.9" />
+          </button>
+        </TooltipHint>
       </div>
       <div v-if="replaceVisible" class="editor-find-row editor-find-replace-row">
         <div class="find-input-shell replace-input-shell">
           <input ref="replaceInput" v-model="replaceText" class="find-input" type="text" placeholder="替换为"
             :disabled="readonly" @keydown.enter.prevent="replaceCurrentMatch" @keydown.esc.prevent="closeFindBar" />
         </div>
-        <button type="button" class="find-button find-icon-button" :disabled="readonly" aria-label="替换当前"
-          title="替换当前" @click="replaceCurrentMatch">
-          <Replace :size="15" stroke-width="1.9" />
-        </button>
-        <button type="button" class="find-button find-icon-button" :disabled="readonly" aria-label="全部替换"
-          title="全部替换" @click="replaceAllMatches">
-          <ReplaceAll :size="15" stroke-width="1.9" />
-        </button>
+        <TooltipHint text="替换当前">
+          <button type="button" class="find-button find-icon-button" :disabled="readonly" aria-label="替换当前"
+            @click="replaceCurrentMatch">
+            <Replace :size="15" stroke-width="1.9" />
+          </button>
+        </TooltipHint>
+        <TooltipHint text="全部替换">
+          <button type="button" class="find-button find-icon-button" :disabled="readonly" aria-label="全部替换"
+            @click="replaceAllMatches">
+            <ReplaceAll :size="15" stroke-width="1.9" />
+          </button>
+        </TooltipHint>
       </div>
     </div>
     <div ref="editorContainer" class="ace-container"></div>

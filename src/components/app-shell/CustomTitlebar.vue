@@ -4,6 +4,7 @@ import { onMounted, onUnmounted, ref } from 'vue';
 import { executeMenuAction } from '@/composables/useMenu';
 import { useTheme } from '@/composables/useTheme';
 import { useWindowChrome } from '@/composables/useWindowChrome';
+import IconButton from '@/components/common/IconButton.vue';
 import DuskDock from './DuskDock.vue';
 import SessionDock from './SessionDock.vue';
 import TransferDock from './TransferDock.vue';
@@ -149,14 +150,16 @@ onUnmounted(() => {
     </div>
     <div ref="titlebarRightRef" class="titlebar-right">
       <DuskDock class="utility-dock" interactive>
-        <TransferDock embedded :expanded="props.transferVisible"
+        <TransferDock :expanded="props.transferVisible"
           @toggle="emit('toggle-transfer')" />
-        <button class="tb-btn" :class="{ active: props.sftpActive }" :disabled="props.sftpDisabled"
-          title="文件管理（F9）" @click="emit('toggle-sftp')"><FolderOpen :size="14" /></button>
-        <button class="tb-btn" @click="toggleTheme" :title="isDark ? '切换亮色主题' : '切换暗色主题'"><Sun v-if="isDark" :size="15" /><Moon v-else :size="15" /></button>
-        <button class="tb-btn" @click="minimize" title="最小化"><Minus :size="13" /></button>
-        <button class="tb-btn" @click="toggleMaximize" :title="isMaximized ? '还原' : '最大化'"><Copy v-if="isMaximized" :size="12" /><Square v-else :size="12" /></button>
-        <button class="tb-btn close" @click="executeMenuAction('file_quit')" title="关闭"><X :size="14" /></button>
+        <IconButton :icon="FolderOpen" size="sm" tone="primary" :active="props.sftpActive"
+          :disabled="props.sftpDisabled" aria-label="文件管理（F9）" :action="() => emit('toggle-sftp')" />
+        <IconButton :icon="isDark ? Sun : Moon" size="sm"
+          :aria-label="isDark ? '切换亮色主题' : '切换暗色主题'" :action="toggleTheme" />
+        <IconButton :icon="Minus" size="sm" aria-label="最小化" :action="minimize" />
+        <IconButton :icon="isMaximized ? Copy : Square" size="sm"
+          :aria-label="isMaximized ? '还原' : '最大化'" :action="toggleMaximize" />
+        <IconButton :icon="X" size="sm" tone="danger" aria-label="关闭" :action="() => executeMenuAction('file_quit')" />
       </DuskDock>
     </div>
     <Teleport to="body">
@@ -182,15 +185,9 @@ onUnmounted(() => {
 .titlebar-center { position: absolute; z-index: 0; left: 50%; display: flex; width: min(260px, max(0px, calc(100% - var(--titlebar-side-clearance, 480px)))); min-width: 0; align-items: center; justify-content: center; overflow: hidden; transform: translateX(-50%); pointer-events: none; }
 .menu-dock { width: auto; max-width: none; flex: 0 0 auto; padding: 0 8px; }
 .app-icon { width: 17px; height: 17px; margin-right: 4px; flex: 0 0 auto; }
-.tb-menu-item, .tb-btn { height: 24px; border: 0; border-radius: 999px; color: var(--tb-text, var(--app-text)); background: transparent; cursor: default; }
-.tb-menu-item { flex: 0 0 auto; padding: 0 7px; font-size: 12px; white-space: nowrap; }
-.tb-btn { display: inline-flex; width: 29px; flex: 0 0 29px; align-items: center; justify-content: center; padding: 0; opacity: .78; }
-.tb-menu-item:hover, .tb-menu-item.open, .tb-btn:hover, .tb-btn.active { background: var(--tb-hover-bg, color-mix(in srgb, var(--app-text) 8%, transparent)); opacity: 1; }
-.tb-btn.active { color: var(--color-primary); }
-.tb-btn:disabled { opacity: .3; cursor: not-allowed; }
-.tb-btn.close:hover { color: var(--tb-close-hover-text, var(--color-danger-foreground)); background: var(--tb-close-hover, var(--color-danger)); }
-.utility-dock { min-width: max-content; flex: 0 0 auto; padding: 0 4px; }
-.window-dock { padding: 0 4px; }
+.tb-menu-item { height: 24px; flex: 0 0 auto; padding: 0 7px; border: 0; border-radius: var(--icon-btn-rect-radius, 8px); color: var(--tb-text, var(--app-text)); background: transparent; font-size: 12px; white-space: nowrap; cursor: default; }
+.tb-menu-item:hover, .tb-menu-item.open { background: var(--tb-hover-bg, color-mix(in srgb, var(--app-text) 8%, transparent)); }
+.utility-dock { min-width: max-content; flex: 0 0 auto; gap: 1px; padding: 0 4px; }
 </style>
 
 <style>

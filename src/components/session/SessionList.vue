@@ -27,6 +27,7 @@ import { useVirtualList } from '@/composables/useVirtualList';
 import { useSshStore } from '@/stores/ssh';
 import { invokeCommand } from '@/utils/ipc';
 import IconButton from '@/components/common/IconButton.vue';
+import { TooltipHint } from '@/components/ui/tooltip';
 
 const props = defineProps({
   width: {
@@ -566,7 +567,7 @@ const handleImportSessions = async () => {
         :style="{ '--local-shell-button-count': localShellButtons.length }">
         <button v-for="profile in localShellButtons" :key="profile.id" type="button"
           class="local-shell-button" :disabled="Boolean(openingLocalProfileId)"
-          :title="`${profile.executable}\n打开新的本地终端`" @click="openLocalShell(profile)">
+          @click="openLocalShell(profile)">
           <Code2 />
           <span>{{ profile.name }}</span>
         </button>
@@ -615,13 +616,13 @@ const handleImportSessions = async () => {
                     <span v-if="item.isLeaf" class="node-meta">({{ getSessionMeta(item.data) }})</span>
                   </span>
 
-                  <span v-if="item._isGroup && item.key !== 'group-__ungrouped__'"
-                    class="tree-drag-handle" :class="{ disabled: item.data?.locked }"
-                    role="button" tabindex="0"
-                    aria-label="拖动目录排序" title="拖动目录排序" @click.stop
-                    @pointerdown="!item.data?.locked && onGroupPointerDown(item.data?.groupName || item.title, $event)">
-                    <GripVertical />
-                  </span>
+                  <TooltipHint v-if="item._isGroup && item.key !== 'group-__ungrouped__'" text="拖动目录排序">
+                    <span class="tree-drag-handle" :class="{ disabled: item.data?.locked }"
+                      role="button" tabindex="0" aria-label="拖动目录排序" @click.stop
+                      @pointerdown="!item.data?.locked && onGroupPointerDown(item.data?.groupName || item.title, $event)">
+                      <GripVertical />
+                    </span>
+                  </TooltipHint>
                 </div>
               </ContextMenuTrigger>
               <ContextMenuContent>

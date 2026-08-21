@@ -1,5 +1,6 @@
 <script setup>
 import IconButton from '@/components/common/IconButton.vue';
+import { TooltipHint } from '@/components/ui/tooltip';
 import { CircleX, Code2, Search, Server, Usb, Waypoints } from '@lucide/vue';
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { buildSessionDisplayNameMap, buildSessionOverviewItems } from '@/utils/sessionOverview';
@@ -273,13 +274,20 @@ watch(selectableSessionIds, () => {
                 :aria-selected="item.sessionViews[0].id === selectedSessionId"
                 @mouseenter="selectedSessionId = item.sessionViews[0].id"
                 @click="selectSession(item.sessionViews[0].id)">
-                <span class="session-protocol-icon" :title="item.sessionViews[0].protocolLabel">
-                  <component :is="item.sessionViews[0].icon" :size="15" />
-                </span>
-                <span class="session-status" :class="{ online: item.sessionViews[0].connected }"
-                  :title="item.sessionViews[0].connected ? '在线' : '离线'" />
-                <span class="session-name" :title="item.sessionViews[0].name">{{ item.sessionViews[0].name }}</span>
-                <span class="session-identity" :title="item.sessionViews[0].identity">{{ item.sessionViews[0].identity }}</span>
+                <TooltipHint :text="item.sessionViews[0].protocolLabel">
+                  <span class="session-protocol-icon">
+                    <component :is="item.sessionViews[0].icon" :size="15" />
+                  </span>
+                </TooltipHint>
+                <TooltipHint :text="item.sessionViews[0].connected ? '在线' : '离线'">
+                  <span class="session-status" :class="{ online: item.sessionViews[0].connected }" />
+                </TooltipHint>
+                <TooltipHint :text="item.sessionViews[0].name">
+                  <span class="session-name">{{ item.sessionViews[0].name }}</span>
+                </TooltipHint>
+                <TooltipHint :text="item.sessionViews[0].identity">
+                  <span class="session-identity">{{ item.sessionViews[0].identity }}</span>
+                </TooltipHint>
                 <span v-if="item.sessionViews[0].group" class="session-meta">
                   {{ item.sessionViews[0].group }}
                 </span>
@@ -308,13 +316,20 @@ watch(selectableSessionIds, () => {
                     :aria-selected="session.id === selectedSessionId"
                     @mouseenter="selectedSessionId = session.id"
                     @click="selectSession(session.id)">
-                    <span class="session-protocol-icon" :title="session.protocolLabel">
-                      <component :is="session.icon" :size="15" />
-                    </span>
-                    <span class="session-status" :class="{ online: session.connected }"
-                      :title="session.connected ? '在线' : '离线'" />
-                    <span class="session-name" :title="session.name">{{ session.name }}</span>
-                    <span class="session-identity" :title="session.identity">{{ session.identity }}</span>
+                    <TooltipHint :text="session.protocolLabel">
+                      <span class="session-protocol-icon">
+                        <component :is="session.icon" :size="15" />
+                      </span>
+                    </TooltipHint>
+                    <TooltipHint :text="session.connected ? '在线' : '离线'">
+                      <span class="session-status" :class="{ online: session.connected }" />
+                    </TooltipHint>
+                    <TooltipHint :text="session.name">
+                      <span class="session-name">{{ session.name }}</span>
+                    </TooltipHint>
+                    <TooltipHint :text="session.identity">
+                      <span class="session-identity">{{ session.identity }}</span>
+                    </TooltipHint>
                     <span class="channel-role" :class="{ primary: getChannelRole(item, session) === '主控' }">
                       {{ getChannelRole(item, session) }}
                     </span>

@@ -17,7 +17,7 @@ import { computed, defineAsyncComponent, h, nextTick, onMounted, onUnmounted, re
 // ── Lazy-loaded heavy components for faster initial paint ──
 import ConfirmDialog from '@/components/ui/confirm/ConfirmDialog.vue';
 import ToastContainer from '@/components/ui/toast/ToastContainer.vue';
-import { TooltipProvider } from '@/components/ui/tooltip';
+import { TooltipHint, TooltipProvider } from '@/components/ui/tooltip';
 import CustomTitlebar from './components/app-shell/CustomTitlebar.vue';
 import GlobalBackground from './components/app-shell/GlobalBackground.vue';
 import { useInputRouter } from './composables/useInputRouter';
@@ -1226,11 +1226,13 @@ const handleTabContext = (key, session) => {
                 <div v-if="recentSessionSettings.enabled" class="recent-sessions-tree-container">
                   <div class="tree-header">
                     <span>最近会话</span>
-                    <button v-if="recentSessions.length" type="button" class="recent-clear-button"
-                      :disabled="recentClearing" title="清空最近会话" aria-label="清空最近会话"
-                      @click.stop="clearRecentSessionHistory">
-                      <Trash2 :size="14" />
-                    </button>
+                    <TooltipHint v-if="recentSessions.length" text="清空最近会话">
+                      <button type="button" class="recent-clear-button"
+                        :disabled="recentClearing" aria-label="清空最近会话"
+                        @click.stop="clearRecentSessionHistory">
+                        <Trash2 :size="14" />
+                      </button>
+                    </TooltipHint>
                   </div>
                   <div v-if="recentSessions.length === 0" class="no-recent">无记录</div>
                   <div v-else class="tree-list">

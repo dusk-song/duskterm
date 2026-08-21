@@ -1,5 +1,6 @@
 <script setup>
 import IconButton from '@/components/common/IconButton.vue';
+import { TooltipHint } from '@/components/ui/tooltip';
 import { toast } from '@/composables/useToast';
 import { useSshStore } from '@/stores/ssh';
 import { useTransfersStore } from '@/stores/transfers';
@@ -319,18 +320,23 @@ const clearFinished = () => transferStore.clearFinishedTasks();
             `status-${item.status}`,
             { 'is-active': isActiveTransfer(item), 'is-compact': isCompact(item), 'is-failed': item.status === 'failed' }
           ]">
-          <div class="transfer-direction" :title="item.direction === 'download' ? '下载' : '上传'">
-            {{ item.direction === 'download' ? '↓' : '↑' }}
-          </div>
+          <TooltipHint :text="item.direction === 'download' ? '下载' : '上传'">
+            <div class="transfer-direction">
+              {{ item.direction === 'download' ? '↓' : '↑' }}
+            </div>
+          </TooltipHint>
 
           <div class="transfer-task-main">
             <div class="transfer-task-heading">
-              <strong :title="taskDetail(item)">{{ item.name }}</strong>
+              <TooltipHint :text="taskDetail(item)">
+                <strong>{{ item.name }}</strong>
+              </TooltipHint>
             </div>
-            <div class="transfer-task-meta" :class="{ error: item.status === 'failed' }"
-              :title="item.status === 'failed' ? secondaryText(item) : taskDetail(item)">
-              {{ secondaryText(item) }}
-            </div>
+            <TooltipHint :text="item.status === 'failed' ? secondaryText(item) : taskDetail(item)">
+              <div class="transfer-task-meta" :class="{ error: item.status === 'failed' }">
+                {{ secondaryText(item) }}
+              </div>
+            </TooltipHint>
             <div v-if="showsProgress(item)" class="transfer-progress-row">
               <div class="transfer-progress">
                 <i :style="{ width: `${progressPercent(item)}%` }" />
@@ -342,17 +348,28 @@ const clearFinished = () => transferStore.clearFinishedTasks();
           <div class="transfer-task-side">
             <span class="transfer-state">{{ displayStatusLabel(item) }}</span>
             <div class="transfer-actions">
-              <span v-if="showsPausePlaceholder(item)" class="disabled-action" title="暂不支持暂停">
-                <IconButton :icon="Pause" size="28px" aria-label="暂不支持暂停" :tooltip="false" disabled />
-              </span>
+              <TooltipHint v-if="showsPausePlaceholder(item)" text="暂不支持暂停">
+                <span class="disabled-action">
+                  <IconButton :icon="Pause" size="28px" aria-label="暂不支持暂停" :tooltip="false" disabled />
+                </span>
+              </TooltipHint>
               <IconButton v-if="canCancel(item)" :icon="X" size="28px" aria-label="取消传输"
                 tooltip-side="top" :action="() => cancel(item)" />
-              <span v-else-if="item.status === 'cancelling'" class="pending-action" title="正在取消">
-                <LoaderCircle :size="16" />
-              </span>
-              <span v-if="hasLocateAction(item)" class="locate-action"
-                :class="{ locating: isLocating(item) }"
-                :title="canLocate(item) || isLocating(item) ? '' : '对应会话未连接'">
+              <TooltipHint v-else-if="item.status === 'cancelling'" text="正在取消">
+                <span class="pending-action">
+                  <LoaderCircle :size="16" />
+                </span>
+              </TooltipHint>
+              <TooltipHint v-if="hasLocateAction(item) && !canLocate(item) && !isLocating(item)"
+                text="对应会话未连接">
+                <span class="locate-action" :class="{ locating: isLocating(item) }">
+                  <IconButton :icon="isLocating(item) ? LoaderCircle : FolderOpen" size="28px"
+                    :aria-label="isLocating(item) ? '正在定位' : locateLabel(item)" tooltip-side="top"
+                    :tooltip="canLocate(item)" :disabled="!canLocate(item)" :action="() => locate(item)" />
+                </span>
+              </TooltipHint>
+              <span v-else-if="hasLocateAction(item)" class="locate-action"
+                :class="{ locating: isLocating(item) }">
                 <IconButton :icon="isLocating(item) ? LoaderCircle : FolderOpen" size="28px"
                   :aria-label="isLocating(item) ? '正在定位' : locateLabel(item)" tooltip-side="top"
                   :tooltip="canLocate(item)" :disabled="!canLocate(item)" :action="() => locate(item)" />

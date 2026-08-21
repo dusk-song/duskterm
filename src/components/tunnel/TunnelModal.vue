@@ -7,6 +7,7 @@ import DialogFooter from '@/components/ui/dialog/DialogFooter.vue';
 import DialogHeader from '@/components/ui/dialog/DialogHeader.vue';
 import DialogTitle from '@/components/ui/dialog/DialogTitle.vue';
 import Input from '@/components/ui/input/Input.vue';
+import { Tooltip, TooltipContent, TooltipHint, TooltipTrigger } from '@/components/ui/tooltip';
 import TunnelSessionTreeSelect from '@/components/tunnel/TunnelSessionTreeSelect.vue';
 import { confirm } from '@/composables/useConfirm';
 import { toast } from '@/composables/useToast';
@@ -576,35 +577,24 @@ onUnmounted(() => {
           <Button v-if="tunnels.length" size="sm" variant="destructive" :disabled="operationPending" @click="stopAllTunnels">
             停止全部
           </Button>
-          <Button
-            size="icon-sm"
-            variant="ghost"
-            title="刷新状态"
-            aria-label="刷新状态"
-            :disabled="loadingTunnels"
-            @click="fetchTunnels()"
-          >
-            <RefreshCw />
-          </Button>
-          <Button
-            size="icon-sm"
-            variant="outline"
-            title="新建配置"
-            aria-label="新建配置"
-            :disabled="operationPending"
-            @click="createNewConfig"
-          >
-            <Plus />
-          </Button>
-          <Button
-            size="icon-sm"
-            title="保存配置"
-            aria-label="保存配置"
-            :disabled="!selectedSessionId || operationPending"
-            @click="saveCurrentConfig()"
-          >
-            <SaveIcon />
-          </Button>
+          <TooltipHint text="刷新状态">
+            <Button size="icon-sm" variant="ghost" aria-label="刷新状态"
+              :disabled="loadingTunnels" @click="fetchTunnels()">
+              <RefreshCw />
+            </Button>
+          </TooltipHint>
+          <TooltipHint text="新建配置">
+            <Button size="icon-sm" variant="outline" aria-label="新建配置"
+              :disabled="operationPending" @click="createNewConfig">
+              <Plus />
+            </Button>
+          </TooltipHint>
+          <TooltipHint text="保存配置">
+            <Button size="icon-sm" aria-label="保存配置"
+              :disabled="!selectedSessionId || operationPending" @click="saveCurrentConfig()">
+              <SaveIcon />
+            </Button>
+          </TooltipHint>
         </div>
       </div>
 
@@ -642,18 +632,24 @@ onUnmounted(() => {
                 </button>
 
                 <DropdownMenuRoot>
-                  <DropdownMenuTrigger as-child>
-                    <Button
-                      size="icon-sm"
-                      variant="ghost"
-                      class="mr-1 text-foreground/70 hover:text-foreground"
-                      :disabled="operationPending"
-                      :title="`${buildConfigLabel(config)}更多操作`"
-                      :aria-label="`${buildConfigLabel(config)}更多操作`"
-                    >
-                      <MoreHorizontal />
-                    </Button>
-                  </DropdownMenuTrigger>
+                  <Tooltip :delay-duration="200">
+                    <TooltipTrigger as-child>
+                      <DropdownMenuTrigger as-child>
+                        <Button
+                          size="icon-sm"
+                          variant="ghost"
+                          class="mr-1 text-foreground/70 hover:text-foreground"
+                          :disabled="operationPending"
+                          :aria-label="`${buildConfigLabel(config)}更多操作`"
+                        >
+                          <MoreHorizontal />
+                        </Button>
+                      </DropdownMenuTrigger>
+                    </TooltipTrigger>
+                    <TooltipContent side="top" :side-offset="8">
+                      {{ `${buildConfigLabel(config)}更多操作` }}
+                    </TooltipContent>
+                  </Tooltip>
                   <DropdownMenuPortal>
                     <DropdownMenuContent
                       side="bottom"

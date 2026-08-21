@@ -6,6 +6,7 @@ import {
   resolveDesktopPetAssetUrl
 } from '@/utils/desktopPet';
 import { isReducedPerformance } from '@/utils/performance';
+import { TooltipHint } from '@/components/ui/tooltip';
 
 const props = defineProps({
   settings: {
@@ -320,17 +321,19 @@ onBeforeUnmount(() => {
 <template>
   <div ref="petHostRef" v-if="displayNode" class="desktop-pet-layer" :style="petLayerStyle">
     <div class="desktop-pet-stage" :style="petStageStyle">
-      <div class="desktop-pet-shell" :style="petShellStyle">
-        <Transition name="pet-fade" mode="out-in">
-          <button v-if="dragHintVisible" :key="`${activeNodeKey}-drag`" class="desktop-pet-drag-surface" type="button"
-            :title="dragButtonTitle" @mousedown="handleDragStart">
-            <img class="desktop-pet-image" :style="activeNodeAssetStyle" :src="activeNodeAssetUrl" :alt="imageAlt"
-              draggable="false" />
-          </button>
-          <img v-else :key="`${activeNodeKey}-img`" class="desktop-pet-image" :style="activeNodeAssetStyle"
-            :src="activeNodeAssetUrl" :alt="imageAlt" draggable="false" />
-        </Transition>
-      </div>
+      <TooltipHint :text="dragHintVisible ? dragButtonTitle : ''">
+        <div class="desktop-pet-shell" :style="petShellStyle">
+          <Transition name="pet-fade" mode="out-in">
+            <button v-if="dragHintVisible" :key="`${activeNodeKey}-drag`" class="desktop-pet-drag-surface"
+              type="button" @mousedown="handleDragStart">
+              <img class="desktop-pet-image" :style="activeNodeAssetStyle" :src="activeNodeAssetUrl" :alt="imageAlt"
+                draggable="false" />
+            </button>
+            <img v-else :key="`${activeNodeKey}-img`" class="desktop-pet-image" :style="activeNodeAssetStyle"
+              :src="activeNodeAssetUrl" :alt="imageAlt" draggable="false" />
+          </Transition>
+        </div>
+      </TooltipHint>
     </div>
   </div>
 </template>
