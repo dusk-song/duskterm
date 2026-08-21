@@ -24,7 +24,9 @@ use super::{
 
 const DECISION_TIMEOUT: Duration = Duration::from_secs(30);
 const PROBE_PENDING_TIMEOUT: Duration = Duration::from_millis(50);
-const PROTOCOL_TIMEOUT: Duration = Duration::from_secs(90);
+// Weak mobile links can stop making progress for well over a minute while TCP
+// retransmits. Treat only a sustained lack of protocol progress as fatal.
+const PROTOCOL_TIMEOUT: Duration = Duration::from_secs(180);
 const PROTOCOL_RETRY_INTERVAL: Duration = Duration::from_secs(10);
 const RECOVERY_DELAY: Duration = Duration::from_millis(800);
 const POST_UPLOAD_ENTER_DELAY: Duration = Duration::from_millis(250);
@@ -32,6 +34,12 @@ const MAX_RECOVERY_BUFFER: usize = 64 * 1024;
 const MAX_UPLOAD_DRIVER_STEPS: usize = 32 * 1024;
 const MAX_DOWNLOAD_DRIVER_STEPS: usize = 4096;
 const UPLOAD_CHANNEL_BATCH_SIZE: usize = 128 * 1024;
+// A bounded window gives rz regular opportunities to acknowledge progress and
+// request a rewind without paying one round trip for every 1 KiB subpacket.
+const UPLOAD_STREAMING_WINDOW_SUBPACKETS: usize = 256;
+// Advertise a modest receive window to sz. This keeps periodic ZACK/ZRPOS
+// checkpoints while avoiding one network round trip per 1 KiB subpacket.
+const DOWNLOAD_FLOW_CONTROL_WINDOW_BYTES: u16 = 32 * 1024;
 const PROGRESS_EMIT_INTERVAL: Duration = Duration::from_millis(100);
 
 #[derive(Clone)]
@@ -166,9 +174,9 @@ impl TerminalTransferRuntime {
         let protocol_timed_out = self
             .active
             .as_ref()
-            .is_some_and(|active| active.last_remote_activity().elapsed() >= PROTOCOL_TIMEOUT);
+            .is_some_and(|active| active.last_protocol_progress().elapsed() >= PROTOCOL_TIMEOUT);
         if protocol_timed_out {
-            let error = "ZMODEM 协议等待远端响应超时".to_string();
+            let error = "ZMODEM 协议长时间无有效传输进展".to_string();
             if let Some(active) = self.active.as_mut() {
                 active.fail(app_handle, &self.context, &error).await;
             }
@@ -618,10 +626,10 @@ impl ActiveZmodemRuntime {
         .map_err(|error| format!("ZMODEM 超时恢复失败：{error}"))
     }
 
-    fn last_remote_activity(&self) -> Instant {
+    fn last_protocol_progress(&self) -> Instant {
         match self {
-            Self::Upload(runtime) => runtime.last_remote_activity,
-            Self::Download(runtime) => runtime.last_remote_activity,
+            Self::Upload(runtime) => runtime.last_protocol_progress,
+            Self::Download(runtime) => runtime.last_protocol_progress,
         }
     }
 
@@ -670,8 +678,9 @@ struct UploadRuntime {
     wire_buffer: Vec<u8>,
     wire_offset: usize,
     pending_channel_write: Vec<u8>,
+    pending_channel_write_has_file_data: bool,
     session_completed: bool,
-    last_remote_activity: Instant,
+    last_protocol_progress: Instant,
     last_retry: Instant,
 }
 
@@ -720,10 +729,10 @@ impl UploadRuntime {
 
         let mut engine =
             Sender::new().map_err(|error| format!("初始化 ZMODEM Sender 失败：{error}"))?;
-        // SSH already provides an ordered, reliable byte stream. Waiting for a
-        // ZMODEM acknowledgement every small window adds one network round trip
-        // without improving integrity here.
-        engine.set_streaming_window(usize::MAX);
+        // SSH already provides an ordered, reliable byte stream, so a larger
+        // window is appropriate. Keep it bounded so weak links still receive
+        // periodic acknowledgements and ZRPOS recovery checkpoints.
+        engine.set_streaming_window(UPLOAD_STREAMING_WINDOW_SUBPACKETS);
 
         for spec in &pending_files {
             emit_progress(
@@ -752,8 +761,9 @@ impl UploadRuntime {
             wire_buffer: Vec::new(),
             wire_offset: 0,
             pending_channel_write: Vec::with_capacity(UPLOAD_CHANNEL_BATCH_SIZE),
+            pending_channel_write_has_file_data: false,
             session_completed: false,
-            last_remote_activity: Instant::now(),
+            last_protocol_progress: Instant::now(),
             last_retry: Instant::now(),
         };
         if let Err(error) = runtime.activate_next(app_handle, context).await {
@@ -765,7 +775,7 @@ impl UploadRuntime {
 
     fn push_wire(&mut self, data: &[u8]) {
         self.wire_buffer.extend_from_slice(data);
-        self.last_remote_activity = Instant::now();
+        self.last_protocol_progress = Instant::now();
     }
 
     async fn activate_next(
@@ -857,6 +867,7 @@ impl UploadRuntime {
                     self.engine
                         .submit_file(&current.read_buffer)
                         .map_err(|error| format!("提交 ZMODEM 文件数据失败：{error}"))?;
+                    self.pending_channel_write_has_file_data = true;
                     current.current = requested_offset.saturating_add(max_len as u64);
                     if current.last_progress_emit.elapsed() >= PROGRESS_EMIT_INTERVAL
                         || current.current >= current.spec.size
@@ -985,12 +996,20 @@ impl UploadRuntime {
         if self.pending_channel_write.is_empty() {
             return Ok(());
         }
+        let has_file_data = self.pending_channel_write_has_file_data;
         let output = std::mem::take(&mut self.pending_channel_write);
         channel
             .data_bytes(output)
             .await
             .map_err(|error| format!("写入 ZMODEM 协议数据失败：{error}"))?;
         self.pending_channel_write = Vec::with_capacity(UPLOAD_CHANNEL_BATCH_SIZE);
+        self.pending_channel_write_has_file_data = false;
+        if has_file_data {
+            // data_bytes() may wait for the SSH channel window on a weak link.
+            // Refresh after it succeeds so that a long, productive write is
+            // not mistaken for 180 seconds of protocol inactivity.
+            self.last_protocol_progress = Instant::now();
+        }
         Ok(())
     }
 
@@ -1088,7 +1107,7 @@ struct DownloadRuntime {
     wire_buffer: Vec<u8>,
     wire_offset: usize,
     session_completed: bool,
-    last_remote_activity: Instant,
+    last_protocol_progress: Instant,
     last_retry: Instant,
 }
 
@@ -1098,8 +1117,8 @@ impl DownloadRuntime {
         directory: PathBuf,
         collision_policy: DownloadCollisionPolicy,
     ) -> Result<Self, String> {
-        let mut engine =
-            Receiver::new().map_err(|error| format!("初始化 ZMODEM Receiver 失败：{error}"))?;
+        let mut engine = Receiver::with_flow_control(DOWNLOAD_FLOW_CONTROL_WINDOW_BYTES, true)
+            .map_err(|error| format!("初始化 ZMODEM Receiver 失败：{error}"))?;
         engine.set_manual_file_accept(true);
         Ok(Self {
             operation_id,
@@ -1110,14 +1129,14 @@ impl DownloadRuntime {
             wire_buffer: Vec::new(),
             wire_offset: 0,
             session_completed: false,
-            last_remote_activity: Instant::now(),
+            last_protocol_progress: Instant::now(),
             last_retry: Instant::now(),
         })
     }
 
     fn push_wire(&mut self, data: &[u8]) {
         self.wire_buffer.extend_from_slice(data);
-        self.last_remote_activity = Instant::now();
+        self.last_protocol_progress = Instant::now();
     }
 
     async fn drive(

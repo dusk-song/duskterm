@@ -721,6 +721,17 @@ fn test_zrinit_advertises_configured_flow_control() {
     assert_eq!(u16::from_le_bytes([flags[0], flags[1]]), 1024);
     assert_eq!(flags[3] & Zrinit::CANOVIO.bits(), 0);
 
+    // A bounded overlapped-I/O window keeps periodic checkpoints while
+    // allowing callers on higher-latency transports to amortize ZACK waits.
+    let mut receiver = Receiver::with_flow_control(32 * 1024, true).unwrap();
+    let header = match receiver.poll() {
+        Action::WriteWire(bytes) => parse_first_header(bytes),
+        other => panic!("unexpected action: {other:?}"),
+    };
+    let flags = header.count().to_le_bytes();
+    assert_eq!(u16::from_le_bytes([flags[0], flags[1]]), 32 * 1024);
+    assert_ne!(flags[3] & Zrinit::CANOVIO.bits(), 0);
+
     // Streaming configuration: zero buffer length plus CANOVIO, the
     // combination lrzsz's `sz` requires before it streams nonstop.
     let mut receiver = Receiver::with_flow_control(0, true).unwrap();
