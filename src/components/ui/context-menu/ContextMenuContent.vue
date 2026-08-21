@@ -19,12 +19,12 @@ const props = defineProps({
   alignFlip: { type: Boolean, required: false },
   avoidCollisions: { type: Boolean, required: false },
   collisionBoundary: { type: null, required: false },
-  collisionPadding: { type: [Number, Object], required: false },
+  collisionPadding: { type: [Number, Object], required: false, default: 8 },
   hideShiftedArrow: { type: Boolean, required: false },
   sticky: { type: String, required: false },
   hideWhenDetached: { type: Boolean, required: false },
-  positionStrategy: { type: String, required: false },
-  disableUpdateOnLayoutShift: { type: Boolean, required: false },
+  positionStrategy: { type: String, required: false, default: "fixed" },
+  disableUpdateOnLayoutShift: { type: Boolean, required: false, default: true },
   prioritizePosition: { type: Boolean, required: false },
   reference: { type: null, required: false },
   asChild: { type: Boolean, required: false },
@@ -51,7 +51,7 @@ const forwarded = useForwardPropsEmits(delegatedProps, emits);
       v-bind="{ ...$attrs, ...forwarded }"
       :class="
         cn(
-          'data-open:animate-in data-closed:animate-out data-closed:fade-out-0 data-open:fade-in-0 data-closed:zoom-out-95 data-open:zoom-in-95 data-[side=bottom]:slide-in-from-top-2 data-[side=left]:slide-in-from-right-2 data-[side=right]:slide-in-from-left-2 data-[side=top]:slide-in-from-bottom-2 border-[var(--app-border-dark)] bg-popover text-popover-foreground min-w-36 rounded-[10px] border p-1 shadow-[var(--niri-shadow-dialog)] duration-[var(--app-motion-menu)] ease-[var(--app-motion-ease)] z-[var(--z-dropdown)] max-h-(--reka-context-menu-content-available-height) origin-(--reka-context-menu-content-transform-origin) overflow-x-hidden overflow-y-auto',
+          'app-context-menu-content',
           props.class,
         )
       "
@@ -60,3 +60,46 @@ const forwarded = useForwardPropsEmits(delegatedProps, emits);
     </ContextMenuContent>
   </ContextMenuPortal>
 </template>
+
+<style>
+@keyframes app-context-menu-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes app-context-menu-out {
+  from { opacity: 1; }
+  to { opacity: 0; }
+}
+
+.app-context-menu-content {
+  z-index: var(--z-dropdown);
+  min-width: 136px;
+  max-height: var(--reka-context-menu-content-available-height);
+  padding: 4px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border: 1px solid var(--app-border-shadow);
+  border-radius: var(--niri-radius-md, 8px);
+  background: var(--app-bg-dialog);
+  box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22);
+  color: var(--app-text);
+  font-family: var(--app-font-family);
+  font-size: var(--app-font-caption-size, 12px);
+  line-height: 1.35;
+}
+
+.app-context-menu-content[data-state="open"] {
+  animation: app-context-menu-in 70ms linear both;
+}
+
+.app-context-menu-content[data-state="closed"] {
+  animation: app-context-menu-out 45ms linear both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-context-menu-content[data-state] {
+    animation: none;
+  }
+}
+</style>

@@ -157,8 +157,6 @@ const listItems = computed(() => {
 
 const selection = useFileSelection(listItems);
 
-const ctxRecord = ref(null);
-
 const navigatingDir = ref(false);
 const reconnectingSftp = ref(false);
 let sftpUploadQueue = Promise.resolve();
@@ -199,6 +197,25 @@ const visibleRows = computed(() => listVirtual.visibleItems.value.map((item, idx
   item,
   index: listVirtual.startIndex.value + idx
 })));
+const ctxRecord = ref(null);
+
+function prepareContextMenu(event) {
+  const row = event.target instanceof Element
+    ? event.target.closest('[data-sftp-context-index]')
+    : null;
+  const indexText = row?.getAttribute('data-sftp-context-index');
+  const index = indexText == null ? -1 : Number(indexText);
+  const record = Number.isInteger(index) && index >= 0 ? listItems.value[index] : null;
+  ctxRecord.value = record || null;
+  if (!record) {
+    event.preventDefault();
+    return;
+  }
+  hideRowTooltip();
+  if (!record.__parent && !record.__draftFolder && !selection.isSelected(record)) {
+    selection.selectSingle(record, index);
+  }
+}
 
 const selectedRecords = computed(() => selection.selectedList.value.filter(item => !item.__parent));
 const rowTooltipRef = ref(null);
@@ -888,10 +905,6 @@ function onDraftFolderKeydown(event) {
 }
 
 function isContextActionDisabled(action, record) {
-  // Right-click on empty space: only allow general actions
-  if (!record) {
-    return action === 'edit' || action === 'download' || action === 'prop';
-  }
   if (record.__draftFolder) {
     return true;
   }
@@ -978,22 +991,6 @@ async function handleRowDoubleClick(record) {
     return;
   }
   await openEditor(record);
-}
-
-function openContextMenu(event, record) {
-  if (record && !record.__parent && !selection.isSelected(record)) {
-    const index = listItems.value.findIndex(item => item.name === record.name);
-    if (index >= 0) selection.selectSingle(record, index);
-  }
-  ctxRecord.value = record || null;
-}
-
-function onPanelContextMenu(event) {
-  ctxRecord.value = null;
-}
-
-function closeContextMenu() {
-  ctxRecord.value = null;
 }
 
 async function navigateTo(segment) {
@@ -1240,17 +1237,16 @@ async function handleDownload(records = selectedRecords.value) {
 }
 
 async function showProperties(record) {
-  const target = record || ctxRecord.value;
-  if (!target) return;
+  if (!record) return;
   const stat = await invokeCommand('sftp_stat', {
     sessionId: props.sessionId,
-    path: joinRemotePath(currentPath.value, target.name)
+    path: joinRemotePath(currentPath.value, record.name)
   });
 
   confirm({
-    title: `属性 - ${target.name}`,
+    title: `属性 - ${record.name}`,
     content: [
-      target.is_dir ? '目录' : '文件',
+      record.is_dir ? '目录' : '文件',
       `大小: ${formatEntrySize(stat)}`,
       `修改时间: ${localTime(stat)}`,
       `权限: ${permissionText(stat)}`,
@@ -1652,7 +1648,7 @@ watch(() => props.sessionId, async (nextSessionId, prevSessionId) => {
   pager.reset();
   syncListScrollTop(0);
   cancelCreateFolderDraft();
-  closeContextMenu();
+  ctxRecord.value = null;
   if (editorVisible.value) {
     closeEditorState();
   }
@@ -1808,7 +1804,7 @@ onUnmounted(() => {
 
 <template>
   <div ref="fileManagerRef" class="file-manager" :class="{ 'is-native-drop-active': nativeDropActive }"
-    @click="closeContextMenu(); showColumnSettings = false">
+    @click="showColumnSettings = false">
     <div v-if="nativeDropActive" class="fm-native-drop-banner">
       <Upload :size="16" />
       <span>释放以上传 {{ nativeDropPathCount ? `${nativeDropPathCount} 个项目` : '文件' }} 到 {{ nativeDropTargetPath }}</span>
@@ -1851,34 +1847,37 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div class="fm-content" ref="viewportRef" @contextmenu="onPanelContextMenu">
-      <div v-if="!connected" class="fm-state">
-        <div>{{ initializing ? '正在连接 SFTP...' : (netError || '暂无连接') }}</div>
-        <!-- <a-button size="small" @click="retryConnection" :loading="initializing">重试</a-button> -->
-      </div>
-
-      <div v-else class="fm-table">
-        <div class="fm-table-header">
-          <div class="fm-grid" :style="{ gridTemplateColumns: fileListColumns }">
-            <div class="fm-cell fm-head">文件名</div>
-            <div v-if="renderedColumns.size" class="fm-cell fm-head align-right">大小</div>
-            <div v-if="renderedColumns.modified" class="fm-cell fm-head">修改时间</div>
-            <div v-if="renderedColumns.permissions" class="fm-cell fm-head">权限</div>
-            <div v-if="renderedColumns.ownerGroup" class="fm-cell fm-head">用户/组</div>
+    <ContextMenu :key="props.sessionId || 'sftp-context-menu'">
+      <ContextMenuTrigger as-child>
+        <div class="fm-content" ref="viewportRef" @contextmenu.capture="prepareContextMenu">
+          <div v-if="!connected" class="fm-state">
+            <div>{{ initializing ? '正在连接 SFTP...' : (netError || '暂无连接') }}</div>
+            <!-- <a-button size="small" @click="retryConnection" :loading="initializing">重试</a-button> -->
           </div>
-        </div>
 
-        <div class="fm-table-body" ref="bodyScrollRef" @scroll="handleBodyScroll">
-          <div v-if="navigatingDir" class="fm-nav-loading-mask">
-            <LoadingSpinner tip="正在加载目录..." />
-          </div>
-          <div v-else-if="netError" class="fm-list-state fm-list-error">{{ netError }}</div>
-          <div v-else-if="!pager.loading.value && listItems.length === 0" class="fm-list-state">目录为空</div>
-          <div class="fm-body-inner" :style="{ height: listVirtual.totalHeight.value + 'px' }">
-            <div class="fm-virtual" :style="{ transform: `translateY(${listVirtual.translateY.value}px)` }">
-              <ContextMenu v-for="row in visibleRows" :key="row.item.__draftFolder ? '__draft-folder-row' : (row.item.name + '-' + row.index)">
-                <ContextMenuTrigger as-child>
-                  <div :class="rowClass(row.item)" :style="{ gridTemplateColumns: fileListColumns }"
+          <div v-else class="fm-table">
+            <div class="fm-table-header">
+              <div class="fm-grid" :style="{ gridTemplateColumns: fileListColumns }">
+                <div class="fm-cell fm-head">文件名</div>
+                <div v-if="renderedColumns.size" class="fm-cell fm-head align-right">大小</div>
+                <div v-if="renderedColumns.modified" class="fm-cell fm-head">修改时间</div>
+                <div v-if="renderedColumns.permissions" class="fm-cell fm-head">权限</div>
+                <div v-if="renderedColumns.ownerGroup" class="fm-cell fm-head">用户/组</div>
+              </div>
+            </div>
+
+            <div class="fm-table-body" ref="bodyScrollRef" @scroll="handleBodyScroll">
+              <div v-if="navigatingDir" class="fm-nav-loading-mask">
+                <LoadingSpinner tip="正在加载目录..." />
+              </div>
+              <div v-else-if="netError" class="fm-list-state fm-list-error">{{ netError }}</div>
+              <div v-else-if="!pager.loading.value && listItems.length === 0" class="fm-list-state">目录为空</div>
+              <div class="fm-body-inner" :style="{ height: listVirtual.totalHeight.value + 'px' }">
+                <div class="fm-virtual" :style="{ transform: `translateY(${listVirtual.translateY.value}px)` }">
+                  <div v-for="row in visibleRows"
+                    :key="row.item.__draftFolder ? '__draft-folder-row' : (row.item.name + '-' + row.index)"
+                    :class="rowClass(row.item)" :style="{ gridTemplateColumns: fileListColumns }"
+                    :data-sftp-context-index="row.index"
                     :data-sftp-drop-path="dropTargetPathForRecord(row.item) || null"
                     @pointerenter="(event) => showRowTooltip(event, row.item)"
                     @pointerleave="hideRowTooltip"
@@ -1915,30 +1914,30 @@ onUnmounted(() => {
                       {{ row.item.__draftFolder ? '' : ((row.item.owner || '-') + '/' + (row.item.group || '-')) }}
                     </div>
                   </div>
-                </ContextMenuTrigger>
-                <ContextMenuContent>
-                  <ContextMenuItem :disabled="isContextActionDisabled('edit', row.item)"
-                    @select="runContextAction('edit', row.item)">编辑</ContextMenuItem>
-                  <ContextMenuItem :disabled="isContextActionDisabled('download', row.item)"
-                    @select="runContextAction('download', row.item)">下载</ContextMenuItem>
-                  <ContextMenuSeparator />
-                  <ContextMenuItem :disabled="isContextActionDisabled('upload', row.item)"
-                    @select="runContextAction('upload', row.item)">上传</ContextMenuItem>
-                  <ContextMenuItem :disabled="isContextActionDisabled('mkdir', row.item)"
-                    @select="runContextAction('mkdir', row.item)">新建文件夹</ContextMenuItem>
-                  <ContextMenuItem :disabled="isContextActionDisabled('refresh', row.item)"
-                    @select="runContextAction('refresh', row.item)">刷新</ContextMenuItem>
-                  <ContextMenuSeparator />
-                  <ContextMenuItem :disabled="isContextActionDisabled('prop', row.item)"
-                    @select="runContextAction('prop', row.item)">属性</ContextMenuItem>
-                </ContextMenuContent>
-              </ContextMenu>
+                </div>
+              </div>
+              <div class="fm-load-more" v-if="pager.loadingMore.value">加载更多中...</div>
             </div>
           </div>
-          <div class="fm-load-more" v-if="pager.loadingMore.value">加载更多中...</div>
         </div>
-      </div>
-    </div>
+      </ContextMenuTrigger>
+      <ContextMenuContent v-if="ctxRecord">
+        <ContextMenuItem :disabled="isContextActionDisabled('edit', ctxRecord)"
+          @select="runContextAction('edit', ctxRecord)">编辑</ContextMenuItem>
+        <ContextMenuItem :disabled="isContextActionDisabled('download', ctxRecord)"
+          @select="runContextAction('download', ctxRecord)">下载</ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem :disabled="isContextActionDisabled('upload', ctxRecord)"
+          @select="runContextAction('upload', ctxRecord)">上传</ContextMenuItem>
+        <ContextMenuItem :disabled="isContextActionDisabled('mkdir', ctxRecord)"
+          @select="runContextAction('mkdir', ctxRecord)">新建文件夹</ContextMenuItem>
+        <ContextMenuItem :disabled="isContextActionDisabled('refresh', ctxRecord)"
+          @select="runContextAction('refresh', ctxRecord)">刷新</ContextMenuItem>
+        <ContextMenuSeparator />
+        <ContextMenuItem :disabled="isContextActionDisabled('prop', ctxRecord)"
+          @select="runContextAction('prop', ctxRecord)">属性</ContextMenuItem>
+      </ContextMenuContent>
+    </ContextMenu>
 
     <Teleport to="body">
       <div ref="rowTooltipRef" class="fm-row-tooltip" role="tooltip" aria-hidden="true">

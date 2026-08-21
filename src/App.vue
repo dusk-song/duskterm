@@ -706,7 +706,7 @@ if (typeof requestIdleCallback === 'function') {
   setTimeout(_deferLoadSessions, 0);
 }
 
-const { activeKey, visibleSessions, setActivePanel, movePanel } = useTerminalPanels(sshStore);
+const { activeKey, visibleSessions, setActivePanel } = useTerminalPanels(sshStore);
 const recentSessionSettings = computed(() => mainUiSettings.value.recentSessions);
 const recentSessions = computed(() => {
   if (!recentSessionSettings.value.enabled) return [];
@@ -1126,39 +1126,6 @@ onUnmounted(() => {
 
 useWindowInteraction({ onResize: measureWorkspace });
 
-// --- Panel Bar DnD & Context Menu ---
-const onPanelDrop = ({ dragId, dropId }) => {
-  movePanel(dragId, dropId);
-};
-
-const onPanelContext = ({ key, panel }) => {
-  handleTabContext(key, panel);
-};
-
-const copyToClipboard = async (text) => {
-  try {
-    await navigator.clipboard.writeText(text);
-    toast.success('已复制');
-  } catch (err) {
-    toast.error('复制失败');
-  }
-};
-
-const handleTabContext = (key, session) => {
-  if (key === 'copy-session') {
-    if (session.config) {
-      sshStore.connectLogicWithMeta(session.config);
-    }
-  } else if (key === 'copy-name') {
-    copyToClipboard(session.name);
-  } else if (key === 'copy-ip') {
-    const host = session.host || session.config?.host;
-    if (host) copyToClipboard(host);
-  } else if (key === 'close') {
-    onEdit(session.id, 'remove');
-  }
-};
-
 </script>
 
 <template>
@@ -1248,7 +1215,7 @@ const handleTabContext = (key, session) => {
             <TerminalPanelManager v-else :panels="visibleSessions" :active-panel-id="activeKey"
               :split-trees="splitTrees" :focused-leaf="focusedLeaf" :resolve-tree="ensureTree"
               :on-split-drag="startSplitDrag" :on-set-focused="setFocused" @activate="setActivePanel"
-              @close-panel="removePanelRoot" @tab-drop="onPanelDrop" @tab-context="onPanelContext" />
+              @close-panel="removePanelRoot" />
 
             <DesktopPet :settings="desktopPetSettings" :suspend="isAnyModalOpen || hasWorkspaceRightPanel"
               @settings-change="handleDesktopPetSettingsChange" />

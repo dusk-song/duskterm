@@ -4253,5 +4253,4 @@ onUnmounted(() => {
   }
 }
 
-/* Context menu styling provided by shadcn-vue ContextMenu component */
 </style>

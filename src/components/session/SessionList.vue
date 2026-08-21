@@ -275,6 +275,16 @@ const { visibleItems, totalHeight, translateY, onScroll: onVirtualScroll, setVie
   items: flatList,
   rowHeight: 34,
 });
+const contextMenuNode = ref(null);
+
+function prepareContextMenu(event) {
+  const row = event.target instanceof Element
+    ? event.target.closest('[data-session-context-key]')
+    : null;
+  const key = row?.getAttribute('data-session-context-key') || '';
+  contextMenuNode.value = visibleItems.value.find(item => item.key === key) || null;
+  if (!contextMenuNode.value) event.preventDefault();
+}
 
 // Drag reorder for groups only
 const draggingGroupName = ref('');
@@ -572,16 +582,17 @@ const handleImportSessions = async () => {
           <span>{{ profile.name }}</span>
         </button>
       </div>
-      <div v-if="sshStore.savedSessions.length > 0" class="session-tree-viewport" @scroll="onVirtualScroll">
-        <div :style="{ height: totalHeight + 'px', position: 'relative' }">
-          <div :style="{ transform: `translateY(${translateY}px)` }">
-            <ContextMenu v-for="item in visibleItems" :key="item.key">
-              <ContextMenuTrigger as-child>
-                <div class="tree-row"
+      <ContextMenu v-if="sshStore.savedSessions.length > 0">
+        <ContextMenuTrigger as-child>
+          <div class="session-tree-viewport" @scroll="onVirtualScroll" @contextmenu.capture="prepareContextMenu">
+            <div :style="{ height: totalHeight + 'px', position: 'relative' }">
+              <div :style="{ transform: `translateY(${translateY}px)` }">
+                <div v-for="item in visibleItems" :key="item.key" class="tree-row"
                   :class="{
                     'drag-over': dragOverGroupName === (item.data?.groupName || item.title),
                     'is-dragging': draggingGroupName === (item.data?.groupName || item.title)
                   }"
+                  :data-session-context-key="item.key"
                   :data-group-name="item._isGroup ? (item.data?.groupName || item.title) : null"
                   :style="{ paddingLeft: (item._depth * 16 + 4) + 'px', height: '34px' }"
                   @click="onTreeRowClick(item)"
@@ -624,31 +635,31 @@ const handleImportSessions = async () => {
                     </span>
                   </TooltipHint>
                 </div>
-              </ContextMenuTrigger>
-              <ContextMenuContent>
-                <template v-if="item.isLeaf">
-                  <ContextMenuItem @select="onCtxMenuClick('connect', item)">连接</ContextMenuItem>
-                  <ContextMenuItem @select="onCtxMenuClick('edit', item)">编辑</ContextMenuItem>
-                  <ContextMenuItem @select="onCtxMenuClick('duplicate', item)">复制会话</ContextMenuItem>
-                  <ContextMenuSeparator />
-                  <ContextMenuItem class="!text-destructive" @select="onCtxMenuClick('delete', item)">删除
-                  </ContextMenuItem>
-                </template>
-                <template v-else>
-                  <ContextMenuItem @select="onCtxMenuClick('rename', item)">重命名</ContextMenuItem>
-                  <ContextMenuItem @select="onCtxMenuClick('pin', item)">{{ item.data?.pinned ? '取消置顶' : '置顶' }}
-                  </ContextMenuItem>
-                  <ContextMenuItem @select="onCtxMenuClick('lock', item)">{{ item.data?.locked ? '解除锁定' : '锁定' }}
-                  </ContextMenuItem>
-                  <ContextMenuSeparator />
-                  <ContextMenuItem class="!text-destructive" @select="onCtxMenuClick('delete-group', item)">删除分组
-                  </ContextMenuItem>
-                </template>
-              </ContextMenuContent>
-            </ContextMenu>
+              </div>
+            </div>
           </div>
-        </div>
-      </div>
+        </ContextMenuTrigger>
+        <ContextMenuContent v-if="contextMenuNode">
+          <template v-if="contextMenuNode.isLeaf">
+            <ContextMenuItem @select="onCtxMenuClick('connect', contextMenuNode)">连接</ContextMenuItem>
+            <ContextMenuItem @select="onCtxMenuClick('edit', contextMenuNode)">编辑</ContextMenuItem>
+            <ContextMenuItem @select="onCtxMenuClick('duplicate', contextMenuNode)">复制会话</ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextMenuItem variant="destructive" @select="onCtxMenuClick('delete', contextMenuNode)">删除
+            </ContextMenuItem>
+          </template>
+          <template v-else>
+            <ContextMenuItem @select="onCtxMenuClick('rename', contextMenuNode)">重命名</ContextMenuItem>
+            <ContextMenuItem @select="onCtxMenuClick('pin', contextMenuNode)">{{ contextMenuNode.data?.pinned ? '取消置顶' : '置顶' }}
+            </ContextMenuItem>
+            <ContextMenuItem @select="onCtxMenuClick('lock', contextMenuNode)">{{ contextMenuNode.data?.locked ? '解除锁定' : '锁定' }}
+            </ContextMenuItem>
+            <ContextMenuSeparator />
+            <ContextMenuItem variant="destructive" @select="onCtxMenuClick('delete-group', contextMenuNode)">删除分组
+            </ContextMenuItem>
+          </template>
+        </ContextMenuContent>
+      </ContextMenu>
       <div v-else class="empty-tip">
         暂无会话
       </div>
@@ -904,62 +915,4 @@ html.dark .tree-row:hover {
   border-radius: 2px;
 }
 
-:deep(.ant-tree-node-content-wrapper) {
-  border-radius: 0 !important;
-  padding: 2px 4px !important;
-  transition: none !important;
-  /* Fast response */
-  border: 1px solid transparent;
-  /* Always have a border width to prevent layout jump */
-  animation: none !important;
-}
-
-/* Keep hover/active/selected consistent grey */
-</style>
-
-<style>
-/* Global styles for Context Menu — theme-aware via app tokens */
-.custom-context-menu .ant-dropdown-menu {
-  border-radius: 4px;
-  border: 1px solid var(--app-border-shadow);
-  padding: 4px;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
-  background: var(--app-bg-dialog);
-}
-
-.custom-context-menu .ant-dropdown-menu-item {
-  font-size: 14px !important;
-  padding: 4px 12px !important;
-  border-radius: 3px;
-  color: var(--app-text);
-  transition: none;
-  font-family: var(--app-font-family) !important;
-}
-
-/* Hover — brand color highlight */
-.custom-context-menu .ant-dropdown-menu-item:hover,
-.custom-context-menu .ant-dropdown-menu-submenu-title:hover {
-  background-color: var(--color-primary) !important;
-  color: var(--color-primary-foreground) !important;
-}
-
-/* Danger items */
-.custom-context-menu .ant-dropdown-menu-item-danger {
-  color: var(--color-danger);
-}
-
-.custom-context-menu .ant-dropdown-menu-item-danger:hover {
-  background-color: var(--color-danger) !important;
-  color: var(--color-danger-foreground) !important;
-}
-
-/* Eliminate Wave Effect / Slow transitions */
-[ant-click-animating-without-extra-node]:after {
-  animation: none !important;
-  display: none !important;
-}
-
-.ant-wave {
-  display: none !important;
-}
 </style>

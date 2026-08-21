@@ -27,7 +27,7 @@ const forwarded = useForwardPropsEmits(delegatedProps, emits);
     v-bind="forwarded"
     :class="
       cn(
-        'focus:bg-accent focus:text-accent-foreground data-[variant=destructive]:text-destructive data-[variant=destructive]:focus:bg-destructive/10 dark:data-[variant=destructive]:focus:bg-destructive/20 data-[variant=destructive]:focus:text-destructive data-[variant=destructive]:*:[svg]:text-destructive focus:*:[svg]:text-accent-foreground gap-2 rounded-sm px-2 py-1.5 text-sm data-inset:pl-8 [&_svg:not([class*=size-])]:size-4 group/context-menu-item relative flex cursor-default items-center outline-hidden select-none data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0',
+        'app-context-menu-item',
         props.class,
       )
     "
@@ -35,3 +35,51 @@ const forwarded = useForwardPropsEmits(delegatedProps, emits);
     <slot />
   </ContextMenuItem>
 </template>
+
+<style>
+.app-context-menu-item {
+  position: relative;
+  display: flex;
+  min-height: 27px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border-radius: var(--niri-radius-sm, 6px);
+  outline: none;
+  color: var(--app-text);
+  font-size: var(--app-font-caption-size, 12px);
+  line-height: 1.35;
+  cursor: default;
+  user-select: none;
+}
+
+.app-context-menu-item[data-inset] {
+  padding-left: 28px;
+}
+
+.app-context-menu-item:focus {
+  background: var(--tb-entry-hover, color-mix(in srgb, var(--app-text) 8%, transparent));
+  color: var(--app-text);
+}
+
+.app-context-menu-item[data-disabled] {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.app-context-menu-item[data-variant="destructive"] {
+  color: var(--color-danger);
+}
+
+.app-context-menu-item[data-variant="destructive"]:focus {
+  background: var(--app-risk-danger-bg);
+  color: var(--color-danger);
+}
+
+.app-context-menu-item svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  pointer-events: none;
+}
+</style>

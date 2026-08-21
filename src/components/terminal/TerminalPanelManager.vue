@@ -15,7 +15,7 @@ const props = defineProps({
   onSetFocused: { type: Function, required: true }
 });
 
-const emit = defineEmits(['activate', 'close-panel', 'tab-drop', 'tab-context']);
+const emit = defineEmits(['activate', 'close-panel']);
 
 const closeActivePanel = () => {
   if (props.activePanelId) emit('close-panel', props.activePanelId);
