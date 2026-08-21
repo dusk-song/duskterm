@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
+use std::io::SeekFrom;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -17,7 +18,7 @@ use russh_sftp::{
 };
 use sha2::{Digest, Sha256};
 use tauri::{AppHandle, Emitter, Manager, Window};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt};
 use tokio::sync::oneshot;
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 use zeroize::Zeroize;
@@ -58,6 +59,7 @@ pub(crate) fn sftp_client_config() -> russh_sftp::client::Config {
     config
 }
 const MAX_INLINE_EDITOR_FILE_BYTES: u64 = 8 * 1024 * 1024;
+const INLINE_EDITOR_MAX_CONCURRENT_READS: usize = 8;
 
 /// 限制 SFTP list_cache 每个 session 最多缓存 40 个目录列表，防止内存泄漏
 const MAX_LIST_CACHE_PER_SESSION: usize = 40;
@@ -75,30 +77,33 @@ const EDITABLE_TEXT_EXTENSIONS: &[(&str, &str)] = &[
     ("cfg", "plaintext"),
     ("ini", "ini"),
     ("env", "shell"),
-    ("properties", "ini"),
-    ("prop", "ini"),
+    ("properties", "properties"),
+    ("prop", "properties"),
     ("lock", "plaintext"),
     ("json", "json"),
     ("jsonc", "json"),
     ("json5", "json"),
     ("yaml", "yaml"),
     ("yml", "yaml"),
-    ("toml", "ini"),
+    ("toml", "toml"),
     ("xml", "xml"),
-    ("csv", "plaintext"),
-    ("tsv", "plaintext"),
+    ("csv", "csv"),
+    ("tsv", "tsv"),
+    ("diff", "diff"),
+    ("patch", "diff"),
     ("md", "markdown"),
     ("markdown", "markdown"),
     ("sql", "sql"),
     ("gql", "graphql"),
     ("graphql", "graphql"),
     ("js", "javascript"),
-    ("jsx", "javascript"),
+    ("jsx", "jsx"),
     ("mjs", "javascript"),
     ("cjs", "javascript"),
     ("ts", "typescript"),
-    ("tsx", "typescript"),
-    ("vue", "html"),
+    ("tsx", "tsx"),
+    ("vue", "vue"),
+    ("astro", "astro"),
     ("html", "html"),
     ("htm", "html"),
     ("css", "css"),
@@ -129,17 +134,17 @@ const EDITABLE_TEXT_EXTENSIONS: &[(&str, &str)] = &[
     ("swift", "swift"),
     ("kt", "kotlin"),
     ("kts", "kotlin"),
-    ("lua", "plaintext"),
-    ("pl", "plaintext"),
-    ("pm", "plaintext"),
-    ("gradle", "plaintext"),
-    ("groovy", "plaintext"),
-    ("dart", "plaintext"),
-    ("cs", "plaintext"),
+    ("lua", "lua"),
+    ("pl", "perl"),
+    ("pm", "perl"),
+    ("gradle", "groovy"),
+    ("groovy", "groovy"),
+    ("dart", "dart"),
+    ("cs", "csharp"),
     ("csproj", "xml"),
-    ("fs", "plaintext"),
-    ("fsx", "plaintext"),
-    ("vb", "plaintext"),
+    ("fs", "fsharp"),
+    ("fsx", "fsharp"),
+    ("vb", "vbscript"),
     ("sln", "plaintext"),
     ("cmake", "plaintext"),
     ("service", "ini"),
@@ -147,16 +152,38 @@ const EDITABLE_TEXT_EXTENSIONS: &[(&str, &str)] = &[
     ("timer", "ini"),
     ("target", "ini"),
     ("mount", "ini"),
+    ("tf", "terraform"),
+    ("tfvars", "terraform"),
+    ("proto", "protobuf"),
+    ("prisma", "prisma"),
+    ("scala", "scala"),
+    ("sc", "scala"),
+    ("ex", "elixir"),
+    ("exs", "elixir"),
+    ("erl", "erlang"),
+    ("hrl", "erlang"),
+    ("hs", "haskell"),
+    ("lhs", "haskell"),
+    ("r", "r"),
+    ("zig", "zig"),
+    ("nix", "nix"),
+    ("svg", "svg"),
+    ("ejs", "ejs"),
+    ("hbs", "handlebars"),
+    ("handlebars", "handlebars"),
+    ("twig", "twig"),
 ];
 
 const EDITABLE_TEXT_FILE_NAMES: &[(&str, &str)] = &[
-    ("dockerfile", "shell"),
+    ("dockerfile", "dockerfile"),
+    ("containerfile", "dockerfile"),
     ("composefile", "yaml"),
-    ("makefile", "plaintext"),
+    ("makefile", "makefile"),
+    ("gnumakefile", "makefile"),
     ("cmakelists.txt", "plaintext"),
     ("readme", "plaintext"),
     ("license", "plaintext"),
-    ("jenkinsfile", "plaintext"),
+    ("jenkinsfile", "groovy"),
     ("vagrantfile", "plaintext"),
     ("gemfile", "ruby"),
     ("rakefile", "ruby"),
@@ -165,8 +192,12 @@ const EDITABLE_TEXT_FILE_NAMES: &[(&str, &str)] = &[
     ("fstab", "plaintext"),
     ("known_hosts", "plaintext"),
     ("authorized_keys", "plaintext"),
-    (".gitignore", "plaintext"),
-    (".dockerignore", "plaintext"),
+    ("nginx.conf", "nginx"),
+    ("httpd.conf", "apache_conf"),
+    ("apache2.conf", "apache_conf"),
+    (".htaccess", "apache_conf"),
+    (".gitignore", "gitignore"),
+    (".dockerignore", "gitignore"),
     (".gitattributes", "plaintext"),
     (".editorconfig", "ini"),
     (".npmrc", "ini"),
@@ -193,6 +224,9 @@ fn text_language_for_path(path: &str) -> Option<&'static str> {
 
     if file_name.starts_with(".env") {
         return Some("shell");
+    }
+    if file_name.starts_with("dockerfile.") || file_name.starts_with("containerfile.") {
+        return Some("dockerfile");
     }
     if let Some((_, language)) = EDITABLE_TEXT_FILE_NAMES
         .iter()
@@ -2004,18 +2038,118 @@ fn encode_editable_text(
 }
 
 async fn read_remote_editable_bytes(sftp: &SftpSession, path: &str) -> Result<Vec<u8>, String> {
+    read_remote_editable_bytes_sequential(sftp, path, None).await
+}
+
+async fn read_remote_editable_bytes_sequential(
+    sftp: &SftpSession,
+    path: &str,
+    expected_size: Option<u64>,
+) -> Result<Vec<u8>, String> {
     let file = sftp
         .open(path)
         .await
         .map_err(|e| format!("Open Error: {}", e))?;
     let mut limited = file.take(MAX_INLINE_EDITOR_FILE_BYTES + 1);
-    let mut contents = Vec::new();
+    let capacity = expected_size
+        .unwrap_or(0)
+        .saturating_add(1)
+        .min(MAX_INLINE_EDITOR_FILE_BYTES + 1) as usize;
+    let mut contents = Vec::with_capacity(capacity);
     limited
         .read_to_end(&mut contents)
         .await
         .map_err(|e| format!("Read Error: {}", e))?;
     ensure_inline_editor_file_size(path, contents.len() as u64)?;
     Ok(contents)
+}
+
+async fn read_remote_editable_range(
+    sftp: Arc<SftpSession>,
+    path: String,
+    offset: u64,
+    length: usize,
+) -> Result<(u64, Vec<u8>), String> {
+    let mut file = sftp
+        .open(&path)
+        .await
+        .map_err(|error| format!("Open Error at offset {}: {}", offset, error))?;
+    file.seek(SeekFrom::Start(offset))
+        .await
+        .map_err(|error| format!("Seek Error at offset {}: {}", offset, error))?;
+    let mut limited = file.take(length as u64);
+    let mut contents = Vec::with_capacity(length);
+    limited
+        .read_to_end(&mut contents)
+        .await
+        .map_err(|error| format!("Read Error at offset {}: {}", offset, error))?;
+    Ok((offset, contents))
+}
+
+async fn read_remote_editable_bytes_sized(
+    sftp: Arc<SftpSession>,
+    path: &str,
+    expected_size: u64,
+) -> Result<Vec<u8>, String> {
+    ensure_inline_editor_file_size(path, expected_size)?;
+    let expected_len = expected_size as usize;
+    if expected_len <= SFTP_TRANSFER_BUFFER_SIZE {
+        return read_remote_editable_bytes_sequential(&sftp, path, Some(expected_size)).await;
+    }
+
+    let mut contents = vec![0; expected_len];
+    let mut tasks = tokio::task::JoinSet::new();
+    let mut next_offset = 0usize;
+    let mut parallel_failed = false;
+
+    while next_offset < expected_len || !tasks.is_empty() {
+        while tasks.len() < INLINE_EDITOR_MAX_CONCURRENT_READS && next_offset < expected_len {
+            let length = (expected_len - next_offset).min(SFTP_TRANSFER_BUFFER_SIZE);
+            tasks.spawn(read_remote_editable_range(
+                sftp.clone(),
+                path.to_string(),
+                next_offset as u64,
+                length,
+            ));
+            next_offset += length;
+        }
+
+        let Some(result) = tasks.join_next().await else {
+            break;
+        };
+        match result {
+            Ok(Ok((offset, chunk))) => {
+                let start = offset as usize;
+                let end = start.saturating_add(chunk.len());
+                if chunk.is_empty() || end > contents.len() {
+                    parallel_failed = true;
+                    break;
+                }
+                contents[start..end].copy_from_slice(&chunk);
+                if chunk.len() != (contents.len() - start).min(SFTP_TRANSFER_BUFFER_SIZE) {
+                    parallel_failed = true;
+                    break;
+                }
+            }
+            Ok(Err(_)) | Err(_) => {
+                parallel_failed = true;
+                break;
+            }
+        }
+    }
+
+    if parallel_failed {
+        tasks.abort_all();
+        while tasks.join_next().await.is_some() {}
+        return read_remote_editable_bytes_sequential(&sftp, path, Some(expected_size)).await;
+    }
+
+    match read_remote_editable_range(sftp.clone(), path.to_string(), expected_size, 1).await {
+        Ok((_, trailing)) if trailing.is_empty() => Ok(contents),
+        Ok(_) | Err(_) => {
+            read_remote_editable_bytes_sequential(&sftp, path, Some(expected_size)).await
+        }
+    }
 }
 
 async fn read_remote_editable_text(sftp: &SftpSession, path: &str) -> Result<EditableText, String> {
@@ -2461,7 +2595,8 @@ pub async fn sftp_open_text_file_legacy(
         .await
         .map_err(|e| format!("Stat Error: {}", e))?;
     ensure_inline_editor_file_size(&path, attrs.size.unwrap_or(0))?;
-    let original_bytes = read_remote_editable_bytes(&sftp, &path).await?;
+    let original_bytes =
+        read_remote_editable_bytes_sized(sftp.clone(), &path, attrs.size.unwrap_or(0)).await?;
     let decoded = decode_editable_text(&original_bytes)?;
     let (passwd_map, group_map) = get_ug_maps(state, &session_id, &sftp).await;
     let file_name = Path::new(&path)
@@ -4435,9 +4570,25 @@ mod tests {
     fn backend_file_type_mapping_is_authoritative() {
         assert_eq!(
             text_language_for_path("/opt/app/application.properties"),
-            Some("ini")
+            Some("properties")
         );
-        assert_eq!(text_language_for_path("/opt/app/Dockerfile"), Some("shell"));
+        assert_eq!(
+            text_language_for_path("/etc/nginx/nginx.conf"),
+            Some("nginx")
+        );
+        assert_eq!(
+            text_language_for_path("/opt/app/Dockerfile.production"),
+            Some("dockerfile")
+        );
+        assert_eq!(
+            text_language_for_path("/opt/app/Jenkinsfile"),
+            Some("groovy")
+        );
+        assert_eq!(text_language_for_path("/opt/app/src/App.tsx"), Some("tsx"));
+        assert_eq!(
+            text_language_for_path("/opt/app/main.tf"),
+            Some("terraform")
+        );
         assert_eq!(
             text_language_for_path("/opt/app/.env.production"),
             Some("shell")

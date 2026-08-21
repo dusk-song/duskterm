@@ -1,11 +1,3 @@
-@font-face {
-  font-family: 'Maple Mono';
-  src: url('/fonts/MapleMono-NF-CN-Light.ttf') format('truetype');
-  font-weight: 500;
-  font-style: normal;
-  font-display: swap;
-}
-
 /* ================================================================
    DuskTerm — Non-color tokens & global utilities
    All color tokens are in src/assets/styles/tailwind.css

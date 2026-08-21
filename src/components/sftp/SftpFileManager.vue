@@ -41,6 +41,7 @@ import {
   startNativeSftpFileDrag
 } from '@/utils/nativeFileDrag';
 import CodeEditor from './CodeEditor.vue';
+import EditorStatusBar from './EditorStatusBar.vue';
 import FileIcon from '@/components/common/FileIcon.vue';
 import IconButton from '@/components/common/IconButton.vue';
 
@@ -81,23 +82,29 @@ const visibleColumns = reactive(loadColumnVisibility());
 watch(visibleColumns, (value) => {
   localStorage.setItem(COLUMN_VISIBILITY_KEY, JSON.stringify(value));
 }, { deep: true });
+const FILE_NAME_MIN_WIDTH = 170;
+const OPTIONAL_COLUMN_WIDTHS = Object.freeze({
+  size: 76,
+  modified: 176,
+  permissions: 92,
+  ownerGroup: 104,
+});
 const renderedColumns = computed(() => {
-  let remaining = Math.max(0, containerWidth.value - 170);
-  const widths = { size: 76, modified: 122, permissions: 92, ownerGroup: 104 };
+  let remaining = Math.max(0, containerWidth.value - FILE_NAME_MIN_WIDTH);
   const result = { size: false, modified: false, permissions: false, ownerGroup: false };
   for (const key of ['size', 'modified', 'permissions', 'ownerGroup']) {
-    if (!visibleColumns[key] || remaining < widths[key]) continue;
+    if (!visibleColumns[key] || remaining < OPTIONAL_COLUMN_WIDTHS[key]) continue;
     result[key] = true;
-    remaining -= widths[key];
+    remaining -= OPTIONAL_COLUMN_WIDTHS[key];
   }
   return result;
 });
 const fileListColumns = computed(() => [
-  'minmax(0, 1fr)',
-  renderedColumns.value.size ? '76px' : '',
-  renderedColumns.value.modified ? '122px' : '',
-  renderedColumns.value.permissions ? '92px' : '',
-  renderedColumns.value.ownerGroup ? '104px' : '',
+  `minmax(${FILE_NAME_MIN_WIDTH}px, 1fr)`,
+  renderedColumns.value.size ? `${OPTIONAL_COLUMN_WIDTHS.size}px` : '',
+  renderedColumns.value.modified ? `minmax(${OPTIONAL_COLUMN_WIDTHS.modified}px, 0.35fr)` : '',
+  renderedColumns.value.permissions ? `${OPTIONAL_COLUMN_WIDTHS.permissions}px` : '',
+  renderedColumns.value.ownerGroup ? `${OPTIONAL_COLUMN_WIDTHS.ownerGroup}px` : '',
 ].filter(Boolean).join(' '));
 
 const bodyScrollRef = ref(null);
@@ -160,6 +167,7 @@ const editorLoading = ref(false);
 const editorReadonly = ref(false);
 const editorSaving = ref(false);
 const editorRef = ref(null);
+const editorStatusRef = ref(null);
 const editorDirty = ref(false);
 const editorOpenRequestId = ref(0);
 const editorFilePath = ref('');
@@ -178,10 +186,6 @@ const editorMeta = reactive({
   owner: '-',
   group: '-'
 });
-const editorCursor = reactive({
-  line: 1,
-  column: 1
-});
 const editorCloseConfirmVisible = ref(false);
 
 const listVirtual = useVirtualList({
@@ -196,33 +200,90 @@ const visibleRows = computed(() => listVirtual.visibleItems.value.map((item, idx
 })));
 
 const selectedRecords = computed(() => selection.selectedList.value.filter(item => !item.__parent));
-const selectedInfoTitle = computed(() => {
-  if (selectedRecords.value.length === 1) return selectedRecords.value[0].name;
-  if (selectedRecords.value.length > 1) return `已选择 ${selectedRecords.value.length} 项`;
-  return currentPath.value;
-});
-const selectedInfoMeta = computed(() => {
-  if (selectedRecords.value.length === 1) {
-    const item = selectedRecords.value[0];
-    const parts = [
-      item.is_dir ? '目录' : formatEntrySize(item),
-      localTime(item),
-      permissionText(item),
-      `${item.owner || '-'}/${item.group || '-'}`,
-    ];
-    return parts.filter(Boolean).join(' · ');
+const rowTooltipRef = ref(null);
+const rowTooltipNameRef = ref(null);
+const rowTooltipMetaRef = ref(null);
+const rowHoverContentCache = new WeakMap();
+
+function rowHoverContent(item) {
+  if (!item) return { name: '', meta: '' };
+  const name = item.__parent ? '..' : item.name;
+  if (item.__parent || item.__draftFolder) return { name, meta: '' };
+  const columns = renderedColumns.value;
+  const columnMask = [
+    columns.size,
+    columns.modified,
+    columns.permissions,
+    columns.ownerGroup,
+  ].map(Number).join('');
+  const signature = [
+    item.name,
+    item.is_dir,
+    item.size,
+    item.modified,
+    item.permissions,
+    item.owner,
+    item.group,
+    columnMask,
+  ].join('\u0000');
+  const cached = rowHoverContentCache.get(item);
+  if (cached?.signature === signature) return cached;
+  const meta = [
+    columns.size ? '' : (item.is_dir ? '目录' : formatEntrySize(item)),
+    columns.modified ? '' : localTime(item),
+    columns.permissions ? '' : permissionText(item),
+    columns.ownerGroup ? '' : `${item.owner || '-'}/${item.group || '-'}`,
+  ].filter(Boolean).join(' · ');
+  const content = { name, meta, signature };
+  rowHoverContentCache.set(item, content);
+  return content;
+}
+
+function hideRowTooltip() {
+  const tooltip = rowTooltipRef.value;
+  if (!tooltip) return;
+  tooltip.classList.remove('is-visible');
+  tooltip.setAttribute('aria-hidden', 'true');
+}
+
+function showRowTooltip(event, item) {
+  const tooltip = rowTooltipRef.value;
+  const nameElement = rowTooltipNameRef.value;
+  const metaElement = rowTooltipMetaRef.value;
+  if (!tooltip || !nameElement || !metaElement || item?.__draftFolder) return;
+  const content = rowHoverContent(item);
+  if (!content.name) return;
+
+  nameElement.textContent = content.name;
+  metaElement.textContent = content.meta;
+  metaElement.hidden = !content.meta;
+  tooltip.classList.add('is-visible');
+  tooltip.setAttribute('aria-hidden', 'false');
+
+  const anchor = event.currentTarget.getBoundingClientRect();
+  const tooltipRect = tooltip.getBoundingClientRect();
+  const viewportMargin = 8;
+  const gap = 5;
+  const maxLeft = Math.max(viewportMargin, window.innerWidth - tooltipRect.width - viewportMargin);
+  let left = Math.min(Math.max(anchor.left + 20, viewportMargin), maxLeft);
+  let top = anchor.bottom + gap;
+  if (top + tooltipRect.height > window.innerHeight - viewportMargin) {
+    top = anchor.top - tooltipRect.height - gap;
   }
-  if (selectedRecords.value.length > 1) {
-    const bytes = selectedRecords.value.reduce((sum, item) => (
-      sum + (item.is_dir ? 0 : Number(item.size || 0))
-    ), 0);
-    const directoryCount = selectedRecords.value.filter((item) => item.is_dir).length;
-    return `${formatSize(bytes)}${directoryCount ? ` · ${directoryCount} 个目录` : ''}`;
-  }
-  const entries = listItems.value.filter((item) => !item.__parent && !item.__draftFolder);
-  const directoryCount = entries.filter((item) => item.is_dir).length;
-  return `${entries.length} 项 · ${directoryCount} 个目录`;
-});
+  left = Math.round(left);
+  top = Math.round(Math.max(viewportMargin, top));
+  tooltip.style.transform = `translate3d(${left}px, ${top}px, 0)`;
+}
+
+function handleBodyScroll(event) {
+  hideRowTooltip();
+  onBodyScroll(event);
+}
+
+function handleRowPointerDown(event, item) {
+  hideRowTooltip();
+  onFilePointerDown(event, item);
+}
 const panelStateCache = new Map();
 let sessionSyncGeneration = 0;
 const initializingSessionIds = new Set();
@@ -258,7 +319,6 @@ function scheduleColumnLayout(width) {
     columnLayoutFrame = null;
     if (containerWidth.value !== _pendingContainerWidth) {
       containerWidth.value = _pendingContainerWidth;
-      recalcColumnWidths();
     }
   });
 }
@@ -845,6 +905,7 @@ function isContextActionDisabled(action, record) {
 
 function closeEditorState() {
   editorOpenRequestId.value += 1;
+  editorStatusRef.value?.setCursor?.({ line: 1, column: 1 });
   editorVisible.value = false;
   editorLoading.value = false;
   editorSaving.value = false;
@@ -858,8 +919,6 @@ function closeEditorState() {
   editorCasToken.value = '';
   editorEncoding.value = 'utf-8';
   editorLineEnding.value = 'lf';
-  editorCursor.line = 1;
-  editorCursor.column = 1;
   editorCloseConfirmVisible.value = false;
 }
 
@@ -1225,12 +1284,11 @@ async function openEditor(record) {
   editorReadFallback.value = false;
   editorVisible.value = true;
   editorDirty.value = false;
+  editorStatusRef.value?.setCursor?.({ line: 1, column: 1 });
   editorContent.value = '';
   editorOriginalContent.value = '';
   editorCasToken.value = '';
   editorLoading.value = true;
-  editorCursor.line = 1;
-  editorCursor.column = 1;
 
   editorMeta.size = record.size || 0;
   editorMeta.modified = record.modified || 0;
@@ -1284,8 +1342,7 @@ function handleEditorDirtyChange(nextDirty) {
 }
 
 function handleEditorCursorChange(position) {
-  editorCursor.line = Number(position?.line || 1);
-  editorCursor.column = Number(position?.column || 1);
+  editorStatusRef.value?.setCursor?.(position);
 }
 
 function handleEditorReady() {
@@ -1342,7 +1399,7 @@ async function saveEditor(contentOverride) {
 
   if (content === editorOriginalContent.value) {
     editorDirty.value = false;
-    editorRef.value?.markClean?.(content);
+    editorRef.value?.markClean?.(content, { current: true });
     toast.info('内容未变化，无需保存');
     return;
   }
@@ -1393,11 +1450,12 @@ async function saveEditor(contentOverride) {
 
     const file = result?.file || {};
     const latestContent = editorRef.value?.getValue?.() ?? content;
+    editorRef.value?.acknowledgeValue?.(latestContent);
     editorContent.value = latestContent;
     editorOriginalContent.value = content;
     if (latestContent === content) {
       editorDirty.value = false;
-      editorRef.value?.markClean?.(content);
+      editorRef.value?.markClean?.(content, { current: true });
     } else {
       editorDirty.value = true;
     }
@@ -1613,6 +1671,7 @@ watch(() => props.sessionId, async (nextSessionId, prevSessionId) => {
 }, { immediate: true });
 
 watch(() => props.visible, async (visible) => {
+  if (!visible) hideRowTooltip();
   const sessionId = props.sessionId;
   if (!sessionId) return;
   if (!visible) {
@@ -1791,11 +1850,6 @@ onUnmounted(() => {
       </div>
     </div>
 
-    <div class="fm-selection-info">
-      <strong :title="selectedInfoTitle">{{ selectedInfoTitle }}</strong>
-      <span :title="selectedInfoMeta">{{ selectedInfoMeta }}</span>
-    </div>
-
     <div class="fm-content" ref="viewportRef" @contextmenu="onPanelContextMenu">
       <div v-if="!connected" class="fm-state">
         <div>{{ initializing ? '正在连接 SFTP...' : (netError || '暂无连接') }}</div>
@@ -1813,7 +1867,7 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <div class="fm-table-body" ref="bodyScrollRef" @scroll="onBodyScroll">
+        <div class="fm-table-body" ref="bodyScrollRef" @scroll="handleBodyScroll">
           <div v-if="navigatingDir" class="fm-nav-loading-mask">
             <LoadingSpinner tip="正在加载目录..." />
           </div>
@@ -1825,7 +1879,9 @@ onUnmounted(() => {
                 <ContextMenuTrigger as-child>
                   <div :class="rowClass(row.item)" :style="{ gridTemplateColumns: fileListColumns }"
                     :data-sftp-drop-path="dropTargetPathForRecord(row.item) || null"
-                    @pointerdown="(event) => onFilePointerDown(event, row.item)"
+                    @pointerenter="(event) => showRowTooltip(event, row.item)"
+                    @pointerleave="hideRowTooltip"
+                    @pointerdown="(event) => handleRowPointerDown(event, row.item)"
                     @pointermove="onFilePointerMove"
                     @pointerup="onFilePointerEnd"
                     @pointercancel="onFilePointerEnd"
@@ -1842,7 +1898,7 @@ onUnmounted(() => {
                             @click.stop @keydown="onDraftFolderKeydown"
                             @blur="() => submitCreateFolderDraft({ cancelIfEmpty: true })" />
                         </template>
-                        <span v-else class="fm-file-label" :title="row.item.name">{{ row.item.__parent ? '..' : row.item.name }}</span>
+                        <span v-else class="fm-file-label">{{ row.item.__parent ? '..' : row.item.name }}</span>
                       </div>
                     </div>
                     <div v-if="renderedColumns.size" class="fm-cell align-right">
@@ -1883,6 +1939,13 @@ onUnmounted(() => {
       </div>
     </div>
 
+    <Teleport to="body">
+      <div ref="rowTooltipRef" class="fm-row-tooltip" role="tooltip" aria-hidden="true">
+        <strong ref="rowTooltipNameRef"></strong>
+        <span ref="rowTooltipMetaRef"></span>
+      </div>
+    </Teleport>
+
     <Dialog :open="editorVisible" @update:open="(v) => { if (!v) handleEditorModalCancel(); }">
       <DialogContent :show-close-button="false"
         class="sftp-editor-dialog !max-w-[96vw] !w-[min(1120px,96vw)] !gap-0 !p-0 !bg-[var(--app-bg-dialog)]"
@@ -1921,17 +1984,8 @@ onUnmounted(() => {
               @dirty-change="handleEditorDirtyChange" @cursor-change="handleEditorCursorChange"
               @ready="handleEditorReady" @save="saveEditor" />
           </div>
-          <div class="editor-statusbar">
-            <span class="editor-status-item">大小 {{ formatSize(editorMeta.size || 0) }}</span>
-            <span class="editor-status-item">修改 {{ localTime(editorMeta) }}</span>
-            <span class="editor-status-item">权限 {{ permissionText(editorMeta) }}</span>
-            <span class="editor-status-item">用户 {{ editorMeta.owner || '-' }}/{{ editorMeta.group || '-' }}</span>
-            <span class="editor-status-item">语言 {{ editorLanguage }}</span>
-            <span class="editor-status-item">编码 {{ editorEncoding }}</span>
-            <span class="editor-status-item">换行 {{ editorLineEnding.toUpperCase() }}</span>
-            <span class="editor-status-item">行 {{ editorCursor.line }}，列 {{ editorCursor.column }}</span>
-            <span class="editor-status-item" v-if="editorReadonly">只读</span>
-          </div>
+          <EditorStatusBar ref="editorStatusRef" :meta="editorMeta" :language="editorLanguage"
+            :encoding="editorEncoding" :line-ending="editorLineEnding" :readonly="editorReadonly" />
         </div>
       </DialogContent>
     </Dialog>
@@ -2070,36 +2124,54 @@ onUnmounted(() => {
   height: 10px;
 }
 
-.fm-selection-info {
+.fm-actions {
   display: flex;
-  min-width: 0;
-  flex: 0 0 38px;
-  flex-direction: column;
-  justify-content: center;
-  padding: 3px 10px 5px;
-  border-bottom: 1px solid color-mix(in srgb, var(--app-border-shadow) 62%, transparent);
+  gap: 4px;
 }
 
-.fm-selection-info strong,
-.fm-selection-info span {
+.fm-row-tooltip {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 3200;
+  display: flex;
+  max-width: min(560px, calc(100vw - 16px));
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 9px;
+  border: 1px solid var(--app-border-shadow);
+  border-radius: var(--niri-radius-sm, 4px);
+  background: var(--app-bg-dialog);
+  box-shadow: var(--niri-shadow-dialog);
+  color: var(--app-text);
+  font-family: var(--app-font-family);
+  line-height: 1.35;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  contain: layout paint style;
+  transform: translate3d(-10000px, -10000px, 0);
+}
+
+.fm-row-tooltip.is-visible {
+  opacity: 1;
+  visibility: visible;
+}
+
+.fm-row-tooltip strong,
+.fm-row-tooltip span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.fm-selection-info strong {
-  color: var(--app-text);
+.fm-row-tooltip strong {
   font-size: 12px;
 }
 
-.fm-selection-info span {
+.fm-row-tooltip span {
   color: var(--app-text-secondary);
   font-size: 10px;
-}
-
-.fm-actions {
-  display: flex;
-  gap: 4px;
 }
 
 .fm-actions :deep(.icon-button) {
@@ -2466,20 +2538,6 @@ onUnmounted(() => {
   background: var(--app-bg-dialog) !important;
 }
 
-.editor-statusbar {
-  min-height: 34px;
-  padding: 6px 12px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  border-top: 1px solid var(--app-border-shadow, rgba(255, 255, 255, 0.08));
-  color: var(--app-text-muted);
-  font-size: 12px;
-  font-family: var(--app-font-family);
-  background: color-mix(in srgb, var(--app-bg-dialog) 97%, var(--app-text));
-}
-
 .editor-modal-title {
   color: var(--app-text);
   font-size: 14px;
@@ -2492,8 +2550,7 @@ onUnmounted(() => {
 
 .editor-chip,
 .editor-tip,
-.editor-meta-item,
-.editor-status-item {
+.editor-meta-item {
   display: inline-flex;
   align-items: center;
   min-height: 24px;

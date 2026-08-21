@@ -42,6 +42,41 @@ const MODE_IMPORTS = {
   graphqlschema: () => import('ace-builds/src-noconflict/mode-graphqlschema'),
   less: () => import('ace-builds/src-noconflict/mode-less'),
   scss: () => import('ace-builds/src-noconflict/mode-scss'),
+  apache_conf: () => import('ace-builds/src-noconflict/mode-apache_conf'),
+  astro: () => import('ace-builds/src-noconflict/mode-astro'),
+  csharp: () => import('ace-builds/src-noconflict/mode-csharp'),
+  csv: () => import('ace-builds/src-noconflict/mode-csv'),
+  dart: () => import('ace-builds/src-noconflict/mode-dart'),
+  diff: () => import('ace-builds/src-noconflict/mode-diff'),
+  dockerfile: () => import('ace-builds/src-noconflict/mode-dockerfile'),
+  ejs: () => import('ace-builds/src-noconflict/mode-ejs'),
+  elixir: () => import('ace-builds/src-noconflict/mode-elixir'),
+  erlang: () => import('ace-builds/src-noconflict/mode-erlang'),
+  fsharp: () => import('ace-builds/src-noconflict/mode-fsharp'),
+  gitignore: () => import('ace-builds/src-noconflict/mode-gitignore'),
+  groovy: () => import('ace-builds/src-noconflict/mode-groovy'),
+  handlebars: () => import('ace-builds/src-noconflict/mode-handlebars'),
+  haskell: () => import('ace-builds/src-noconflict/mode-haskell'),
+  ini: () => import('ace-builds/src-noconflict/mode-ini'),
+  jsx: () => import('ace-builds/src-noconflict/mode-jsx'),
+  lua: () => import('ace-builds/src-noconflict/mode-lua'),
+  makefile: () => import('ace-builds/src-noconflict/mode-makefile'),
+  nginx: () => import('ace-builds/src-noconflict/mode-nginx'),
+  nix: () => import('ace-builds/src-noconflict/mode-nix'),
+  perl: () => import('ace-builds/src-noconflict/mode-perl'),
+  prisma: () => import('ace-builds/src-noconflict/mode-prisma'),
+  properties: () => import('ace-builds/src-noconflict/mode-properties'),
+  protobuf: () => import('ace-builds/src-noconflict/mode-protobuf'),
+  r: () => import('ace-builds/src-noconflict/mode-r'),
+  scala: () => import('ace-builds/src-noconflict/mode-scala'),
+  svg: () => import('ace-builds/src-noconflict/mode-svg'),
+  terraform: () => import('ace-builds/src-noconflict/mode-terraform'),
+  tsv: () => import('ace-builds/src-noconflict/mode-tsv'),
+  tsx: () => import('ace-builds/src-noconflict/mode-tsx'),
+  twig: () => import('ace-builds/src-noconflict/mode-twig'),
+  vbscript: () => import('ace-builds/src-noconflict/mode-vbscript'),
+  vue: () => import('ace-builds/src-noconflict/mode-vue'),
+  zig: () => import('ace-builds/src-noconflict/mode-zig'),
 };
 
 async function ensureModeLoaded(aceMode) {
@@ -68,7 +103,6 @@ const LANG_TO_ACE_MODE = {
   markdown: 'ace/mode/markdown',
   ruby: 'ace/mode/ruby',
   graphql: 'ace/mode/graphqlschema',
-  ini: 'ace/mode/toml',
   less: 'ace/mode/less',
   scss: 'ace/mode/scss',
 };
@@ -107,10 +141,13 @@ let _suppressChange = false;
 let _dirty = false;
 let _findDebounceTimer = null;
 let _findCountTimer = null;
+let _findCountScheduleKind = null;
 let _findCountGeneration = 0;
 let _resizeFrame = null;
+let _cursorFrame = null;
 let _lastCursorLine = 0;
 let _lastCursorColumn = 0;
+let _externalValue = props.modelValue || '';
 const FIND_INPUT_DEBOUNCE_MS = 150;
 const FIND_DOCUMENT_IDLE_MS = 250;
 const FIND_COUNT_SLICE_BUDGET_MS = 4;
@@ -118,16 +155,20 @@ const FIND_COUNT_MAX_ROWS_PER_SLICE = 512;
 const FIND_REGEX_MAX_LINE_LENGTH = 250_000;
 
 function emitCursorPosition() {
-  if (!editorInstance) return;
-  const position = editorInstance.getCursorPosition();
-  const line = Number(position?.row || 0) + 1;
-  const column = Number(position?.column || 0) + 1;
-  if (line === _lastCursorLine && column === _lastCursorColumn) return;
-  _lastCursorLine = line;
-  _lastCursorColumn = column;
-  emit('cursor-change', {
-    line,
-    column
+  if (!editorInstance || _cursorFrame !== null) return;
+  _cursorFrame = requestAnimationFrame(() => {
+    _cursorFrame = null;
+    if (!editorInstance) return;
+    const position = editorInstance.getCursorPosition();
+    const line = Number(position?.row || 0) + 1;
+    const column = Number(position?.column || 0) + 1;
+    if (line === _lastCursorLine && column === _lastCursorColumn) return;
+    _lastCursorLine = line;
+    _lastCursorColumn = column;
+    emit('cursor-change', {
+      line,
+      column
+    });
   });
 }
 
@@ -182,10 +223,33 @@ function searchOptions(backwards = false) {
 
 function cancelFindCount() {
   _findCountGeneration += 1;
-  if (_findCountTimer) {
-    clearTimeout(_findCountTimer);
+  if (_findCountTimer !== null) {
+    if (_findCountScheduleKind === 'idle') {
+      window.cancelIdleCallback(_findCountTimer);
+    } else {
+      clearTimeout(_findCountTimer);
+    }
     _findCountTimer = null;
+    _findCountScheduleKind = null;
   }
+}
+
+function scheduleFindCountSlice(callback) {
+  if (typeof window.requestIdleCallback === 'function') {
+    _findCountScheduleKind = 'idle';
+    _findCountTimer = window.requestIdleCallback((deadline) => {
+      _findCountTimer = null;
+      _findCountScheduleKind = null;
+      callback(deadline);
+    }, { timeout: 120 });
+    return;
+  }
+  _findCountScheduleKind = 'timeout';
+  _findCountTimer = setTimeout(() => {
+    _findCountTimer = null;
+    _findCountScheduleKind = null;
+    callback(null);
+  }, 0);
 }
 
 function createFindPattern() {
@@ -218,14 +282,19 @@ function startExactFindCount() {
   let count = 0;
   findCountLabel.value = '统计中…';
 
-  const countSlice = () => {
+  const countSlice = (idleDeadline) => {
     if (generation !== _findCountGeneration || !editorInstance) return;
     const startedAt = performance.now();
     let rowsProcessed = 0;
+    const hasTimeRemaining = () => {
+      const withinFallbackBudget = performance.now() - startedAt < FIND_COUNT_SLICE_BUDGET_MS;
+      if (!idleDeadline || idleDeadline.didTimeout) return withinFallbackBudget;
+      return idleDeadline.timeRemaining() > 1;
+    };
     while (
       row < totalRows
       && rowsProcessed < FIND_COUNT_MAX_ROWS_PER_SLICE
-      && performance.now() - startedAt < FIND_COUNT_SLICE_BUDGET_MS
+      && (rowsProcessed === 0 || hasTimeRemaining())
     ) {
       const line = session.getLine(row) || '';
       if (findOptions.regExp && line.length > FIND_REGEX_MAX_LINE_LENGTH) {
@@ -244,13 +313,12 @@ function startExactFindCount() {
     }
 
     if (row < totalRows) {
-      _findCountTimer = setTimeout(countSlice, 0);
+      scheduleFindCountSlice(countSlice);
       return;
     }
-    _findCountTimer = null;
     findCountLabel.value = count > 0 ? `${count} 个结果` : '无结果';
   };
-  _findCountTimer = setTimeout(countSlice, 0);
+  scheduleFindCountSlice(countSlice);
 }
 
 function performFind(backwards = false, navigate = true) {
@@ -391,8 +459,10 @@ function getValue() {
 
 function setValue(value = '', options = {}) {
   if (!editorInstance) return;
+  const nextValue = value || '';
+  _externalValue = nextValue;
   _suppressChange = true;
-  editorInstance.setValue(value || '', -1);
+  editorInstance.setValue(nextValue, -1);
   _suppressChange = false;
   if (options.clean) {
     editorInstance.getSession().getUndoManager()?.markClean?.();
@@ -401,10 +471,17 @@ function setValue(value = '', options = {}) {
   emitCursorPosition();
 }
 
-function markClean(value) {
-  if (typeof value === 'string' && editorInstance && editorInstance.getValue() !== value) {
-    setValue(value, { clean: true });
-    return;
+function acknowledgeValue(value = '') {
+  _externalValue = value || '';
+}
+
+function markClean(value, options = {}) {
+  if (typeof value === 'string') {
+    if (!options.current && editorInstance && editorInstance.getValue() !== value) {
+      setValue(value, { clean: true });
+      return;
+    }
+    acknowledgeValue(value);
   }
   editorInstance?.getSession().getUndoManager()?.markClean?.();
   setDirty(false);
@@ -421,6 +498,7 @@ function resize() {
 defineExpose({
   getValue,
   setValue,
+  acknowledgeValue,
   markClean,
   focus,
   resize
@@ -433,8 +511,9 @@ onMounted(async () => {
   await ensureModeLoaded(mode);
   if (!editorContainer.value) return;
 
+  _externalValue = props.modelValue || '';
   editorInstance = ace.edit(editorContainer.value, {
-    value: props.modelValue || '',
+    value: _externalValue,
     mode,
     theme: aceTheme(),
     readOnly: props.readonly,
@@ -499,6 +578,8 @@ onUnmounted(() => {
   _resizeObs = null;
   if (_resizeFrame !== null) cancelAnimationFrame(_resizeFrame);
   _resizeFrame = null;
+  if (_cursorFrame !== null) cancelAnimationFrame(_cursorFrame);
+  _cursorFrame = null;
   editorInstance?.destroy();
   editorInstance?.container?.remove();
   editorInstance = null;
@@ -506,9 +587,9 @@ onUnmounted(() => {
 
 watch(() => props.modelValue, (value) => {
   if (!editorInstance) return;
-  if (editorInstance.getValue() !== value) {
-    setValue(value || '', { clean: true });
-  }
+  const nextValue = value || '';
+  if (_externalValue === nextValue) return;
+  setValue(nextValue, { clean: true });
 });
 
 watch(() => props.language, async (language) => {
