@@ -30,7 +30,7 @@ import { open, save } from '@tauri-apps/plugin-dialog';
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { useFileSelection } from '@/composables/useFileSelection';
 import { useSftpNativeDrop } from '@/composables/useSftpNativeDrop';
-import { useSftpPager } from '@/composables/useSftpPager';
+import { useSftpDirectory } from '@/composables/useSftpDirectory';
 import { useVirtualList } from '@/composables/useVirtualList';
 import { useSftpTransfersStore } from '@/stores/sftpTransfers';
 import { useSshStore } from '@/stores/ssh';
@@ -119,10 +119,9 @@ let columnLayoutObserver = null;
 let columnLayoutFrame = null;
 let _pendingContainerWidth = 800;
 
-const pager = useSftpPager({
+const directory = useSftpDirectory({
   sessionIdRef: computed(() => props.sessionId),
-  pathRef: currentPath,
-  pageSize: 200
+  pathRef: currentPath
 });
 
 const draftFolderVisible = ref(false);
@@ -152,7 +151,7 @@ const listItems = computed(() => {
   if (draftFolderRecord.value) {
     rows.push(draftFolderRecord.value);
   }
-  return rows.concat(pager.items.value);
+  return rows.concat(directory.items.value);
 });
 
 const selection = useFileSelection(listItems);
@@ -295,7 +294,8 @@ function showRowTooltip(event, item) {
 
 function handleBodyScroll(event) {
   hideRowTooltip();
-  onBodyScroll(event);
+  listVirtual.onScroll(event);
+  cachePanelScrollState();
 }
 
 function handleRowPointerDown(event, item) {
@@ -548,11 +548,11 @@ const hasWritePermission = (permissions) => ((permissions || 0) & 0o222) !== 0;
 const editorConnectionLost = computed(() => editorVisible.value && activeSessionStatus.value !== 'connected');
 const editorCanSave = computed(() => !editorReadonly.value && !editorSaving.value && !editorLoading.value && editorDirty.value && !editorConnectionLost.value);
 
-function patchPagerItem(nextEntry) {
+function patchDirectoryItem(nextEntry) {
   if (!nextEntry?.name) return;
-  const index = pager.items.value.findIndex((item) => item?.name === nextEntry.name);
+  const index = directory.items.value.findIndex((item) => item?.name === nextEntry.name);
   if (index < 0) return;
-  pager.items.value.splice(index, 1, { ...pager.items.value[index], ...nextEntry });
+  directory.items.value.splice(index, 1, { ...directory.items.value[index], ...nextEntry });
   cachePanelState();
 }
 
@@ -601,17 +601,22 @@ function cachePanelState() {
   cachePanelStateForSession(props.sessionId);
 }
 
+const cachePanelScrollState = throttle(() => {
+  const state = panelStateCache.get(props.sessionId);
+  if (!state) {
+    cachePanelState();
+    return;
+  }
+  state.scrollTop = bodyScrollRef.value?.scrollTop || 0;
+}, 80);
+
 function cachePanelStateForSession(sessionId) {
   if (!sessionId) return;
   panelStateCache.set(sessionId, {
     path: currentPath.value,
     selected: Array.from(selection.selectedKeys.value),
     scrollTop: bodyScrollRef.value?.scrollTop || 0,
-    items: (pager.items.value || []).map(item => ({ ...item })),
-    total: Number(pager.total.value || 0),
-    totalKnown: !!pager.totalKnown.value,
-    offset: Number(pager.offset.value || 0),
-    hasMore: !!pager.hasMore.value,
+    items: (directory.items.value || []).map(item => ({ ...item })),
     followTerminalPath: followTerminalPath.value,
     lastObservedTerminalCwd: lastObservedTerminalCwd.value
   });
@@ -633,13 +638,9 @@ async function restorePanelState() {
   followTerminalPath.value = !!state.followTerminalPath;
   lastObservedTerminalCwd.value = state.lastObservedTerminalCwd || '';
   if (Array.isArray(state.items)) {
-    pager.items.value = state.items.map(item => ({ ...item }));
-    pager.total.value = Number(state.total || state.items.length || 0);
-    pager.totalKnown.value = !!state.totalKnown;
-    pager.offset.value = Number(state.offset || state.items.length || 0);
-    pager.hasMore.value = !!state.hasMore;
+    directory.items.value = state.items.map(item => ({ ...item }));
   } else {
-    await loadFirstPage();
+    await loadDirectory();
   }
   selection.clearSelection();
   const picked = new Set(state.selected || []);
@@ -674,7 +675,7 @@ async function initSftp(forceReconnect = false, options = {}) {
     if (!isCurrentSessionSync(sessionId, generation)) return;
     connected.value = true;
     await restorePanelState();
-    if (isCurrentSessionSync(sessionId, generation) && !panelStateCache.get(sessionId)) await loadFirstPage();
+    if (isCurrentSessionSync(sessionId, generation) && !panelStateCache.get(sessionId)) await loadDirectory();
     return;
   }
 
@@ -701,7 +702,7 @@ async function initSftp(forceReconnect = false, options = {}) {
     if (!isCurrentSessionSync(sessionId, generation)) return;
     connected.value = true;
     await restorePanelState();
-    if (isCurrentSessionSync(sessionId, generation) && !panelStateCache.get(sessionId)) await loadFirstPage();
+    if (isCurrentSessionSync(sessionId, generation) && !panelStateCache.get(sessionId)) await loadDirectory();
   } catch (err) {
     sshStore.markSftpDisconnected(sessionId);
     if (isCurrentSessionSync(sessionId, generation)) {
@@ -771,7 +772,7 @@ async function syncVisibleSessionState(options = {}) {
     await restorePanelState();
     if (!isCurrentSessionSync(sessionId, generation)) return;
     if (!panelStateCache.get(props.sessionId)) {
-      await loadFirstPage();
+      await loadDirectory();
     }
   }
 }
@@ -814,12 +815,12 @@ async function ensureSftpReady() {
   }
 }
 
-async function loadFirstPage() {
+async function loadDirectory() {
   const sessionId = props.sessionId;
   const path = currentPath.value;
   syncListScrollTop(0);
   try {
-    const loaded = await pager.loadFirstPage();
+    const loaded = await directory.load();
     if (loaded === false || props.sessionId !== sessionId || currentPath.value !== path) return false;
     netError.value = '';
     await nextTick();
@@ -886,7 +887,7 @@ async function submitCreateFolderDraft(options = {}) {
     });
     draftFolderVisible.value = false;
     draftFolderName.value = '';
-    await loadFirstPage();
+    await loadDirectory();
   } finally {
     draftFolderSubmitting.value = false;
   }
@@ -935,23 +936,6 @@ function closeEditorState() {
   editorLineEnding.value = 'lf';
   editorCloseConfirmVisible.value = false;
 }
-
-const onBodyScroll = throttle(async (event) => {
-  listVirtual.onScroll(event);
-  const el = event.target;
-  const nearBottom = el.scrollTop + el.clientHeight >= el.scrollHeight - 120;
-  if (nearBottom && pager.canLoadMore.value) {
-    try {
-      await pager.loadNextPage();
-    } catch (err) {
-      if (isDisconnectError(err)) {
-        connected.value = false;
-        sshStore.markSftpDisconnected(props.sessionId);
-      }
-    }
-  }
-  cachePanelState();
-}, 80);
 
 function rowClass(record) {
   const classes = ['fm-row'];
@@ -1010,7 +994,7 @@ async function navigateTo(segment) {
   try {
     currentPath.value = nextPath;
     selection.clearSelection();
-    const loaded = await loadFirstPage();
+    const loaded = await loadDirectory();
     if (!loaded) throw new Error(netError.value || '目录加载失败');
     cachePanelState();
   } catch (err) {
@@ -1046,7 +1030,7 @@ async function followCurrentTerminalPath({ notifyIfMissing = false } = {}) {
   try {
     currentPath.value = cwd;
     selection.clearSelection();
-    const loaded = await loadFirstPage();
+    const loaded = await loadDirectory();
     if (!loaded) {
       currentPath.value = previousPath;
       toast.error(`跟随终端路径失败：${netError.value || cwd}`);
@@ -1084,7 +1068,7 @@ async function manualRefresh() {
     if (!connected.value) return;
   }
 
-  await loadFirstPage();
+  await loadDirectory();
 }
 
 async function runSftpUploadBatch({ sources, uploadDirectory, sessionId }) {
@@ -1145,7 +1129,7 @@ async function runSftpUploadBatch({ sources, uploadDirectory, sessionId }) {
   notifyTransferSummary('上传', tasks);
   if (props.sessionId === sessionId) {
     await ensureSftpReady();
-    await loadFirstPage();
+    await loadDirectory();
   }
 }
 
@@ -1313,7 +1297,7 @@ async function openEditor(record) {
     editorMeta.owner = file?.owner || '-';
     editorMeta.group = file?.group || '-';
     editorReadonly.value = !hasWritePermission(file?.permissions || record.permissions);
-    patchPagerItem(file);
+    patchDirectoryItem(file);
   } catch (err) {
     if (requestId !== editorOpenRequestId.value) return;
     const text = String(err || '');
@@ -1467,7 +1451,7 @@ async function saveEditor(contentOverride) {
     editorMeta.owner = file?.owner || editorMeta.owner;
     editorMeta.group = file?.group || editorMeta.group;
     editorReadonly.value = !hasWritePermission(editorMeta.permissions);
-    patchPagerItem(file);
+    patchDirectoryItem(file);
     toast.success({ content: '保存成功', key: toastKey });
   } catch (err) {
     toast.error({ content: `保存失败，未保存内容已保留：${String(err)}`, key: toastKey, duration: 4000 });
@@ -1645,7 +1629,7 @@ watch(() => props.sessionId, async (nextSessionId, prevSessionId) => {
   if (prevSessionId && prevSessionId !== nextSessionId) {
     cachePanelStateForSession(prevSessionId);
   }
-  pager.reset();
+  directory.reset();
   syncListScrollTop(0);
   cancelCreateFolderDraft();
   ctxRecord.value = null;
@@ -1708,11 +1692,11 @@ watch(activeSessionStatus, async (status, prevStatus) => {
 
   if (prevStatus !== 'connected') {
     await syncVisibleSessionState({ restore: false });
-    if (connected.value) await loadFirstPage();
+    if (connected.value) await loadDirectory();
   }
 });
 
-watch([() => pager.items.value.length, () => connected.value], () => nextTick(() => {
+watch([() => directory.items.value.length, () => connected.value], () => nextTick(() => {
   listVirtual.clampScroll();
   syncListScrollTop(listVirtual.scrollTop.value);
 }));
@@ -1816,7 +1800,7 @@ onUnmounted(() => {
           :action="goUp" />
         <IconButton :icon="LocateFixed" size="sm" :active="followTerminalPath" aria-label="跟随终端当前路径"
           :action="toggleFollowTerminalPath" />
-        <IconButton :icon="RefreshCw" size="sm" :disabled="pager.loading.value" aria-label="刷新"
+        <IconButton :icon="RefreshCw" size="sm" :disabled="directory.loading.value" aria-label="刷新"
           :action="manualRefresh" />
         <IconButton :icon="Upload" size="sm" aria-label="上传" :action="handleUpload" />
         <IconButton :icon="Download" size="sm" aria-label="下载" :action="() => handleDownload()" />
@@ -1867,11 +1851,11 @@ onUnmounted(() => {
             </div>
 
             <div class="fm-table-body" ref="bodyScrollRef" @scroll="handleBodyScroll">
-              <div v-if="navigatingDir" class="fm-nav-loading-mask">
+              <div v-if="navigatingDir || (directory.loading.value && listItems.length === 0)" class="fm-nav-loading-mask">
                 <LoadingSpinner tip="正在加载目录..." />
               </div>
               <div v-else-if="netError" class="fm-list-state fm-list-error">{{ netError }}</div>
-              <div v-else-if="!pager.loading.value && listItems.length === 0" class="fm-list-state">目录为空</div>
+              <div v-else-if="!directory.loading.value && listItems.length === 0" class="fm-list-state">目录为空</div>
               <div class="fm-body-inner" :style="{ height: listVirtual.totalHeight.value + 'px' }">
                 <div class="fm-virtual" :style="{ transform: `translateY(${listVirtual.translateY.value}px)` }">
                   <div v-for="row in visibleRows"
@@ -1916,7 +1900,6 @@ onUnmounted(() => {
                   </div>
                 </div>
               </div>
-              <div class="fm-load-more" v-if="pager.loadingMore.value">加载更多中...</div>
             </div>
           </div>
         </div>
@@ -2429,18 +2412,6 @@ onUnmounted(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.fm-load-more {
-  position: sticky;
-  bottom: 0;
-  left: 0;
-  right: 0;
-  text-align: center;
-  padding: 6px;
-  background: color-mix(in srgb, var(--app-bg-dialog) 42%, transparent);
-  color: var(--app-text-muted);
-  font-size: 12px;
 }
 
 .big-file-loading {

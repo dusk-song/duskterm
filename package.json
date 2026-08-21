@@ -15,13 +15,13 @@
       ]
     },
     "overrides": {
-      "@vue/shared": "3.5.35",
-      "@vue/compiler-sfc": "3.5.35",
-      "@vue/compiler-dom": "3.5.35",
-      "@vue/compiler-core": "3.5.35",
-      "@vue/runtime-dom": "3.5.35",
-      "@vue/runtime-core": "3.5.35",
-      "@vue/reactivity": "3.5.35"
+      "@vue/shared": "3.5.38",
+      "@vue/compiler-sfc": "3.5.38",
+      "@vue/compiler-dom": "3.5.38",
+      "@vue/compiler-core": "3.5.38",
+      "@vue/runtime-dom": "3.5.38",
+      "@vue/runtime-core": "3.5.38",
+      "@vue/reactivity": "3.5.38"
     }
   },
   "repository": {
@@ -70,7 +70,7 @@
     "uuid": "^13.0.0",
     "vee-validate": "^4.15.1",
     "vscode-material-icons": "^0.1.1",
-    "vue": "^3.5.13",
+    "vue": "3.5.38",
     "zod": "3.25.76"
   },
   "devDependencies": {
