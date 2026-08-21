@@ -17,7 +17,7 @@ use crate::ssh_algorithms::{
 use crate::terminal_transfer::{TerminalTransferControl, TerminalTransferRuntime};
 use crate::tunnel::TunnelState;
 use encoding_rs::Encoding;
-use russh::keys::{check_known_hosts_path, HashAlg, PublicKey};
+use russh::keys::{check_known_hosts_path, HashAlg, PublicKey, PublicKeyOrCertificate};
 use russh::Pty;
 use russh::{client, ChannelMsg, Disconnect};
 
@@ -1637,8 +1637,20 @@ impl client::Handler for ClientHandler {
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &PublicKey,
+        server_public_key: &PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
+        let PublicKeyOrCertificate::PublicKey {
+            key: server_public_key,
+            ..
+        } = server_public_key
+        else {
+            connection_log::append(
+                &self.session_id,
+                "server host certificate rejected because certificate trust is not configured",
+            );
+            return Ok(false);
+        };
+
         match check_known_hosts_path(
             &self.host,
             self.port,
@@ -1871,8 +1883,16 @@ impl client::Handler for TestClientHandler {
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &PublicKey,
+        server_public_key: &PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
+        let PublicKeyOrCertificate::PublicKey {
+            key: server_public_key,
+            ..
+        } = server_public_key
+        else {
+            return Ok(false);
+        };
+
         match check_known_hosts_path(
             &self.host,
             self.port,

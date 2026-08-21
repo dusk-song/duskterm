@@ -4160,9 +4160,9 @@ dependencies = [
 
 [[package]]
 name = "russh"
-version = "0.62.3"
+version = "0.63.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "059dd24c0fe20721639f7acad7b82cd51ec3dd3254ed8cf7a0b7df6c20eaff1c"
+checksum = "00cf00190c315093734a8d405225bd8773a219bc86538a9b73bfc51145b33995"
 dependencies = [
  "aes 0.9.1",
  "bitflags 2.13.0",
@@ -5506,9 +5506,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.52.3"
+version = "1.53.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8fc7f01b389ac15039e4dc9531aa973a135d7a4135281b12d7c1bc79fd57fffe"
+checksum = "202caea871b69668250d242070849eb495be178ed697a3e98aebce5bc81a0bed"
 dependencies = [
  "bytes",
  "libc",

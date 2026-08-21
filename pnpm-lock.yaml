@@ -57,7 +57,7 @@ importers:
         specifier: 6.0.0
         version: 6.0.0
       ace-builds:
-        specifier: ^1.36.5
+        specifier: ^1.44.0
         version: 1.44.0
       class-variance-authority:
         specifier: ^0.7.1

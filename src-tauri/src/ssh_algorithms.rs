@@ -133,6 +133,7 @@ pub fn build_client_config(
     client_config.preferred = Preferred {
         kex: Cow::Borrowed(MODERN_KEX_ALGOS),
         key: Cow::Borrowed(host_key_algorithms_for(profile)),
+        host_key_certificates: Cow::Borrowed(&[]),
         cipher: Cow::Borrowed(MODERN_CIPHER_ALGOS),
         mac: Cow::Borrowed(MODERN_MAC_ALGOS),
         compression: Cow::Borrowed(MODERN_COMPRESSION_ALGOS),
@@ -224,6 +225,13 @@ mod tests {
         assert!(!modern
             .iter()
             .any(|algorithm| matches!(algorithm, Algorithm::Rsa { hash: None })));
+    }
+
+    #[test]
+    fn host_certificates_remain_disabled() {
+        let config = build_client_config(None, NegotiationProfile::Modern);
+
+        assert!(config.preferred.host_key_certificates.is_empty());
     }
 
     #[test]

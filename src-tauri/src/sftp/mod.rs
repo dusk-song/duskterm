@@ -9,7 +9,7 @@ use crate::{connection_log, ssh, ssh_algorithms};
 use encoding_rs::{GBK, UTF_16BE, UTF_16LE, WINDOWS_1252};
 use russh::{
     client,
-    keys::{check_known_hosts_path, HashAlg, PublicKey},
+    keys::{check_known_hosts_path, HashAlg, PublicKey, PublicKeyOrCertificate},
 };
 use russh_sftp::{
     client::{error::Error as SftpClientError, RawSftpSession, SftpSession},
@@ -459,8 +459,20 @@ impl client::Handler for DummyHandler {
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &PublicKey,
+        server_public_key: &PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
+        let PublicKeyOrCertificate::PublicKey {
+            key: server_public_key,
+            ..
+        } = server_public_key
+        else {
+            connection_log::append(
+                &self.session_id,
+                "SFTP server host certificate rejected because certificate trust is not configured",
+            );
+            return Ok(false);
+        };
+
         match check_known_hosts_path(
             &self.host,
             self.port,
