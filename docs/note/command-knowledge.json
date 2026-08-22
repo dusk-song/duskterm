@@ -1,0 +1,3155 @@
+{
+  "schema_version": 1,
+  "entries": [
+    {
+      "id": "e4ccd2df-a26c-483f-90f7-a2f1049ee0ba",
+      "title": "查看当前目录",
+      "command": "pwd",
+      "trigger": "pwd",
+      "tags": [
+        "基础操作"
+      ],
+      "description": "显示当前所在目录的绝对路径。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017495,
+      "updatedAt": 1787411017495,
+      "legacySource": null
+    },
+    {
+      "id": "dc01fafa-faf6-47b3-8620-7695186912ff",
+      "title": "进入指定目录",
+      "command": "cd <path>",
+      "trigger": "cd",
+      "tags": [
+        "基础操作"
+      ],
+      "description": "切换到指定目录。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017496,
+      "updatedAt": 1787411017496,
+      "legacySource": null
+    },
+    {
+      "id": "b49b2a89-0f3c-4b44-9485-fa3336b8f8b3",
+      "title": "返回上一级目录",
+      "command": "cd ..",
+      "trigger": "cd..",
+      "tags": [
+        "基础操作"
+      ],
+      "description": "切换到当前目录的上一级。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017497,
+      "updatedAt": 1787411017497,
+      "legacySource": null
+    },
+    {
+      "id": "c635791d-83b2-41c7-8e11-8d4a511a5739",
+      "title": "返回上一次目录",
+      "command": "cd -",
+      "trigger": "cd-",
+      "tags": [
+        "基础操作"
+      ],
+      "description": "在当前目录和上一次所在目录之间切换。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017498,
+      "updatedAt": 1787411017498,
+      "legacySource": null
+    },
+    {
+      "id": "02c25c96-551e-4383-8e5c-202ba3234156",
+      "title": "进入当前用户家目录",
+      "command": "cd ~",
+      "trigger": "cdhome",
+      "tags": [
+        "基础操作"
+      ],
+      "description": "切换到当前用户的 home 目录。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017499,
+      "updatedAt": 1787411017499,
+      "legacySource": null
+    },
+    {
+      "id": "04c54943-fcd8-467b-8b44-735b4a107bbb",
+      "title": "查看当前时间",
+      "command": "date",
+      "trigger": "date",
+      "tags": [
+        "基础操作"
+      ],
+      "description": "显示服务器当前日期和时间。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017500,
+      "updatedAt": 1787411017500,
+      "legacySource": null
+    },
+    {
+      "id": "2714428f-bbfc-42a6-8b22-2685906828f0",
+      "title": "查看主机名",
+      "command": "hostname",
+      "trigger": "hostname",
+      "tags": [
+        "基础操作"
+      ],
+      "description": "显示当前服务器主机名。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017501,
+      "updatedAt": 1787411017501,
+      "legacySource": null
+    },
+    {
+      "id": "1ea53231-d1e8-4919-91b7-e11ebfdd9831",
+      "title": "查看当前用户",
+      "command": "whoami",
+      "trigger": "whoami",
+      "tags": [
+        "基础操作"
+      ],
+      "description": "显示当前登录用户。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017502,
+      "updatedAt": 1787411017502,
+      "legacySource": null
+    },
+    {
+      "id": "fe2e36b1-d4e7-4a8f-bffe-4bc29297d5be",
+      "title": "查看登录用户",
+      "command": "who",
+      "trigger": "who",
+      "tags": [
+        "基础操作"
+      ],
+      "description": "查看当前系统已登录的用户。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017503,
+      "updatedAt": 1787411017503,
+      "legacySource": null
+    },
+    {
+      "id": "b2290dae-b754-44e4-9134-0bcca2cc1afd",
+      "title": "查看命令历史",
+      "command": "history",
+      "trigger": "history",
+      "tags": [
+        "基础操作"
+      ],
+      "description": "显示当前 Shell 的历史命令。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017504,
+      "updatedAt": 1787411017504,
+      "legacySource": null
+    },
+    {
+      "id": "8ea147a9-4644-4c15-a9c6-b5041fa5b7b1",
+      "title": "搜索历史命令",
+      "command": "history | grep '<keyword>'",
+      "trigger": "hisgrep",
+      "tags": [
+        "基础操作"
+      ],
+      "description": "从历史命令中筛选包含指定关键字的记录。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017505,
+      "updatedAt": 1787411017505,
+      "legacySource": null
+    },
+    {
+      "id": "4e07b857-1720-45ea-ab3a-0bd0905d9c4f",
+      "title": "查看命令位置",
+      "command": "which <command>",
+      "trigger": "which",
+      "tags": [
+        "基础操作"
+      ],
+      "description": "查看命令实际执行文件的路径。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017506,
+      "updatedAt": 1787411017506,
+      "legacySource": null
+    },
+    {
+      "id": "0335fddc-515e-4c2d-9559-9b23f2f975e4",
+      "title": "查看命令帮助",
+      "command": "<command> --help",
+      "trigger": "help",
+      "tags": [
+        "基础操作"
+      ],
+      "description": "快速查看命令支持的常用参数。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017507,
+      "updatedAt": 1787411017507,
+      "legacySource": null
+    },
+    {
+      "id": "38ff22af-6127-4522-af55-d3c7166b1c36",
+      "title": "查看完整手册",
+      "command": "man <command>",
+      "trigger": "man",
+      "tags": [
+        "基础操作"
+      ],
+      "description": "通过 man 手册查看命令详细说明。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017508,
+      "updatedAt": 1787411017508,
+      "legacySource": null
+    },
+    {
+      "id": "76114854-2e4e-46bd-b9f5-b113411ed07b",
+      "title": "查看环境变量",
+      "command": "env",
+      "trigger": "env",
+      "tags": [
+        "基础操作"
+      ],
+      "description": "列出当前 Shell 的环境变量。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017509,
+      "updatedAt": 1787411017509,
+      "legacySource": null
+    },
+    {
+      "id": "a5b1c3b8-99fc-465a-808c-8985c51d7b9e",
+      "title": "查看 PATH",
+      "command": "echo $PATH",
+      "trigger": "path",
+      "tags": [
+        "基础操作"
+      ],
+      "description": "查看当前命令搜索路径。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017510,
+      "updatedAt": 1787411017510,
+      "legacySource": null
+    },
+    {
+      "id": "445b7db7-6857-4c89-b226-7b0f25a0abfe",
+      "title": "清空终端",
+      "command": "clear",
+      "trigger": "clear",
+      "tags": [
+        "基础操作"
+      ],
+      "description": "清空当前终端显示内容。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017511,
+      "updatedAt": 1787411017511,
+      "legacySource": null
+    },
+    {
+      "id": "77f552e8-2fe9-4ffb-b614-8424be04295b",
+      "title": "查看目录文件",
+      "command": "ls",
+      "trigger": "ls",
+      "tags": [
+        "文件目录"
+      ],
+      "description": "查看当前目录中的文件和目录。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017512,
+      "updatedAt": 1787411017512,
+      "legacySource": null
+    },
+    {
+      "id": "e753366f-1635-4943-a992-126455afe05a",
+      "title": "详细查看目录文件",
+      "command": "ls -lah",
+      "trigger": "ll",
+      "tags": [
+        "文件目录"
+      ],
+      "description": "以详细、包含隐藏文件且易读大小的方式列出目录。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017513,
+      "updatedAt": 1787411017513,
+      "legacySource": null
+    },
+    {
+      "id": "1e67ccf9-b7f1-4d40-a356-4f8e1700d15b",
+      "title": "按修改时间排序文件",
+      "command": "ls -lht",
+      "trigger": "lst",
+      "tags": [
+        "文件目录"
+      ],
+      "description": "按修改时间从新到旧查看文件。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017514,
+      "updatedAt": 1787411017514,
+      "legacySource": null
+    },
+    {
+      "id": "69889aae-cead-4374-ab88-1f828d35b87b",
+      "title": "创建目录",
+      "command": "mkdir <dir>",
+      "trigger": "mkdir",
+      "tags": [
+        "文件目录"
+      ],
+      "description": "创建一个目录。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017515,
+      "updatedAt": 1787411017515,
+      "legacySource": null
+    },
+    {
+      "id": "a2d477c0-564b-440a-8c91-9f2776a2a334",
+      "title": "递归创建目录",
+      "command": "mkdir -p <path>",
+      "trigger": "mkdirp",
+      "tags": [
+        "文件目录"
+      ],
+      "description": "一次创建多级目录，已存在目录不会报错。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017516,
+      "updatedAt": 1787411017516,
+      "legacySource": null
+    },
+    {
+      "id": "c28cf713-4bd7-4b11-aaf0-9c6d02e57c19",
+      "title": "创建空文件",
+      "command": "touch <file>",
+      "trigger": "touch",
+      "tags": [
+        "文件目录"
+      ],
+      "description": "创建空文件，或更新已有文件的修改时间。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017517,
+      "updatedAt": 1787411017517,
+      "legacySource": null
+    },
+    {
+      "id": "ad640524-3816-4468-94a0-52faeebaacd4",
+      "title": "复制文件",
+      "command": "cp <source> <target>",
+      "trigger": "cp",
+      "tags": [
+        "文件目录"
+      ],
+      "description": "复制单个文件。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017518,
+      "updatedAt": 1787411017518,
+      "legacySource": null
+    },
+    {
+      "id": "7a349b19-ec95-4eac-be0b-370c0894e275",
+      "title": "保留属性复制",
+      "command": "cp -a <source> <target>",
+      "trigger": "cpa",
+      "tags": [
+        "文件目录"
+      ],
+      "description": "递归复制并尽量保留权限、时间、软链接等属性。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017519,
+      "updatedAt": 1787411017519,
+      "legacySource": null
+    },
+    {
+      "id": "3fec84d6-3ff5-4f6e-8557-d7eb7a8bb670",
+      "title": "移动或重命名文件",
+      "command": "mv <source> <target>",
+      "trigger": "mv",
+      "tags": [
+        "文件目录"
+      ],
+      "description": "移动文件，也可用于重命名。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017520,
+      "updatedAt": 1787411017520,
+      "legacySource": null
+    },
+    {
+      "id": "84809e45-b049-44f4-a2be-dfac95b90e60",
+      "title": "删除文件",
+      "command": "rm <file>",
+      "trigger": "rm",
+      "tags": [
+        "文件目录"
+      ],
+      "description": "删除指定文件。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017521,
+      "updatedAt": 1787411017521,
+      "legacySource": null
+    },
+    {
+      "id": "40afda75-28d7-46e2-97b3-789560be04d2",
+      "title": "递归删除目录",
+      "command": "rm -rf <dir>",
+      "trigger": "rmrf",
+      "tags": [
+        "文件目录"
+      ],
+      "description": "强制递归删除目录及其内容，执行前务必确认路径。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017522,
+      "updatedAt": 1787411017522,
+      "legacySource": null
+    },
+    {
+      "id": "a212305b-a043-41b1-8e86-59689f2d7fa6",
+      "title": "查看文件类型",
+      "command": "file <file>",
+      "trigger": "file",
+      "tags": [
+        "文件目录"
+      ],
+      "description": "判断文件的大致类型或格式。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017523,
+      "updatedAt": 1787411017523,
+      "legacySource": null
+    },
+    {
+      "id": "ee7af04c-0dcf-478e-9a65-5d54e8e73fd6",
+      "title": "查看文件详细属性",
+      "command": "stat <file>",
+      "trigger": "stat",
+      "tags": [
+        "文件目录"
+      ],
+      "description": "查看文件大小、inode、权限和时间等属性。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017524,
+      "updatedAt": 1787411017524,
+      "legacySource": null
+    },
+    {
+      "id": "ebf31347-5ed4-4c88-a44d-0ffc6a3639fb",
+      "title": "按名称查找文件",
+      "command": "find <path> -name '<name>'",
+      "trigger": "findname",
+      "tags": [
+        "文件目录"
+      ],
+      "description": "在指定目录下按名称查找文件或目录。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017525,
+      "updatedAt": 1787411017525,
+      "legacySource": null
+    },
+    {
+      "id": "4f17886b-091e-408a-af79-d5f6677b633f",
+      "title": "忽略大小写查找文件",
+      "command": "find <path> -iname '<name>'",
+      "trigger": "findi",
+      "tags": [
+        "文件目录"
+      ],
+      "description": "按名称查找文件并忽略大小写。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017526,
+      "updatedAt": 1787411017526,
+      "legacySource": null
+    },
+    {
+      "id": "b1c246cd-f4ed-456a-91a2-4d566463713f",
+      "title": "查找指定类型文件",
+      "command": "find <path> -type f -name '<pattern>'",
+      "trigger": "findfile",
+      "tags": [
+        "文件目录"
+      ],
+      "description": "只查找普通文件。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017527,
+      "updatedAt": 1787411017527,
+      "legacySource": null
+    },
+    {
+      "id": "b918f308-0292-43e6-a6a4-0e08109a8b11",
+      "title": "查找指定目录",
+      "command": "find <path> -type d -name '<name>'",
+      "trigger": "finddir",
+      "tags": [
+        "文件目录"
+      ],
+      "description": "只查找目录。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017528,
+      "updatedAt": 1787411017528,
+      "legacySource": null
+    },
+    {
+      "id": "f4909eb6-e514-42da-9c5f-44a700556349",
+      "title": "查找大文件",
+      "command": "find <path> -type f -size +1G",
+      "trigger": "findbig",
+      "tags": [
+        "文件目录"
+      ],
+      "description": "查找大于 1 GiB 的文件。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017529,
+      "updatedAt": 1787411017529,
+      "legacySource": null
+    },
+    {
+      "id": "0fb33a7d-200f-4a4c-8e06-c23cdac510ed",
+      "title": "查找最近一天修改的文件",
+      "command": "find <path> -type f -mtime -1",
+      "trigger": "findnew",
+      "tags": [
+        "文件目录"
+      ],
+      "description": "查找最近 24 小时内修改过的文件。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017530,
+      "updatedAt": 1787411017530,
+      "legacySource": null
+    },
+    {
+      "id": "4db15705-748e-4867-8a41-ae9bff4fdac8",
+      "title": "查看软链接指向",
+      "command": "readlink -f <file>",
+      "trigger": "readlink",
+      "tags": [
+        "文件目录"
+      ],
+      "description": "解析软链接并显示最终绝对路径。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017531,
+      "updatedAt": 1787411017531,
+      "legacySource": null
+    },
+    {
+      "id": "08f52f2a-b94b-42fc-9cff-f5358992f3e4",
+      "title": "创建软链接",
+      "command": "ln -s <target> <link>",
+      "trigger": "lns",
+      "tags": [
+        "文件目录"
+      ],
+      "description": "创建指向目标文件或目录的符号链接。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017532,
+      "updatedAt": 1787411017532,
+      "legacySource": null
+    },
+    {
+      "id": "19240501-5f1e-44c2-b807-8ec20a77797c",
+      "title": "查看文本文件",
+      "command": "cat <file>",
+      "trigger": "cat",
+      "tags": [
+        "文本日志"
+      ],
+      "description": "直接输出文本文件内容，适合较小文件。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017533,
+      "updatedAt": 1787411017533,
+      "legacySource": null
+    },
+    {
+      "id": "a0a9d081-91b3-4882-9e78-38662c6febb4",
+      "title": "分页查看大文件",
+      "command": "less <file>",
+      "trigger": "less",
+      "tags": [
+        "文本日志"
+      ],
+      "description": "分页浏览大文件，支持搜索和上下翻页。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017534,
+      "updatedAt": 1787411017534,
+      "legacySource": null
+    },
+    {
+      "id": "c0b35261-e172-4b34-877b-1ad78142b86f",
+      "title": "查看文件前 20 行",
+      "command": "head -n 20 <file>",
+      "trigger": "head20",
+      "tags": [
+        "文本日志"
+      ],
+      "description": "查看文件开头 20 行。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017535,
+      "updatedAt": 1787411017535,
+      "legacySource": null
+    },
+    {
+      "id": "3ccee77b-7def-475e-868e-ce757f2524d6",
+      "title": "查看文件最后 100 行",
+      "command": "tail -n 100 <file>",
+      "trigger": "tail100",
+      "tags": [
+        "文本日志"
+      ],
+      "description": "查看文件末尾最近 100 行内容。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017536,
+      "updatedAt": 1787411017536,
+      "legacySource": null
+    },
+    {
+      "id": "db1028a6-c314-4d74-8226-0558a1156d03",
+      "title": "实时跟踪日志",
+      "command": "tail -f <file>",
+      "trigger": "tailf",
+      "tags": [
+        "文本日志"
+      ],
+      "description": "持续输出文件新增内容，常用于查看实时日志。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017537,
+      "updatedAt": 1787411017537,
+      "legacySource": null
+    },
+    {
+      "id": "6373ec71-c88f-472c-bc31-63b6f661e251",
+      "title": "实时跟踪并显示最近 200 行",
+      "command": "tail -n 200 -f <file>",
+      "trigger": "tail200f",
+      "tags": [
+        "文本日志"
+      ],
+      "description": "先显示最后 200 行，再持续跟踪新增日志。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017538,
+      "updatedAt": 1787411017538,
+      "legacySource": null
+    },
+    {
+      "id": "eeb5fa7b-8d0e-4ae0-a993-08cd905062bb",
+      "title": "搜索文件关键字",
+      "command": "grep '<keyword>' <file>",
+      "trigger": "grep",
+      "tags": [
+        "文本日志"
+      ],
+      "description": "查找包含指定关键字的行。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017539,
+      "updatedAt": 1787411017539,
+      "legacySource": null
+    },
+    {
+      "id": "cfa80be5-4a1b-45b1-8388-8307fe4353f3",
+      "title": "忽略大小写搜索",
+      "command": "grep -i '<keyword>' <file>",
+      "trigger": "grepi",
+      "tags": [
+        "文本日志"
+      ],
+      "description": "忽略大小写搜索关键字。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017540,
+      "updatedAt": 1787411017540,
+      "legacySource": null
+    },
+    {
+      "id": "b16e93dc-1b08-4289-b1e2-15b2c9305683",
+      "title": "显示匹配行号",
+      "command": "grep -n '<keyword>' <file>",
+      "trigger": "grepn",
+      "tags": [
+        "文本日志"
+      ],
+      "description": "搜索关键字并显示匹配行号。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017541,
+      "updatedAt": 1787411017541,
+      "legacySource": null
+    },
+    {
+      "id": "ac62b814-9db7-40ef-ab5c-ef9a46cfe4a2",
+      "title": "递归搜索目录",
+      "command": "grep -Rni '<keyword>' <path>",
+      "trigger": "grepr",
+      "tags": [
+        "文本日志"
+      ],
+      "description": "递归搜索目录下所有文本文件，并显示文件名和行号。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017542,
+      "updatedAt": 1787411017542,
+      "legacySource": null
+    },
+    {
+      "id": "6e0008ac-3b0a-4f77-93d3-e736ce57f048",
+      "title": "排除指定关键字",
+      "command": "grep '<keyword>' <file> | grep -v '<exclude>'",
+      "trigger": "grepv",
+      "tags": [
+        "文本日志"
+      ],
+      "description": "匹配目标关键字后排除包含另一关键字的行。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017543,
+      "updatedAt": 1787411017543,
+      "legacySource": null
+    },
+    {
+      "id": "2f41ba6a-9758-44ce-99bc-cace091e3f73",
+      "title": "查看匹配行前后内容",
+      "command": "grep -C 5 '<keyword>' <file>",
+      "trigger": "grepc",
+      "tags": [
+        "文本日志"
+      ],
+      "description": "显示匹配行以及前后各 5 行上下文。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017544,
+      "updatedAt": 1787411017544,
+      "legacySource": null
+    },
+    {
+      "id": "fb921760-59c9-46c2-b8d4-7d817ef71bae",
+      "title": "统计匹配行数量",
+      "command": "grep -c '<keyword>' <file>",
+      "trigger": "grepcnt",
+      "tags": [
+        "文本日志"
+      ],
+      "description": "统计包含指定关键字的行数。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017545,
+      "updatedAt": 1787411017545,
+      "legacySource": null
+    },
+    {
+      "id": "f4fad429-a90f-4c0e-88fd-11d02c716092",
+      "title": "按列输出文本",
+      "command": "awk '{print $1}' <file>",
+      "trigger": "awkcol",
+      "tags": [
+        "文本日志"
+      ],
+      "description": "使用 awk 输出文本第一列，可修改列号进行分析。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017546,
+      "updatedAt": 1787411017546,
+      "legacySource": null
+    },
+    {
+      "id": "0473b9e0-a890-4cf6-be8f-d31a7735e3c5",
+      "title": "替换文本内容",
+      "command": "sed 's/<old>/<new>/g' <file>",
+      "trigger": "sed",
+      "tags": [
+        "文本日志"
+      ],
+      "description": "预览将文本中的旧内容替换为新内容，不直接修改原文件。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017547,
+      "updatedAt": 1787411017547,
+      "legacySource": null
+    },
+    {
+      "id": "340c16d2-5b05-4c29-95e3-2af4f097a475",
+      "title": "原地替换文件内容",
+      "command": "sed -i 's/<old>/<new>/g' <file>",
+      "trigger": "sedi",
+      "tags": [
+        "文本日志"
+      ],
+      "description": "直接修改文件并替换匹配内容，建议修改前先备份。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017548,
+      "updatedAt": 1787411017548,
+      "legacySource": null
+    },
+    {
+      "id": "346a1df9-4126-4d3e-af78-dc88d962c458",
+      "title": "查看系统负载",
+      "command": "uptime",
+      "trigger": "uptime",
+      "tags": [
+        "系统资源"
+      ],
+      "description": "查看运行时长以及 1、5、15 分钟平均负载。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017549,
+      "updatedAt": 1787411017549,
+      "legacySource": null
+    },
+    {
+      "id": "f3f09d9a-cdb1-481a-b36f-c9db501b7126",
+      "title": "实时查看系统资源",
+      "command": "top",
+      "trigger": "top",
+      "tags": [
+        "系统资源"
+      ],
+      "description": "实时查看 CPU、内存、负载和进程。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017550,
+      "updatedAt": 1787411017550,
+      "legacySource": null
+    },
+    {
+      "id": "3cf5defb-3982-4dd3-ad4b-d2c79ec3b4f3",
+      "title": "查看线程资源占用",
+      "command": "top -H",
+      "trigger": "toph",
+      "tags": [
+        "系统资源"
+      ],
+      "description": "以线程维度查看 CPU 等资源使用情况。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017551,
+      "updatedAt": 1787411017551,
+      "legacySource": null
+    },
+    {
+      "id": "7146b023-7a67-46f1-bf13-0843617ea721",
+      "title": "查看内存使用",
+      "command": "free -h",
+      "trigger": "free",
+      "tags": [
+        "系统资源"
+      ],
+      "description": "以易读单位显示内存和 Swap 使用情况。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017552,
+      "updatedAt": 1787411017552,
+      "legacySource": null
+    },
+    {
+      "id": "8e171ba4-e9e9-4f5c-be2f-4ed80d366b73",
+      "title": "查看 CPU 信息",
+      "command": "lscpu",
+      "trigger": "lscpu",
+      "tags": [
+        "系统资源"
+      ],
+      "description": "查看 CPU 架构、核心数、线程数等信息。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017553,
+      "updatedAt": 1787411017553,
+      "legacySource": null
+    },
+    {
+      "id": "4e852535-aaf2-4b2c-973a-e21c76b199bd",
+      "title": "查看系统基本信息",
+      "command": "uname -a",
+      "trigger": "uname",
+      "tags": [
+        "系统资源"
+      ],
+      "description": "查看内核、架构和主机等系统信息。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017554,
+      "updatedAt": 1787411017554,
+      "legacySource": null
+    },
+    {
+      "id": "fc4aa124-a4e9-4f08-92ea-5dca264efce8",
+      "title": "查看 Linux 发行版",
+      "command": "cat /etc/os-release",
+      "trigger": "osrelease",
+      "tags": [
+        "系统资源"
+      ],
+      "description": "查看发行版名称和版本。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017555,
+      "updatedAt": 1787411017555,
+      "legacySource": null
+    },
+    {
+      "id": "b33f7ea8-8908-4554-9521-54016abf9f1d",
+      "title": "查看主机详细信息",
+      "command": "hostnamectl",
+      "trigger": "hostctl",
+      "tags": [
+        "系统资源"
+      ],
+      "description": "查看主机名、操作系统、内核和架构信息。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017556,
+      "updatedAt": 1787411017556,
+      "legacySource": null
+    },
+    {
+      "id": "9d2c83c0-beba-47d7-a433-89f4c33592df",
+      "title": "查看虚拟内存统计",
+      "command": "vmstat 1",
+      "trigger": "vmstat",
+      "tags": [
+        "系统资源"
+      ],
+      "description": "每秒输出 CPU、内存、进程和 IO 的综合统计。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017557,
+      "updatedAt": 1787411017557,
+      "legacySource": null
+    },
+    {
+      "id": "56f89297-54d2-42f6-a10f-7ee9c65e45db",
+      "title": "查看系统运行统计",
+      "command": "sar -u 1 5",
+      "trigger": "sar",
+      "tags": [
+        "系统资源"
+      ],
+      "description": "连续采样 CPU 使用情况，需要 sysstat 工具。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017558,
+      "updatedAt": 1787411017558,
+      "legacySource": null
+    },
+    {
+      "id": "2b200a65-e149-4faa-af90-00f062bacd76",
+      "title": "查看内存占用最高的进程",
+      "command": "ps aux --sort=-%mem | head",
+      "trigger": "psmem",
+      "tags": [
+        "系统资源"
+      ],
+      "description": "按内存占用从高到低查看进程。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017559,
+      "updatedAt": 1787411017559,
+      "legacySource": null
+    },
+    {
+      "id": "944b7432-5e05-4f89-9d9a-6781c6a9fe6b",
+      "title": "查看 CPU 占用最高的进程",
+      "command": "ps aux --sort=-%cpu | head",
+      "trigger": "pscpu",
+      "tags": [
+        "系统资源"
+      ],
+      "description": "按 CPU 占用从高到低查看进程。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017560,
+      "updatedAt": 1787411017560,
+      "legacySource": null
+    },
+    {
+      "id": "191de9f5-6e8b-4d88-8503-7698afd71ea9",
+      "title": "查看所有进程",
+      "command": "ps -ef",
+      "trigger": "ps",
+      "tags": [
+        "进程服务"
+      ],
+      "description": "查看系统当前所有进程。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017561,
+      "updatedAt": 1787411017561,
+      "legacySource": null
+    },
+    {
+      "id": "4f07c7a7-d713-4e5c-b59c-b5ed28282cf5",
+      "title": "查找指定进程",
+      "command": "ps -ef | grep '<keyword>'",
+      "trigger": "psgrep",
+      "tags": [
+        "进程服务"
+      ],
+      "description": "通过关键字查找进程。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017562,
+      "updatedAt": 1787411017562,
+      "legacySource": null
+    },
+    {
+      "id": "1e693bdf-68e3-4ea1-b9c2-9c9bdbce1a3e",
+      "title": "按名称查找 PID",
+      "command": "pgrep -af <name>",
+      "trigger": "pgrep",
+      "tags": [
+        "进程服务"
+      ],
+      "description": "显示匹配进程的 PID 和完整命令行。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017563,
+      "updatedAt": 1787411017563,
+      "legacySource": null
+    },
+    {
+      "id": "c14451cd-5676-4808-8fd9-1d18dae6d4fc",
+      "title": "查看进程树",
+      "command": "pstree -ap",
+      "trigger": "pstree",
+      "tags": [
+        "进程服务"
+      ],
+      "description": "以树形结构查看进程之间的父子关系。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017564,
+      "updatedAt": 1787411017564,
+      "legacySource": null
+    },
+    {
+      "id": "5325399c-f5ab-432b-9871-5a99b801ce55",
+      "title": "查看进程打开的文件",
+      "command": "lsof -p <pid>",
+      "trigger": "lsofp",
+      "tags": [
+        "进程服务"
+      ],
+      "description": "查看指定进程当前打开的文件、socket 等资源。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017565,
+      "updatedAt": 1787411017565,
+      "legacySource": null
+    },
+    {
+      "id": "d2d3ba35-d407-4ecf-918a-4f567b3ed9fb",
+      "title": "正常结束进程",
+      "command": "kill <pid>",
+      "trigger": "kill",
+      "tags": [
+        "进程服务"
+      ],
+      "description": "向进程发送 TERM 信号，请求其正常退出。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017566,
+      "updatedAt": 1787411017566,
+      "legacySource": null
+    },
+    {
+      "id": "16f28032-ab62-4919-9bd0-64ef5ac3e92d",
+      "title": "强制结束进程",
+      "command": "kill -9 <pid>",
+      "trigger": "kill9",
+      "tags": [
+        "进程服务"
+      ],
+      "description": "强制终止进程，无法执行清理逻辑，仅在必要时使用。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017567,
+      "updatedAt": 1787411017567,
+      "legacySource": null
+    },
+    {
+      "id": "46d2ded5-da56-49ed-9709-b997d9145284",
+      "title": "查看后台任务",
+      "command": "jobs -l",
+      "trigger": "jobs",
+      "tags": [
+        "进程服务"
+      ],
+      "description": "查看当前 Shell 的后台任务及 PID。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017568,
+      "updatedAt": 1787411017568,
+      "legacySource": null
+    },
+    {
+      "id": "a667e75f-e378-428a-afc7-38edd78fd640",
+      "title": "后台运行命令",
+      "command": "nohup <command> > app.log 2>&1 &",
+      "trigger": "nohup",
+      "tags": [
+        "进程服务"
+      ],
+      "description": "让命令脱离终端后台运行，并将输出写入日志。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017569,
+      "updatedAt": 1787411017569,
+      "legacySource": null
+    },
+    {
+      "id": "7e849652-d014-4950-8581-acf412c486bf",
+      "title": "查看服务状态",
+      "command": "systemctl status <service>",
+      "trigger": "svcstatus",
+      "tags": [
+        "进程服务"
+      ],
+      "description": "查看 systemd 服务状态和最近日志。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017570,
+      "updatedAt": 1787411017570,
+      "legacySource": null
+    },
+    {
+      "id": "d3da27c5-15f3-4c10-9227-4d5128feb8df",
+      "title": "启动服务",
+      "command": "systemctl start <service>",
+      "trigger": "svcstart",
+      "tags": [
+        "进程服务"
+      ],
+      "description": "启动指定 systemd 服务。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017571,
+      "updatedAt": 1787411017571,
+      "legacySource": null
+    },
+    {
+      "id": "bcafc4bb-95e4-42e1-9748-c6464c3215f4",
+      "title": "停止服务",
+      "command": "systemctl stop <service>",
+      "trigger": "svcstop",
+      "tags": [
+        "进程服务"
+      ],
+      "description": "停止指定 systemd 服务。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017572,
+      "updatedAt": 1787411017572,
+      "legacySource": null
+    },
+    {
+      "id": "95477a33-3b79-4235-a375-647da899625e",
+      "title": "重启服务",
+      "command": "systemctl restart <service>",
+      "trigger": "svcrestart",
+      "tags": [
+        "进程服务"
+      ],
+      "description": "重启指定 systemd 服务。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017573,
+      "updatedAt": 1787411017573,
+      "legacySource": null
+    },
+    {
+      "id": "a7b92ae1-1108-4d87-9d51-906bc3380574",
+      "title": "重新加载服务配置",
+      "command": "systemctl reload <service>",
+      "trigger": "svcreload",
+      "tags": [
+        "进程服务"
+      ],
+      "description": "在服务支持的情况下重新加载配置而不完全重启。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017574,
+      "updatedAt": 1787411017574,
+      "legacySource": null
+    },
+    {
+      "id": "c4f693af-e56c-47b6-8a5e-22323d4ea3fa",
+      "title": "设置开机启动",
+      "command": "systemctl enable <service>",
+      "trigger": "svcenable",
+      "tags": [
+        "进程服务"
+      ],
+      "description": "设置服务随系统启动。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017575,
+      "updatedAt": 1787411017575,
+      "legacySource": null
+    },
+    {
+      "id": "170a83fc-df07-415b-a4bf-6cf048fbbc39",
+      "title": "取消开机启动",
+      "command": "systemctl disable <service>",
+      "trigger": "svcdisable",
+      "tags": [
+        "进程服务"
+      ],
+      "description": "取消服务随系统自动启动。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017576,
+      "updatedAt": 1787411017576,
+      "legacySource": null
+    },
+    {
+      "id": "e26d507b-0d1c-4d62-b9af-6a4736d2035d",
+      "title": "检查服务是否运行",
+      "command": "systemctl is-active <service>",
+      "trigger": "svcactive",
+      "tags": [
+        "进程服务"
+      ],
+      "description": "快速判断服务当前是否处于 active 状态。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017577,
+      "updatedAt": 1787411017577,
+      "legacySource": null
+    },
+    {
+      "id": "4845c6c2-4091-4abc-a5fe-80ec4a465220",
+      "title": "查看服务最近 100 行日志",
+      "command": "journalctl -u <service> -n 100 --no-pager",
+      "trigger": "jctl100",
+      "tags": [
+        "进程服务"
+      ],
+      "description": "查看指定 systemd 服务最近 100 行日志。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017578,
+      "updatedAt": 1787411017578,
+      "legacySource": null
+    },
+    {
+      "id": "aaaf202d-fa45-4522-b66d-86d2b1793ced",
+      "title": "实时查看服务日志",
+      "command": "journalctl -u <service> -f",
+      "trigger": "jctlf",
+      "tags": [
+        "进程服务"
+      ],
+      "description": "持续跟踪指定 systemd 服务日志。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017579,
+      "updatedAt": 1787411017579,
+      "legacySource": null
+    },
+    {
+      "id": "1520a0e3-d1ae-4709-b91a-974d1b3ff206",
+      "title": "查看本次启动日志",
+      "command": "journalctl -b",
+      "trigger": "jctlboot",
+      "tags": [
+        "进程服务"
+      ],
+      "description": "查看当前这次系统启动以来的 journal 日志。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017580,
+      "updatedAt": 1787411017580,
+      "legacySource": null
+    },
+    {
+      "id": "df4a6987-156c-468b-977c-a47306b6c311",
+      "title": "查看 IP 地址",
+      "command": "ip addr",
+      "trigger": "ipaddr",
+      "tags": [
+        "网络排查"
+      ],
+      "description": "查看所有网络接口和 IP 地址。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017581,
+      "updatedAt": 1787411017581,
+      "legacySource": null
+    },
+    {
+      "id": "1e6091bc-cb8a-4f77-a5b5-0e56dade2317",
+      "title": "查看网卡状态",
+      "command": "ip link",
+      "trigger": "iplink",
+      "tags": [
+        "网络排查"
+      ],
+      "description": "查看网卡启用状态、MAC 地址等信息。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017582,
+      "updatedAt": 1787411017582,
+      "legacySource": null
+    },
+    {
+      "id": "718dd4da-0b70-4267-bbd0-7ff47516a6a1",
+      "title": "查看路由",
+      "command": "ip route",
+      "trigger": "iproute",
+      "tags": [
+        "网络排查"
+      ],
+      "description": "查看当前系统路由表。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017583,
+      "updatedAt": 1787411017583,
+      "legacySource": null
+    },
+    {
+      "id": "ecef544e-fe2b-4799-b926-963ba14f87ee",
+      "title": "查看 ARP 邻居",
+      "command": "ip neigh",
+      "trigger": "ipneigh",
+      "tags": [
+        "网络排查"
+      ],
+      "description": "查看邻居表和 ARP/NDP 状态。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017584,
+      "updatedAt": 1787411017584,
+      "legacySource": null
+    },
+    {
+      "id": "8aebd3b8-034c-494f-b0cb-09345c93d18f",
+      "title": "查看监听端口",
+      "command": "ss -lntp",
+      "trigger": "sslisten",
+      "tags": [
+        "网络排查"
+      ],
+      "description": "查看 TCP 监听端口及对应进程。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017585,
+      "updatedAt": 1787411017585,
+      "legacySource": null
+    },
+    {
+      "id": "fcaf6307-02aa-4ceb-93d8-05e5699a1721",
+      "title": "查看所有 TCP 连接",
+      "command": "ss -antp",
+      "trigger": "sstcp",
+      "tags": [
+        "网络排查"
+      ],
+      "description": "查看所有 TCP 连接及连接状态。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017586,
+      "updatedAt": 1787411017586,
+      "legacySource": null
+    },
+    {
+      "id": "ea8f3217-f1e5-414a-9f92-a6f551ffdc21",
+      "title": "查看 UDP 监听端口",
+      "command": "ss -lunp",
+      "trigger": "ssudp",
+      "tags": [
+        "网络排查"
+      ],
+      "description": "查看 UDP 监听端口及对应进程。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017587,
+      "updatedAt": 1787411017587,
+      "legacySource": null
+    },
+    {
+      "id": "43637c9d-3195-4d08-9b2f-07bae73b99c8",
+      "title": "查看指定端口",
+      "command": "ss -lntp | grep ':<port>'",
+      "trigger": "ssport",
+      "tags": [
+        "网络排查"
+      ],
+      "description": "筛选指定 TCP 监听端口。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017588,
+      "updatedAt": 1787411017588,
+      "legacySource": null
+    },
+    {
+      "id": "38808a31-3d1f-4b2c-9b4d-fdf0a136b4a5",
+      "title": "查看 ESTABLISHED 连接",
+      "command": "ss -ant state established",
+      "trigger": "ssest",
+      "tags": [
+        "网络排查"
+      ],
+      "description": "只查看已经建立的 TCP 连接。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017589,
+      "updatedAt": 1787411017589,
+      "legacySource": null
+    },
+    {
+      "id": "c9c3cfb6-4b6b-475a-9c3a-2571330865cd",
+      "title": "统计 TCP 状态",
+      "command": "ss -ant | awk 'NR>1 {print $1}' | sort | uniq -c",
+      "trigger": "ssstat",
+      "tags": [
+        "网络排查"
+      ],
+      "description": "统计各 TCP 状态的连接数量。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017590,
+      "updatedAt": 1787411017590,
+      "legacySource": null
+    },
+    {
+      "id": "6101e2d3-b586-4dca-80ea-72dbb289cea8",
+      "title": "查看端口占用进程",
+      "command": "lsof -i :<port>",
+      "trigger": "lsofport",
+      "tags": [
+        "网络排查"
+      ],
+      "description": "查看占用指定端口的进程。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017591,
+      "updatedAt": 1787411017591,
+      "legacySource": null
+    },
+    {
+      "id": "611855f4-f502-4a05-9038-1aaf5072fcf9",
+      "title": "测试主机连通性",
+      "command": "ping <host>",
+      "trigger": "ping",
+      "tags": [
+        "网络排查"
+      ],
+      "description": "通过 ICMP 测试主机网络连通性和时延。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017592,
+      "updatedAt": 1787411017592,
+      "legacySource": null
+    },
+    {
+      "id": "69c8514d-1b00-401e-82c2-238ab48307c2",
+      "title": "指定次数测试连通性",
+      "command": "ping -c 5 <host>",
+      "trigger": "ping5",
+      "tags": [
+        "网络排查"
+      ],
+      "description": "发送 5 个 ICMP 包后自动结束。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017593,
+      "updatedAt": 1787411017593,
+      "legacySource": null
+    },
+    {
+      "id": "76573210-e791-4346-9d39-89d8658d829b",
+      "title": "测试 TCP 端口",
+      "command": "nc -zv <host> <port>",
+      "trigger": "ncport",
+      "tags": [
+        "网络排查"
+      ],
+      "description": "测试目标 TCP 端口是否能够建立连接。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017594,
+      "updatedAt": 1787411017594,
+      "legacySource": null
+    },
+    {
+      "id": "b729d307-6597-4500-86c1-71eccac1307c",
+      "title": "测试 HTTP 接口",
+      "command": "curl -v http://<host>:<port>/<path>",
+      "trigger": "curlv",
+      "tags": [
+        "网络排查"
+      ],
+      "description": "详细查看 HTTP 请求、连接和响应过程。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017595,
+      "updatedAt": 1787411017595,
+      "legacySource": null
+    },
+    {
+      "id": "b45f7a75-5d60-4eb4-887d-3442e5841d1a",
+      "title": "仅查看 HTTP 响应头",
+      "command": "curl -I http://<host>:<port>/<path>",
+      "trigger": "curli",
+      "tags": [
+        "网络排查"
+      ],
+      "description": "仅获取 HTTP 响应头。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017596,
+      "updatedAt": 1787411017596,
+      "legacySource": null
+    },
+    {
+      "id": "c131ece2-4b3b-46bb-b3f9-fb7641f57e46",
+      "title": "查看 HTTP 耗时",
+      "command": "curl -o /dev/null -s -w 'status=%{http_code} total=%{time_total}s connect=%{time_connect}s\\n' http://<host>:<port>/<path>",
+      "trigger": "curltime",
+      "tags": [
+        "网络排查"
+      ],
+      "description": "查看 HTTP 状态码、连接耗时和总耗时。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017597,
+      "updatedAt": 1787411017597,
+      "legacySource": null
+    },
+    {
+      "id": "0169d2be-2593-41ab-bf60-b7c33d2ade29",
+      "title": "DNS 查询",
+      "command": "dig <domain>",
+      "trigger": "dig",
+      "tags": [
+        "网络排查"
+      ],
+      "description": "查询域名 DNS 解析结果。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017598,
+      "updatedAt": 1787411017598,
+      "legacySource": null
+    },
+    {
+      "id": "1112b3fc-cfd2-4787-b7f4-65a9e6314a56",
+      "title": "快速查看 DNS 结果",
+      "command": "getent hosts <domain>",
+      "trigger": "dns",
+      "tags": [
+        "网络排查"
+      ],
+      "description": "通过系统 NSS 配置查询域名解析结果。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017599,
+      "updatedAt": 1787411017599,
+      "legacySource": null
+    },
+    {
+      "id": "650e7238-29ed-47db-848d-8b30ba0cb1a7",
+      "title": "路由跟踪",
+      "command": "traceroute <host>",
+      "trigger": "traceroute",
+      "tags": [
+        "网络排查"
+      ],
+      "description": "查看数据包到目标主机经过的网络路径。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017600,
+      "updatedAt": 1787411017600,
+      "legacySource": null
+    },
+    {
+      "id": "e6cc1d1e-d25d-4a26-834b-2b3db73f53e0",
+      "title": "抓取指定端口数据包",
+      "command": "tcpdump -i any port <port> -nn",
+      "trigger": "tcpport",
+      "tags": [
+        "网络排查"
+      ],
+      "description": "抓取指定端口的数据包并禁用名称解析。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017601,
+      "updatedAt": 1787411017601,
+      "legacySource": null
+    },
+    {
+      "id": "e69204b5-5eac-4660-99ec-fb5e22607c23",
+      "title": "抓取指定主机数据包",
+      "command": "tcpdump -i any host <host> -nn",
+      "trigger": "tcphost",
+      "tags": [
+        "网络排查"
+      ],
+      "description": "抓取与指定主机相关的数据包。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017602,
+      "updatedAt": 1787411017602,
+      "legacySource": null
+    },
+    {
+      "id": "d261e689-356d-4470-97ee-73f988cd3c1d",
+      "title": "查看 firewalld 状态",
+      "command": "systemctl status firewalld",
+      "trigger": "firestatus",
+      "tags": [
+        "防火墙"
+      ],
+      "description": "查看 firewalld 服务是否正在运行。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017603,
+      "updatedAt": 1787411017603,
+      "legacySource": null
+    },
+    {
+      "id": "661914e5-a3e1-4b1b-a1df-115dcf3b5d38",
+      "title": "查看当前活动区域",
+      "command": "firewall-cmd --get-active-zones",
+      "trigger": "firezone",
+      "tags": [
+        "防火墙"
+      ],
+      "description": "查看当前网卡关联的 firewalld zone。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017604,
+      "updatedAt": 1787411017604,
+      "legacySource": null
+    },
+    {
+      "id": "0924fb11-7067-45d4-bb3f-7cdd56198204",
+      "title": "查看当前防火墙规则",
+      "command": "firewall-cmd --list-all",
+      "trigger": "fireall",
+      "tags": [
+        "防火墙"
+      ],
+      "description": "查看当前默认区域的完整 firewalld 配置。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017605,
+      "updatedAt": 1787411017605,
+      "legacySource": null
+    },
+    {
+      "id": "8e3772e6-4ae0-4474-9a6a-3fb370b5644a",
+      "title": "查看已开放端口",
+      "command": "firewall-cmd --list-ports",
+      "trigger": "fireports",
+      "tags": [
+        "防火墙"
+      ],
+      "description": "查看当前区域已开放的端口。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017606,
+      "updatedAt": 1787411017606,
+      "legacySource": null
+    },
+    {
+      "id": "dd1ad4e4-baca-4ce9-86fd-db3e66ed737b",
+      "title": "查询端口是否开放",
+      "command": "firewall-cmd --query-port=<port>/tcp",
+      "trigger": "firequery",
+      "tags": [
+        "防火墙"
+      ],
+      "description": "检查指定 TCP 端口是否已开放。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017607,
+      "updatedAt": 1787411017607,
+      "legacySource": null
+    },
+    {
+      "id": "1045397a-64cb-4fa7-84c8-f18256fd0714",
+      "title": "临时开放 TCP 端口",
+      "command": "firewall-cmd --add-port=<port>/tcp",
+      "trigger": "fireadd",
+      "tags": [
+        "防火墙"
+      ],
+      "description": "临时开放 TCP 端口，firewalld 重载或重启后失效。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017608,
+      "updatedAt": 1787411017608,
+      "legacySource": null
+    },
+    {
+      "id": "6d43b067-ae6c-4ca9-9dbe-cd9224c9902f",
+      "title": "永久开放 TCP 端口",
+      "command": "firewall-cmd --permanent --add-port=<port>/tcp && firewall-cmd --reload",
+      "trigger": "fireaddp",
+      "tags": [
+        "防火墙"
+      ],
+      "description": "永久开放 TCP 端口并立即重新加载规则。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017609,
+      "updatedAt": 1787411017609,
+      "legacySource": null
+    },
+    {
+      "id": "e77a696c-9e70-495e-8736-9625a821edfc",
+      "title": "永久删除 TCP 端口",
+      "command": "firewall-cmd --permanent --remove-port=<port>/tcp && firewall-cmd --reload",
+      "trigger": "firerm",
+      "tags": [
+        "防火墙"
+      ],
+      "description": "从永久规则中删除开放端口并重新加载。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017610,
+      "updatedAt": 1787411017610,
+      "legacySource": null
+    },
+    {
+      "id": "2f2cb241-4184-4a2d-ad78-0b2378cb947b",
+      "title": "查看 iptables 规则",
+      "command": "iptables -L -n -v",
+      "trigger": "iptables",
+      "tags": [
+        "防火墙"
+      ],
+      "description": "以数字形式查看 iptables 规则及流量计数。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017611,
+      "updatedAt": 1787411017611,
+      "legacySource": null
+    },
+    {
+      "id": "113c67fb-05ac-4c76-bc5d-7064b594cb9a",
+      "title": "查看 iptables 规则行号",
+      "command": "iptables -L -n -v --line-numbers",
+      "trigger": "iptablesn",
+      "tags": [
+        "防火墙"
+      ],
+      "description": "查看规则及行号，便于定位具体规则。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017612,
+      "updatedAt": 1787411017612,
+      "legacySource": null
+    },
+    {
+      "id": "2112ca61-c30f-43da-a3e5-e312ba30e8ab",
+      "title": "查看 nftables 规则",
+      "command": "nft list ruleset",
+      "trigger": "nft",
+      "tags": [
+        "防火墙"
+      ],
+      "description": "查看当前 nftables 完整规则集。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017613,
+      "updatedAt": 1787411017613,
+      "legacySource": null
+    },
+    {
+      "id": "2d53b775-217c-48a0-a6a8-23c1193f0d2a",
+      "title": "查看磁盘使用情况",
+      "command": "df -h",
+      "trigger": "df",
+      "tags": [
+        "磁盘挂载"
+      ],
+      "description": "以易读单位查看各文件系统空间使用情况。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017614,
+      "updatedAt": 1787411017614,
+      "legacySource": null
+    },
+    {
+      "id": "fe873a85-c0d7-4382-8447-9b652d852bce",
+      "title": "查看磁盘类型和使用情况",
+      "command": "df -Th",
+      "trigger": "dfth",
+      "tags": [
+        "磁盘挂载"
+      ],
+      "description": "同时查看文件系统类型和磁盘使用情况。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017615,
+      "updatedAt": 1787411017615,
+      "legacySource": null
+    },
+    {
+      "id": "84b94829-2114-4e7f-b2fc-6845857111c3",
+      "title": "查看目录总大小",
+      "command": "du -sh <path>",
+      "trigger": "dush",
+      "tags": [
+        "磁盘挂载"
+      ],
+      "description": "统计指定目录占用的总空间。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017616,
+      "updatedAt": 1787411017616,
+      "legacySource": null
+    },
+    {
+      "id": "60efb01f-fb77-484a-a8ff-ad42391f5e5b",
+      "title": "查看一级目录大小",
+      "command": "du -h --max-depth=1 <path> | sort -h",
+      "trigger": "du1",
+      "tags": [
+        "磁盘挂载"
+      ],
+      "description": "查看指定目录下一层各目录大小并排序。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017617,
+      "updatedAt": 1787411017617,
+      "legacySource": null
+    },
+    {
+      "id": "eeb54cbc-c57b-44f0-a2de-867c93dbdf83",
+      "title": "查看块设备",
+      "command": "lsblk",
+      "trigger": "lsblk",
+      "tags": [
+        "磁盘挂载"
+      ],
+      "description": "查看磁盘、分区及挂载关系。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017618,
+      "updatedAt": 1787411017618,
+      "legacySource": null
+    },
+    {
+      "id": "f3614ebc-cde2-47c4-89e3-d05e9bea4fdb",
+      "title": "查看文件系统 UUID",
+      "command": "lsblk -f",
+      "trigger": "lsblkf",
+      "tags": [
+        "磁盘挂载"
+      ],
+      "description": "查看块设备文件系统类型、UUID 和挂载点。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017619,
+      "updatedAt": 1787411017619,
+      "legacySource": null
+    },
+    {
+      "id": "4f76801f-01da-4a89-af15-2e65b8513ff4",
+      "title": "查看当前挂载",
+      "command": "findmnt",
+      "trigger": "findmnt",
+      "tags": [
+        "磁盘挂载"
+      ],
+      "description": "以树形结构查看当前所有挂载关系。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017620,
+      "updatedAt": 1787411017620,
+      "legacySource": null
+    },
+    {
+      "id": "fea55290-34b2-4abc-af09-6abda29f8a4b",
+      "title": "查看指定目录挂载来源",
+      "command": "findmnt <path>",
+      "trigger": "findmntp",
+      "tags": [
+        "磁盘挂载"
+      ],
+      "description": "查看指定路径对应的文件系统和挂载来源。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017621,
+      "updatedAt": 1787411017621,
+      "legacySource": null
+    },
+    {
+      "id": "9f14c642-c68d-4b66-aae3-1ee17cea0709",
+      "title": "查看挂载配置",
+      "command": "cat /etc/fstab",
+      "trigger": "fstab",
+      "tags": [
+        "磁盘挂载"
+      ],
+      "description": "查看系统开机自动挂载配置。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017622,
+      "updatedAt": 1787411017622,
+      "legacySource": null
+    },
+    {
+      "id": "e16c5bf7-e2ef-404d-add5-c35e463f45d5",
+      "title": "挂载文件系统",
+      "command": "mount <device> <mountpoint>",
+      "trigger": "mount",
+      "tags": [
+        "磁盘挂载"
+      ],
+      "description": "将设备或远程文件系统挂载到指定目录。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017623,
+      "updatedAt": 1787411017623,
+      "legacySource": null
+    },
+    {
+      "id": "169d08d6-f20e-4d36-a489-59171d83a9b9",
+      "title": "卸载文件系统",
+      "command": "umount <mountpoint>",
+      "trigger": "umount",
+      "tags": [
+        "磁盘挂载"
+      ],
+      "description": "卸载指定挂载点，需确认没有进程占用。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017624,
+      "updatedAt": 1787411017624,
+      "legacySource": null
+    },
+    {
+      "id": "71ea35b1-a379-48f8-b6b5-1637f372d79b",
+      "title": "查看目录被哪些进程占用",
+      "command": "lsof +D <path>",
+      "trigger": "lsofd",
+      "tags": [
+        "磁盘挂载"
+      ],
+      "description": "递归查看打开指定目录中文件的进程，大目录可能较慢。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017625,
+      "updatedAt": 1787411017625,
+      "legacySource": null
+    },
+    {
+      "id": "35aad26b-8da5-471b-a09a-6d19d0a2ebc8",
+      "title": "查看文件系统 inode",
+      "command": "df -ih",
+      "trigger": "dfinode",
+      "tags": [
+        "磁盘挂载"
+      ],
+      "description": "查看 inode 总量和使用率。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017626,
+      "updatedAt": 1787411017626,
+      "legacySource": null
+    },
+    {
+      "id": "aa258641-43fa-42cf-bec5-e4e2d28b6b9f",
+      "title": "查看磁盘 IO",
+      "command": "iostat -xz 1",
+      "trigger": "iostat",
+      "tags": [
+        "磁盘挂载"
+      ],
+      "description": "持续查看块设备 IO、延迟和利用率，需要 sysstat。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017627,
+      "updatedAt": 1787411017627,
+      "legacySource": null
+    },
+    {
+      "id": "b26ec684-2853-4848-92d0-7a77c0ec9eac",
+      "title": "查看当前用户身份",
+      "command": "id",
+      "trigger": "id",
+      "tags": [
+        "用户权限"
+      ],
+      "description": "查看当前用户 UID、GID 和所属用户组。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017628,
+      "updatedAt": 1787411017628,
+      "legacySource": null
+    },
+    {
+      "id": "94716951-1936-424b-8e9d-1820f52a629f",
+      "title": "查看指定用户身份",
+      "command": "id <user>",
+      "trigger": "iduser",
+      "tags": [
+        "用户权限"
+      ],
+      "description": "查看指定用户的 UID、GID 和用户组。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017629,
+      "updatedAt": 1787411017629,
+      "legacySource": null
+    },
+    {
+      "id": "24691c16-a4d1-4629-be9e-fd137e35cdc6",
+      "title": "查看文件权限",
+      "command": "ls -l <file>",
+      "trigger": "lsperm",
+      "tags": [
+        "用户权限"
+      ],
+      "description": "查看文件权限、属主和属组。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017630,
+      "updatedAt": 1787411017630,
+      "legacySource": null
+    },
+    {
+      "id": "b8283934-b556-4ccc-b031-170cbd52a133",
+      "title": "修改文件权限",
+      "command": "chmod <mode> <file>",
+      "trigger": "chmod",
+      "tags": [
+        "用户权限"
+      ],
+      "description": "修改文件或目录权限，例如 644、755。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017631,
+      "updatedAt": 1787411017631,
+      "legacySource": null
+    },
+    {
+      "id": "60055852-2d91-43bc-847c-ffb0d536e5e0",
+      "title": "递归修改权限",
+      "command": "chmod -R <mode> <path>",
+      "trigger": "chmodr",
+      "tags": [
+        "用户权限"
+      ],
+      "description": "递归修改目录及其内容权限，影响范围较大。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017632,
+      "updatedAt": 1787411017632,
+      "legacySource": null
+    },
+    {
+      "id": "dc869db6-89dd-4f10-95c2-68af7b473026",
+      "title": "修改文件属主",
+      "command": "chown <user>:<group> <file>",
+      "trigger": "chown",
+      "tags": [
+        "用户权限"
+      ],
+      "description": "修改文件或目录的所属用户和用户组。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017633,
+      "updatedAt": 1787411017633,
+      "legacySource": null
+    },
+    {
+      "id": "3e125174-0ab8-4c4e-b6be-42035b291eb9",
+      "title": "递归修改属主",
+      "command": "chown -R <user>:<group> <path>",
+      "trigger": "chownr",
+      "tags": [
+        "用户权限"
+      ],
+      "description": "递归修改目录及其所有内容的属主属组。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017634,
+      "updatedAt": 1787411017634,
+      "legacySource": null
+    },
+    {
+      "id": "dc9f2097-3bb0-47cb-926e-7baa4989d3f4",
+      "title": "查看所有用户",
+      "command": "cut -d: -f1 /etc/passwd",
+      "trigger": "users",
+      "tags": [
+        "用户权限"
+      ],
+      "description": "列出系统 passwd 数据库中的用户名。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017635,
+      "updatedAt": 1787411017635,
+      "legacySource": null
+    },
+    {
+      "id": "2e62fdc2-0214-42bc-b722-2a7c69e61839",
+      "title": "查看用户组",
+      "command": "groups <user>",
+      "trigger": "groups",
+      "tags": [
+        "用户权限"
+      ],
+      "description": "查看指定用户所属的用户组。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017636,
+      "updatedAt": 1787411017636,
+      "legacySource": null
+    },
+    {
+      "id": "db60a193-b79f-4503-9621-960bcc24d77a",
+      "title": "切换到其他用户",
+      "command": "su - <user>",
+      "trigger": "su",
+      "tags": [
+        "用户权限"
+      ],
+      "description": "切换到指定用户并加载其登录环境。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017637,
+      "updatedAt": 1787411017637,
+      "legacySource": null
+    },
+    {
+      "id": "b78d4095-4732-4bd1-87d6-1007269a724f",
+      "title": "使用 root 权限执行命令",
+      "command": "sudo <command>",
+      "trigger": "sudo",
+      "tags": [
+        "用户权限"
+      ],
+      "description": "使用 sudo 权限执行指定命令。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017638,
+      "updatedAt": 1787411017638,
+      "legacySource": null
+    },
+    {
+      "id": "fdaf9ae4-caf1-49c2-9a41-295b8342d9dd",
+      "title": "打包目录为 tar.gz",
+      "command": "tar -czvf <archive>.tar.gz <path>",
+      "trigger": "tarc",
+      "tags": [
+        "压缩传输"
+      ],
+      "description": "将文件或目录压缩为 tar.gz。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017639,
+      "updatedAt": 1787411017639,
+      "legacySource": null
+    },
+    {
+      "id": "c6b85e8a-40a8-46ab-a91e-f789470a4289",
+      "title": "解压 tar.gz",
+      "command": "tar -xzvf <archive>.tar.gz",
+      "trigger": "tarx",
+      "tags": [
+        "压缩传输"
+      ],
+      "description": "解压 tar.gz 文件到当前目录。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017640,
+      "updatedAt": 1787411017640,
+      "legacySource": null
+    },
+    {
+      "id": "d193bbff-5e84-4c34-bc8e-3f8e39d30f0a",
+      "title": "查看 tar 包内容",
+      "command": "tar -tvf <archive>.tar.gz",
+      "trigger": "tart",
+      "tags": [
+        "压缩传输"
+      ],
+      "description": "不解压，仅查看 tar 包中的文件列表。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017641,
+      "updatedAt": 1787411017641,
+      "legacySource": null
+    },
+    {
+      "id": "b2442e48-3f33-4baa-8b0b-6902036e2dea",
+      "title": "压缩为 zip",
+      "command": "zip -r <archive>.zip <path>",
+      "trigger": "zip",
+      "tags": [
+        "压缩传输"
+      ],
+      "description": "递归压缩目录为 zip 文件。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017642,
+      "updatedAt": 1787411017642,
+      "legacySource": null
+    },
+    {
+      "id": "19148218-42b3-44ba-8a6c-9c6e35e61862",
+      "title": "解压 zip",
+      "command": "unzip <archive>.zip",
+      "trigger": "unzip",
+      "tags": [
+        "压缩传输"
+      ],
+      "description": "解压 zip 文件到当前目录。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017643,
+      "updatedAt": 1787411017643,
+      "legacySource": null
+    },
+    {
+      "id": "5aa115af-4776-4a64-8978-210455ff57ed",
+      "title": "通过 SCP 上传文件",
+      "command": "scp <local_file> <user>@<host>:<remote_path>",
+      "trigger": "scpput",
+      "tags": [
+        "压缩传输"
+      ],
+      "description": "从当前机器向远程服务器上传文件。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017644,
+      "updatedAt": 1787411017644,
+      "legacySource": null
+    },
+    {
+      "id": "a2042727-7f4a-4513-99ea-6662bf001b9e",
+      "title": "通过 SCP 下载文件",
+      "command": "scp <user>@<host>:<remote_file> <local_path>",
+      "trigger": "scpget",
+      "tags": [
+        "压缩传输"
+      ],
+      "description": "从远程服务器下载文件。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017645,
+      "updatedAt": 1787411017645,
+      "legacySource": null
+    },
+    {
+      "id": "191ea284-b76d-4f69-9f86-7c9b47da2fed",
+      "title": "递归 SCP 传输目录",
+      "command": "scp -r <source> <user>@<host>:<remote_path>",
+      "trigger": "scpr",
+      "tags": [
+        "压缩传输"
+      ],
+      "description": "递归传输整个目录。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017646,
+      "updatedAt": 1787411017646,
+      "legacySource": null
+    },
+    {
+      "id": "0d6b98b6-0074-4102-a001-0ec571b36214",
+      "title": "使用 rsync 同步目录",
+      "command": "rsync -avh <source>/ <target>/",
+      "trigger": "rsync",
+      "tags": [
+        "压缩传输"
+      ],
+      "description": "增量同步目录，并保留常见文件属性。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017647,
+      "updatedAt": 1787411017647,
+      "legacySource": null
+    },
+    {
+      "id": "da8a501f-1b77-4254-9be6-63dd0d923614",
+      "title": "查看 rsync 传输进度",
+      "command": "rsync -avh --progress <source>/ <target>/",
+      "trigger": "rsyncp",
+      "tags": [
+        "压缩传输"
+      ],
+      "description": "同步文件时显示逐文件传输进度。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017648,
+      "updatedAt": 1787411017648,
+      "legacySource": null
+    },
+    {
+      "id": "2799b672-2ec3-45b8-9c79-33364e3f0b76",
+      "title": "下载文件",
+      "command": "wget <url>",
+      "trigger": "wget",
+      "tags": [
+        "压缩传输"
+      ],
+      "description": "从 HTTP/HTTPS 地址下载文件。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017649,
+      "updatedAt": 1787411017649,
+      "legacySource": null
+    },
+    {
+      "id": "245dbe93-5e46-45a0-8fcd-23be8e52f6ce",
+      "title": "curl 下载并保留文件名",
+      "command": "curl -LO <url>",
+      "trigger": "curlget",
+      "tags": [
+        "压缩传输"
+      ],
+      "description": "下载文件并使用远端文件名保存。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017650,
+      "updatedAt": 1787411017650,
+      "legacySource": null
+    },
+    {
+      "id": "6711355b-ca15-40c3-8079-305196249bf6",
+      "title": "YUM 安装软件",
+      "command": "yum install -y <package>",
+      "trigger": "yumins",
+      "tags": [
+        "软件管理"
+      ],
+      "description": "在 RHEL/CentOS 兼容系统中安装软件包。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017651,
+      "updatedAt": 1787411017651,
+      "legacySource": null
+    },
+    {
+      "id": "9de23038-1aa5-4d5a-8364-ad496786a267",
+      "title": "YUM 查询已安装软件",
+      "command": "yum list installed | grep <package>",
+      "trigger": "yumlist",
+      "tags": [
+        "软件管理"
+      ],
+      "description": "查询指定软件包是否已安装。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017652,
+      "updatedAt": 1787411017652,
+      "legacySource": null
+    },
+    {
+      "id": "968738e0-f400-410d-8fec-29947a7ee59a",
+      "title": "DNF 安装软件",
+      "command": "dnf install -y <package>",
+      "trigger": "dnfins",
+      "tags": [
+        "软件管理"
+      ],
+      "description": "在较新的 RHEL、Rocky、AlmaLinux 等系统中安装软件包。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017653,
+      "updatedAt": 1787411017653,
+      "legacySource": null
+    },
+    {
+      "id": "a73de5ae-d227-4326-b109-04317d9050eb",
+      "title": "RPM 查询软件包",
+      "command": "rpm -qa | grep <package>",
+      "trigger": "rpmq",
+      "tags": [
+        "软件管理"
+      ],
+      "description": "从 RPM 数据库中搜索已安装的软件包。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017654,
+      "updatedAt": 1787411017654,
+      "legacySource": null
+    },
+    {
+      "id": "2aa35249-c948-406d-882a-0dd03396c465",
+      "title": "查询文件属于哪个 RPM 包",
+      "command": "rpm -qf <file>",
+      "trigger": "rpmqf",
+      "tags": [
+        "软件管理"
+      ],
+      "description": "查询指定文件由哪个 RPM 软件包提供。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017655,
+      "updatedAt": 1787411017655,
+      "legacySource": null
+    },
+    {
+      "id": "5fe7033a-c14b-4403-a351-736b332c9858",
+      "title": "APT 更新索引",
+      "command": "apt update",
+      "trigger": "aptupdate",
+      "tags": [
+        "软件管理"
+      ],
+      "description": "更新 Debian/Ubuntu 软件包索引。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017656,
+      "updatedAt": 1787411017656,
+      "legacySource": null
+    },
+    {
+      "id": "5caf99bb-d7e4-45b7-8564-73df02519449",
+      "title": "APT 安装软件",
+      "command": "apt install -y <package>",
+      "trigger": "aptins",
+      "tags": [
+        "软件管理"
+      ],
+      "description": "在 Debian/Ubuntu 系统中安装软件包。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017657,
+      "updatedAt": 1787411017657,
+      "legacySource": null
+    },
+    {
+      "id": "2f6d859d-4250-4ead-8499-3b604d958324",
+      "title": "查看软件版本",
+      "command": "<command> --version",
+      "trigger": "version",
+      "tags": [
+        "软件管理"
+      ],
+      "description": "查看软件或命令的当前版本。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017658,
+      "updatedAt": 1787411017658,
+      "legacySource": null
+    },
+    {
+      "id": "1a78bc6f-e5fb-49a5-b953-8f207778da19",
+      "title": "连接 SSH 服务器",
+      "command": "ssh <user>@<host>",
+      "trigger": "ssh",
+      "tags": [
+        "SSH"
+      ],
+      "description": "使用默认 22 端口连接远程 SSH 服务器。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017659,
+      "updatedAt": 1787411017659,
+      "legacySource": null
+    },
+    {
+      "id": "063e2287-338b-4497-aea1-4deb6f08d6db",
+      "title": "指定端口连接 SSH",
+      "command": "ssh -p <port> <user>@<host>",
+      "trigger": "sshp",
+      "tags": [
+        "SSH"
+      ],
+      "description": "通过指定端口连接 SSH 服务器。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017660,
+      "updatedAt": 1787411017660,
+      "legacySource": null
+    },
+    {
+      "id": "6c4db970-c0ca-4b53-a757-e36bf3234fd2",
+      "title": "使用私钥连接 SSH",
+      "command": "ssh -i <key_file> <user>@<host>",
+      "trigger": "sshi",
+      "tags": [
+        "SSH"
+      ],
+      "description": "使用指定私钥文件进行 SSH 登录。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017661,
+      "updatedAt": 1787411017661,
+      "legacySource": null
+    },
+    {
+      "id": "85eeb4da-3a02-45ba-93c2-1d1914488954",
+      "title": "生成 SSH 密钥",
+      "command": "ssh-keygen -t ed25519",
+      "trigger": "sshkeygen",
+      "tags": [
+        "SSH"
+      ],
+      "description": "生成 Ed25519 SSH 公私钥。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017662,
+      "updatedAt": 1787411017662,
+      "legacySource": null
+    },
+    {
+      "id": "588e14d8-5afa-4430-a586-f626c1383e8d",
+      "title": "复制公钥到服务器",
+      "command": "ssh-copy-id <user>@<host>",
+      "trigger": "sshcopy",
+      "tags": [
+        "SSH"
+      ],
+      "description": "将本机公钥写入远程用户 authorized_keys。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017663,
+      "updatedAt": 1787411017663,
+      "legacySource": null
+    },
+    {
+      "id": "23c15d4d-8268-4f0a-8554-6a6889e1a7d4",
+      "title": "查看 SSH 详细连接过程",
+      "command": "ssh -vvv <user>@<host>",
+      "trigger": "sshvvv",
+      "tags": [
+        "SSH"
+      ],
+      "description": "输出 SSH 握手、认证等详细调试信息。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017664,
+      "updatedAt": 1787411017664,
+      "legacySource": null
+    },
+    {
+      "id": "e2666e45-ff5b-4128-867f-87905eda8049",
+      "title": "删除 known_hosts 中的主机记录",
+      "command": "ssh-keygen -R <host>",
+      "trigger": "sshknownrm",
+      "tags": [
+        "SSH"
+      ],
+      "description": "删除指定主机的 known_hosts 记录，常用于主机密钥变更后。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017665,
+      "updatedAt": 1787411017665,
+      "legacySource": null
+    },
+    {
+      "id": "68ba2b43-651d-4766-bbd2-cf1521cf4687",
+      "title": "SSH 本地端口转发",
+      "command": "ssh -L <local_port>:<target_host>:<target_port> <user>@<ssh_host>",
+      "trigger": "sshl",
+      "tags": [
+        "SSH"
+      ],
+      "description": "通过 SSH 将本地端口转发到远端网络中的目标地址。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017666,
+      "updatedAt": 1787411017666,
+      "legacySource": null
+    },
+    {
+      "id": "72c525c6-17a7-4bca-a37f-aedf7b3e8ca4",
+      "title": "SSH 远程端口转发",
+      "command": "ssh -R <remote_port>:<target_host>:<target_port> <user>@<ssh_host>",
+      "trigger": "sshr",
+      "tags": [
+        "SSH"
+      ],
+      "description": "通过 SSH 将远程端口转发到本地或本地网络中的目标地址。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017667,
+      "updatedAt": 1787411017667,
+      "legacySource": null
+    },
+    {
+      "id": "7f077ac3-bcb9-4ffa-922c-24ce48b9add0",
+      "title": "SSH 动态 SOCKS 代理",
+      "command": "ssh -D <local_port> <user>@<ssh_host>",
+      "trigger": "sshd",
+      "tags": [
+        "SSH"
+      ],
+      "description": "创建基于 SSH 的本地 SOCKS 代理。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017668,
+      "updatedAt": 1787411017668,
+      "legacySource": null
+    },
+    {
+      "id": "715b611a-7098-4f69-88c6-d3a254b3c406",
+      "title": "保持 SSH 连接存活",
+      "command": "ssh -o ServerAliveInterval=30 <user>@<host>",
+      "trigger": "sshkeep",
+      "tags": [
+        "SSH"
+      ],
+      "description": "每 30 秒发送一次保活消息，降低空闲连接被中断的概率。",
+      "favorite": false,
+      "safetyLevel": "normal",
+      "executionPolicy": "insertOnly",
+      "usageCount": 0,
+      "lastUsedAt": null,
+      "createdAt": 1787411017669,
+      "updatedAt": 1787411017669,
+      "legacySource": null
+    }
+  ]
+}
