@@ -3,6 +3,7 @@ import { X } from '@lucide/vue';
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { computeSplitLayout } from '@/utils/splitTree';
 import { TooltipHint } from '@/components/ui/tooltip';
+import TunnelQuickActions from '@/components/tunnel/TunnelQuickActions.vue';
 import Terminal from './Terminal.vue';
 
 const props = defineProps({
@@ -23,6 +24,13 @@ const closeActivePanel = () => {
 
 const rootRef = ref(null);
 const hasPanels = computed(() => props.panels.length > 0);
+const activePanel = computed(() => props.panels.find((panel) => panel.id === props.activePanelId) || null);
+const activeSavedSessionId = computed(() => {
+  const config = activePanel.value?.config;
+  const protocol = String(config?.protocol || 'ssh').trim().toLowerCase();
+  if (protocol !== 'ssh') return '';
+  return String(config?.id || '').trim();
+});
 
 const scrollIndex = ref(0);
 const isTransitioning = ref(false);
@@ -162,6 +170,7 @@ const dividerStyle = (divider) => divider.direction === 'vertical'
 
 <template>
   <div ref="rootRef" class="terminal-panel-manager">
+    <TunnelQuickActions v-if="hasPanels && activeSavedSessionId" :session-id="activeSavedSessionId" />
     <TooltipHint v-if="hasPanels && activePanelId" text="关闭当前会话（Ctrl+Shift+W）" side="bottom">
       <button type="button" class="terminal-session-close" aria-label="关闭当前会话"
         @mousedown.stop @click.stop="closeActivePanel">

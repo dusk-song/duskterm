@@ -135,7 +135,7 @@ function selectSession(sessionId) {
     <PopoverTrigger as-child>
       <Button
         type="button"
-        size="sm"
+        size="default"
         variant="outline"
         class="w-full justify-between font-normal"
         :disabled="disabled"

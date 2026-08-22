@@ -7,7 +7,7 @@ import DialogFooter from '@/components/ui/dialog/DialogFooter.vue';
 import DialogHeader from '@/components/ui/dialog/DialogHeader.vue';
 import DialogTitle from '@/components/ui/dialog/DialogTitle.vue';
 import Input from '@/components/ui/input/Input.vue';
-import { Tooltip, TooltipContent, TooltipHint, TooltipTrigger } from '@/components/ui/tooltip';
+import { TooltipHint } from '@/components/ui/tooltip';
 import TunnelSessionTreeSelect from '@/components/tunnel/TunnelSessionTreeSelect.vue';
 import { confirm } from '@/composables/useConfirm';
 import { toast } from '@/composables/useToast';
@@ -22,6 +22,7 @@ import {
 } from 'reka-ui';
 import { useSshStore } from '@/stores/ssh';
 import { invokeCommand } from '@/utils/ipc';
+import { notifyTunnelsChanged } from '@/utils/tunnelEvents';
 
 const LOOPBACK_HOSTS = ['127.0.0.1', 'localhost', '::1'];
 const props = defineProps({
@@ -52,7 +53,6 @@ const selectedConfigId = ref('');
 
 const draft = reactive(createEmptyDraft());
 
-let refreshTimer = null;
 let modalLoadId = 0;
 let configsRequestId = 0;
 let tunnelsRequestId = 0;
@@ -141,20 +141,12 @@ function isConfigRunning(configId) {
   return runningConfigIds.value.has(configId);
 }
 
-function stopRefreshTimer() {
-  if (refreshTimer) {
-    clearInterval(refreshTimer);
-    refreshTimer = null;
-  }
-}
-
 function cancelModalWork() {
   modalLoadId += 1;
   configsRequestId += 1;
   tunnelsRequestId += 1;
   loadingConfigs.value = false;
   loadingTunnels.value = false;
-  stopRefreshTimer();
 }
 
 function closeModal() {
@@ -314,6 +306,7 @@ async function saveCurrentConfig({ silent = false } = {}) {
     const saved = await invokeCommand('save_tunnel_config', {
       config: normalizePayload(),
     });
+    notifyTunnelsChanged();
     await loadConfigs(saved.id);
     if (!silent) {
       toast.success('隧道配置已保存');
@@ -336,6 +329,7 @@ async function duplicateConfig(config = null) {
 
   try {
     const duplicated = await invokeCommand('duplicate_tunnel_config', { id: configId });
+    notifyTunnelsChanged();
     await loadConfigs(duplicated.id);
     toast.success('隧道配置已复制');
   } catch (error) {
@@ -376,6 +370,7 @@ async function deleteConfig(config = null) {
       await Promise.all(runningTunnels.map((item) => invokeCommand('stop_tunnel', { id: item.id })));
     }
     await invokeCommand('delete_tunnel_config', { id: configId });
+    notifyTunnelsChanged();
     if (selectedConfigId.value === configId) selectedConfigId.value = '';
     toast.success('隧道配置已删除');
     await Promise.all([fetchTunnels(), loadConfigs()]);
@@ -421,6 +416,7 @@ async function startCurrentTunnel() {
     if (!saved) return;
 
     await invokeCommand('start_tunnel_from_config', { configId: saved.id });
+    notifyTunnelsChanged();
     toast.success('隧道已启动');
     await Promise.all([fetchTunnels(), loadConfigs(saved.id)]);
   } catch (error) {
@@ -441,6 +437,7 @@ async function stopConfigTunnels(configId = selectedConfigId.value) {
   stopping.value = true;
   try {
     await Promise.all(configTunnels.map((item) => invokeCommand('stop_tunnel', { id: item.id })));
+    notifyTunnelsChanged();
     toast.success('当前配置关联的隧道已停止');
     await fetchTunnels();
   } catch (error) {
@@ -455,6 +452,7 @@ async function stopAllTunnels() {
   stopping.value = true;
   try {
     await invokeCommand('stop_all_tunnels');
+    notifyTunnelsChanged();
     toast.success('全部隧道已停止');
     await fetchTunnels();
   } catch (error) {
@@ -484,7 +482,6 @@ function copyCommandPreview(record) {
 }
 
 async function openModal() {
-  stopRefreshTimer();
   const loadId = ++modalLoadId;
 
   await sshStore.loadSavedSessions();
@@ -499,11 +496,6 @@ async function openModal() {
   }
   ensureSelectedSession();
   await Promise.all([loadConfigs(), fetchTunnels({ silent: true })]);
-  if (!props.visible || loadId !== modalLoadId) return;
-
-  refreshTimer = setInterval(() => {
-    fetchTunnels({ silent: true });
-  }, 3000);
 }
 
 watch(
@@ -632,24 +624,18 @@ onUnmounted(() => {
                 </button>
 
                 <DropdownMenuRoot>
-                  <Tooltip :delay-duration="200">
-                    <TooltipTrigger as-child>
-                      <DropdownMenuTrigger as-child>
-                        <Button
-                          size="icon-sm"
-                          variant="ghost"
-                          class="mr-1 text-foreground/70 hover:text-foreground"
-                          :disabled="operationPending"
-                          :aria-label="`${buildConfigLabel(config)}更多操作`"
-                        >
-                          <MoreHorizontal />
-                        </Button>
-                      </DropdownMenuTrigger>
-                    </TooltipTrigger>
-                    <TooltipContent side="top" :side-offset="8">
-                      {{ `${buildConfigLabel(config)}更多操作` }}
-                    </TooltipContent>
-                  </Tooltip>
+                  <DropdownMenuTrigger as-child>
+                    <Button
+                      size="icon-sm"
+                      variant="ghost"
+                      class="mr-1 text-foreground/70 hover:text-foreground"
+                      :disabled="operationPending"
+                      :aria-label="`${buildConfigLabel(config)}更多操作`"
+                      :title="`${buildConfigLabel(config)}更多操作`"
+                    >
+                      <MoreHorizontal />
+                    </Button>
+                  </DropdownMenuTrigger>
                   <DropdownMenuPortal>
                     <DropdownMenuContent
                       side="bottom"
@@ -696,9 +682,9 @@ onUnmounted(() => {
               </span>
             </div>
 
-            <div class="grid grid-cols-2 gap-3">
-              <label class="col-span-2 block">
-                <span class="mb-1.5 block text-xs text-muted-foreground">所属会话</span>
+            <div class="space-y-3">
+              <label class="grid grid-cols-[120px_minmax(0,1fr)] items-center gap-2">
+                <span class="text-xs text-muted-foreground">所属会话</span>
                 <TunnelSessionTreeSelect
                   v-model="selectedSessionId"
                   :sessions="savedSessions"
@@ -707,8 +693,8 @@ onUnmounted(() => {
                 />
               </label>
 
-              <label class="col-span-2 block">
-                <span class="mb-1.5 block text-xs text-muted-foreground">名称</span>
+              <label class="grid grid-cols-[120px_minmax(0,1fr)] items-center gap-2">
+                <span class="text-xs text-muted-foreground">名称</span>
                 <Input v-model="draft.name" size="sm" placeholder="如：postgres-dev" />
               </label>
             </div>
