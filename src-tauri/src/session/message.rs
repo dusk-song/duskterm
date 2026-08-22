@@ -75,6 +75,9 @@ pub enum SessionMessage {
     IsSftpConnected {
         respond_to: oneshot::Sender<Result<bool, String>>,
     },
+    GetSftpDefaultDirectory {
+        respond_to: oneshot::Sender<Result<String, String>>,
+    },
     ListSftpDir {
         path: String,
         respond_to: oneshot::Sender<Result<Vec<FileEntry>, String>>,

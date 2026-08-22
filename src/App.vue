@@ -46,6 +46,7 @@ import { createSessionBooleanState, resolveFocusedSessionId } from './utils/sftp
 import { useTransfersStore } from './stores/transfers';
 import { useSshStore } from './stores/ssh';
 import { invokeCommand, listenEvent } from './utils/ipc';
+import { normalizeMouseBindingEvent } from './utils/keybindings';
 import { loadMainUiSettings, normalizeMainUiSettings, saveMainUiSettings } from './utils/mainUi';
 import { getPreferenceDefaults, loadPreference } from './utils/preferences';
 
@@ -962,6 +963,11 @@ const keybindingActions = {
   sftpPanel: () => { toggleSftpPanel(); },
   commandKnowledge: () => { toggleCommandKnowledgePanel(); },
   transferList: () => { toggleTransferPanelVisibility(); },
+  sftpParentDirectory: () => {
+    if (!showActiveSftpPanel.value) return false;
+    window.dispatchEvent(new CustomEvent('app:sftp-go-up'));
+    return true;
+  },
   overview: () => { isOverviewVisible.value = !isOverviewVisible.value; },
   copySession: () => {
     const active = sshStore.getSession(activeKey.value);
@@ -1028,9 +1034,10 @@ const handleGlobalKeydown = (e) => {
   if (normalized) {
     const actionKey = comboActionMap.value.get(normalized);
     if (actionKey && keybindingActions[actionKey]) {
+      const handled = keybindingActions[actionKey]();
+      if (handled === false) return;
       e.preventDefault();
       e.stopPropagation();
-      keybindingActions[actionKey]();
       return;
     }
   }
@@ -1052,6 +1059,37 @@ const showHostkeyPrompt = (payload) => {
     confirmCommand: payload.confirmCommand || 'confirm_hostkey',
     sessionId: payload.sessionId,
   };
+};
+
+let handledMouseBindingButton = null;
+
+const mouseBindingAction = (event) => {
+  const normalized = normalizeMouseBindingEvent(event).toLowerCase();
+  if (!normalized) return '';
+  return comboActionMap.value.get(normalized) || '';
+};
+
+const handleGlobalMousedown = (event) => {
+  handledMouseBindingButton = null;
+  if (isSettingsVisible.value) return;
+  const actionKey = mouseBindingAction(event);
+  if (!actionKey || !keybindingActions[actionKey]) return;
+  if (actionKey === 'sftpParentDirectory' && !event.target?.closest?.('.file-manager')) return;
+
+  const handled = keybindingActions[actionKey]();
+  if (handled === false) return;
+  handledMouseBindingButton = event.button;
+  event.preventDefault();
+  event.stopPropagation();
+};
+
+const suppressHandledMouseBinding = (event) => {
+  if (handledMouseBindingButton !== event.button) return;
+  event.preventDefault();
+  event.stopPropagation();
+  setTimeout(() => {
+    if (handledMouseBindingButton === event.button) handledMouseBindingButton = null;
+  }, 0);
 };
 
 const onHostkeyAccept = async () => {
@@ -1103,6 +1141,9 @@ onMounted(async () => {
   window.addEventListener('keybindings-changed', loadKeybindings);
   window.addEventListener('main-ui-settings-changed', refreshMainUiSettings);
   window.addEventListener('keydown', handleGlobalKeydown, true);
+  window.addEventListener('mousedown', handleGlobalMousedown, true);
+  window.addEventListener('mouseup', suppressHandledMouseBinding, true);
+  window.addEventListener('auxclick', suppressHandledMouseBinding, true);
 
 });
 
@@ -1116,6 +1157,9 @@ onUnmounted(() => {
   window.removeEventListener('keybindings-changed', loadKeybindings);
   window.removeEventListener('main-ui-settings-changed', refreshMainUiSettings);
   window.removeEventListener('keydown', handleGlobalKeydown, true);
+  window.removeEventListener('mousedown', handleGlobalMousedown, true);
+  window.removeEventListener('mouseup', suppressHandledMouseBinding, true);
+  window.removeEventListener('auxclick', suppressHandledMouseBinding, true);
   if (mainUiSettingsPersistTimer) clearTimeout(mainUiSettingsPersistTimer);
   // Cleanup all app:* / gesture / storage event listeners
   for (const [event, handler] of _appEvts) {

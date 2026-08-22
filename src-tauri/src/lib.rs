@@ -159,6 +159,7 @@ pub fn run() {
             sftp::sftp_cancel_transfer,
             sftp::sftp_disconnect,
             sftp::sftp_is_connected,
+            sftp::sftp_default_directory,
             sftp::sftp_exists,
             sftp::sftp_mkdir,
             sftp::sftp_rename,

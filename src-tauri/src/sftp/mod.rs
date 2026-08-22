@@ -950,6 +950,15 @@ pub async fn sftp_ls_runtime(
     sftp_ls_legacy(state, &runtime.handle, session_id, path).await
 }
 
+pub async fn sftp_default_directory_runtime(
+    runtime: &crate::session::state::ManagedSftpRuntime,
+) -> Result<String, String> {
+    get_sftp_session(&runtime.handle)
+        .canonicalize(".")
+        .await
+        .map_err(|error| format!("Failed to resolve SFTP default directory: {}", error))
+}
+
 pub async fn sftp_ls_paged_runtime(
     state: &SftpAppState,
     runtime: &crate::session::state::ManagedSftpRuntime,
@@ -4335,6 +4344,15 @@ pub async fn sftp_is_connected(
     session_id: String,
 ) -> Result<bool, String> {
     supervisor.is_sftp_connected(session_id).await
+}
+
+#[tauri::command]
+pub async fn sftp_default_directory(
+    supervisor: tauri::State<'_, crate::session::supervisor::SessionSupervisor>,
+    _state: tauri::State<'_, SftpAppState>,
+    session_id: String,
+) -> Result<String, String> {
+    supervisor.sftp_default_directory(session_id).await
 }
 
 #[tauri::command]

@@ -306,6 +306,14 @@ pub fn spawn_session_actor(
                 SessionMessage::IsSftpConnected { respond_to } => {
                     let _ = respond_to.send(Ok(runtime_state.sftp.is_some()));
                 }
+                SessionMessage::GetSftpDefaultDirectory { respond_to } => {
+                    let result = if let Some(runtime) = runtime_state.sftp.as_ref() {
+                        sftp::sftp_default_directory_runtime(runtime).await
+                    } else {
+                        Err("SFTP Session not found".to_string())
+                    };
+                    let _ = respond_to.send(result);
+                }
                 SessionMessage::ListSftpDir { path, respond_to } => {
                     let result = if let Some(runtime) = runtime_state.sftp.as_ref() {
                         sftp::sftp_ls_runtime(&runtime.state, runtime, session_id.clone(), path)

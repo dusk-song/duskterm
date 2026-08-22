@@ -35,8 +35,18 @@ defineProps({
   onKeybindingInputKeydown: {
     type: Function,
     required: true
+  },
+  onKeybindingInputMousedown: {
+    type: Function,
+    required: true
   }
 });
+
+const stopSideMouseEvent = (event) => {
+  if (event.button !== 3 && event.button !== 4) return;
+  event.preventDefault();
+  event.stopPropagation();
+};
 </script>
 
 <template>
@@ -49,7 +59,7 @@ defineProps({
             <HelpCircle class="section-tip-icon" />
           </TooltipTrigger>
           <TooltipContent>
-            点击输入框后，直接按键即可绑定；按 Backspace/Delete 可清空，留空即禁用该功能。
+            点击输入框后，直接按键或鼠标侧键即可绑定；按 Backspace/Delete 可清空，留空即禁用该功能。
           </TooltipContent>
         </Tooltip>
       </div>
@@ -63,7 +73,9 @@ defineProps({
           <div class="kb-col-key">
             <Input :model-value="keybindings[item.key]" :placeholder="item.placeholder" readonly size="sm"
               class="cursor-pointer w-full" @focus="onKeybindingInputFocus(item.key)"
-              @blur="onKeybindingInputBlur(item.key)" @keydown="onKeybindingInputKeydown(item.key, $event)" />
+              @blur="onKeybindingInputBlur(item.key)" @keydown="onKeybindingInputKeydown(item.key, $event)"
+              @mousedown="onKeybindingInputMousedown(item.key, $event)" @mouseup="stopSideMouseEvent"
+              @auxclick="stopSideMouseEvent" />
             <span v-if="keybindingConflictMap[item.key]" class="kb-hint error">冲突</span>
             <span v-else-if="!keybindings[item.key]" class="kb-hint muted">未设置</span>
           </div>

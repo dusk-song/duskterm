@@ -26,6 +26,7 @@ import {
   resolveDesktopPetAssetUrl
 } from '@/utils/desktopPet';
 import { invokeCommand } from '@/utils/ipc';
+import { normalizeMouseBindingEvent } from '@/utils/keybindings';
 import { loadMainUiSettings, normalizeMainUiSettings, saveMainUiSettings } from '@/utils/mainUi';
 import { getPreferenceDefaults, loadPreference, savePreference } from '@/utils/preferences';
 import { loadTerminalThemeSettings, saveTerminalThemeSettings } from '@/utils/terminalTheme';
@@ -96,6 +97,7 @@ const keybindingItems = [
   { key: 'sftpPanel', label: '文件管理', placeholder: 'Alt+2' },
   { key: 'commandKnowledge', label: '命令知识库', placeholder: 'Ctrl+Alt+3' },
   { key: 'transferList', label: '传输列表', placeholder: 'Alt+4' },
+  { key: 'sftpParentDirectory', label: 'SFTP 返回上一级', placeholder: 'Mouse4' },
   { key: 'overview', label: '总览模式', placeholder: 'Ctrl+`' },
   { key: 'copySession', label: '复制当前会话', placeholder: 'Ctrl+P' },
   { key: 'toggleLineNumbers', label: '切换行号', placeholder: 'Ctrl+Alt+L' },
@@ -435,6 +437,15 @@ const onKeybindingInputKeydown = (actionKey, e) => {
   keybindings.value[actionKey] = combo;
 };
 
+const onKeybindingInputMousedown = (actionKey, e) => {
+  const combo = normalizeMouseBindingEvent(e);
+  if (!combo) return;
+  e.preventDefault();
+  e.stopPropagation();
+  bindingActionKey.value = actionKey;
+  keybindings.value[actionKey] = combo;
+};
+
 // --- Security Lock Logic ---
 async function setAppPassword() {
   if (lockPassword.value !== lockPasswordConfirm.value) {
@@ -515,7 +526,8 @@ async function verifyAndChange() {
             :keybindings="keybindings" :keybinding-conflict-map="keybindingConflictMap"
             :binding-action-key="bindingActionKey" :keybinding-conflict-entries="keybindingConflictEntries"
             :on-keybinding-input-focus="onKeybindingInputFocus" :on-keybinding-input-blur="onKeybindingInputBlur"
-            :on-keybinding-input-keydown="onKeybindingInputKeydown" />
+            :on-keybinding-input-keydown="onKeybindingInputKeydown"
+            :on-keybinding-input-mousedown="onKeybindingInputMousedown" />
         </div>
       </div>
 

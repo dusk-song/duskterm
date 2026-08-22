@@ -36,6 +36,7 @@ import { useSftpTransfersStore } from '@/stores/sftpTransfers';
 import { useSshStore } from '@/stores/ssh';
 import { formatLocalTime, formatPermissions, formatSize, joinRemotePath } from '@/types/sftp';
 import { invokeCommand } from '@/utils/ipc';
+import { normalizeAbsoluteSftpPath, resolveSftpPath } from '@/utils/sftpPath';
 import { classifyLocalUploadEntries, normalizeLocalUploadPaths } from '@/utils/sftpUpload';
 import {
   getNativeFileDragCapabilities,
@@ -303,6 +304,7 @@ function handleRowPointerDown(event, item) {
   onFilePointerDown(event, item);
 }
 const panelStateCache = new Map();
+const defaultDirectoryCache = new Map();
 let sessionSyncGeneration = 0;
 const initializingSessionIds = new Set();
 
@@ -653,6 +655,29 @@ async function restorePanelState() {
   syncListScrollTop(state.scrollTop || 0);
 }
 
+async function getSftpDefaultDirectory(sessionId = props.sessionId) {
+  if (!sessionId) return '/';
+  const cached = defaultDirectoryCache.get(sessionId);
+  if (cached) return cached;
+
+  let defaultDirectory = '/';
+  try {
+    const result = await invokeCommand('sftp_default_directory', { sessionId });
+    defaultDirectory = normalizeAbsoluteSftpPath(result);
+  } catch (error) {
+    console.warn('[SFTP] failed to resolve default directory, falling back to root:', error);
+  }
+  defaultDirectoryCache.set(sessionId, defaultDirectory);
+  return defaultDirectory;
+}
+
+async function loadInitialDirectory(sessionId, generation) {
+  const defaultDirectory = await getSftpDefaultDirectory(sessionId);
+  if (!isCurrentSessionSync(sessionId, generation)) return false;
+  currentPath.value = defaultDirectory;
+  return loadDirectory();
+}
+
 async function initSftp(forceReconnect = false, options = {}) {
   const sessionId = options.sessionId || props.sessionId;
   const generation = options.generation ?? sessionSyncGeneration;
@@ -675,7 +700,9 @@ async function initSftp(forceReconnect = false, options = {}) {
     if (!isCurrentSessionSync(sessionId, generation)) return;
     connected.value = true;
     await restorePanelState();
-    if (isCurrentSessionSync(sessionId, generation) && !panelStateCache.get(sessionId)) await loadDirectory();
+    if (isCurrentSessionSync(sessionId, generation) && !panelStateCache.get(sessionId)) {
+      await loadInitialDirectory(sessionId, generation);
+    }
     return;
   }
 
@@ -702,7 +729,9 @@ async function initSftp(forceReconnect = false, options = {}) {
     if (!isCurrentSessionSync(sessionId, generation)) return;
     connected.value = true;
     await restorePanelState();
-    if (isCurrentSessionSync(sessionId, generation) && !panelStateCache.get(sessionId)) await loadDirectory();
+    if (isCurrentSessionSync(sessionId, generation) && !panelStateCache.get(sessionId)) {
+      await loadInitialDirectory(sessionId, generation);
+    }
   } catch (err) {
     sshStore.markSftpDisconnected(sessionId);
     if (isCurrentSessionSync(sessionId, generation)) {
@@ -772,7 +801,7 @@ async function syncVisibleSessionState(options = {}) {
     await restorePanelState();
     if (!isCurrentSessionSync(sessionId, generation)) return;
     if (!panelStateCache.get(props.sessionId)) {
-      await loadDirectory();
+      await loadInitialDirectory(sessionId, generation);
     }
   }
 }
@@ -1007,22 +1036,36 @@ async function navigateTo(segment) {
 
 function normalizeTerminalCwd(cwd) {
   const normalized = String(cwd || '').trim();
-  return normalized.startsWith('/') ? normalized : '';
+  return normalized.startsWith('/') || normalized === '~' || normalized.startsWith('~/')
+    ? normalized
+    : '';
 }
 
 function normalizeSftpPath(path) {
-  const normalized = String(path || '').trim();
-  return normalized.startsWith('/') ? normalized : '/';
+  return normalizeAbsoluteSftpPath(path);
+}
+
+async function resolveTerminalCwd(cwd, sessionId = props.sessionId) {
+  const normalized = normalizeTerminalCwd(cwd);
+  if (!normalized || normalized.startsWith('/')) return normalized;
+  const defaultDirectory = await getSftpDefaultDirectory(sessionId);
+  return resolveSftpPath(normalized, defaultDirectory);
 }
 
 async function followCurrentTerminalPath({ notifyIfMissing = false } = {}) {
-  const cwd = normalizeTerminalCwd(followedTerminalSession.value?.cwd);
-  if (!cwd) {
+  const observedCwd = normalizeTerminalCwd(followedTerminalSession.value?.cwd);
+  if (!observedCwd) {
     if (notifyIfMissing) toast.info('暂未获取到终端当前路径，收到路径后将自动跟随');
     return;
   }
 
-  lastObservedTerminalCwd.value = cwd;
+  const cwd = await resolveTerminalCwd(observedCwd);
+  if (!cwd) {
+    if (notifyIfMissing) toast.info('无法解析终端当前路径');
+    return;
+  }
+
+  lastObservedTerminalCwd.value = observedCwd;
   if (cwd === currentPath.value || navigatingDir.value) return;
 
   const previousPath = currentPath.value;
@@ -1066,6 +1109,16 @@ async function manualRefresh() {
   if (!backendConnected || !sshStore.isSftpConnected(props.sessionId) || !connected.value) {
     await initSftp(true);
     if (!connected.value) return;
+  }
+
+  const enteredPath = String(currentPath.value || '').trim();
+  if (enteredPath === '~' || enteredPath.startsWith('~/')) {
+    const resolvedPath = await resolveTerminalCwd(enteredPath);
+    if (!resolvedPath) {
+      toast.error(`无法解析远端路径：${enteredPath}`);
+      return;
+    }
+    currentPath.value = resolvedPath;
   }
 
   await loadDirectory();
@@ -1613,6 +1666,7 @@ function runContextAction(action, record) {
 
 async function disconnectSftpSession(sessionId) {
   if (!sessionId) return;
+  defaultDirectoryCache.delete(sessionId);
   try {
     await invokeCommand('sftp_disconnect', { sessionId });
   } catch {
@@ -1706,6 +1760,7 @@ let resizeFrame = null;
 let scheduleResizeHandler = null;
 let activeSftpRefreshHandler = null;
 let sftpLayoutRefreshHandler = null;
+let sftpGoUpHandler = null;
 let bodyResizeObserver = null;
 onMounted(() => {
   getNativeFileDragCapabilities()
@@ -1736,9 +1791,11 @@ onMounted(() => {
   sftpLayoutRefreshHandler = () => nextTick(() => {
     resizeHandler?.();
   });
+  sftpGoUpHandler = () => goUp();
   window.addEventListener('resize', scheduleResizeHandler);
   window.addEventListener('app:sftp-refresh-active', activeSftpRefreshHandler);
   window.addEventListener('app:sftp-layout-refresh', sftpLayoutRefreshHandler);
+  window.addEventListener('app:sftp-go-up', sftpGoUpHandler);
   window.addEventListener('keydown', onEditorKeydown);
 
   // Track container width for auto-fit column widths
@@ -1775,6 +1832,10 @@ onUnmounted(() => {
   if (sftpLayoutRefreshHandler) {
     window.removeEventListener('app:sftp-layout-refresh', sftpLayoutRefreshHandler);
     sftpLayoutRefreshHandler = null;
+  }
+  if (sftpGoUpHandler) {
+    window.removeEventListener('app:sftp-go-up', sftpGoUpHandler);
+    sftpGoUpHandler = null;
   }
   window.removeEventListener('keydown', onEditorKeydown);
   if (columnLayoutFrame) {

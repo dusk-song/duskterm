@@ -609,6 +609,20 @@ impl SessionSupervisor {
             .map_err(|_| "Session actor dropped SFTP status response".to_string())?
     }
 
+    pub async fn sftp_default_directory(&self, session_id: String) -> Result<String, String> {
+        let actor = self.get_or_spawn_actor(&session_id);
+        let (respond_to, rx) = oneshot::channel();
+        actor
+            .sender
+            .send(SessionMessage::GetSftpDefaultDirectory { respond_to })
+            .map_err(|_| {
+                "Failed to send SFTP default directory request to session actor".to_string()
+            })?;
+
+        rx.await
+            .map_err(|_| "Session actor dropped SFTP default directory response".to_string())?
+    }
+
     pub async fn list_sftp_dir(
         &self,
         session_id: String,
