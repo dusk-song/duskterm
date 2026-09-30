@@ -33,7 +33,8 @@ const PREFERENCE_DEFINITIONS = {
     storageKey: 'terminal-theme-v1',
     defaults: {
       theme: 'duskWarm',
-      showLineNumbers: false
+      showLineNumbers: false,
+      rightClickBehavior: 'smart-copy'
     }
   },
   commandHistory: {

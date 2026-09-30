@@ -6,6 +6,10 @@ import {
 } from './preferences';
 
 const TERMINAL_THEME_KEY = getPreferenceStorageKey('terminalTheme');
+const TERMINAL_RIGHT_CLICK_BEHAVIORS = {
+  SMART_COPY: 'smart-copy',
+  CONTEXT_MENU: 'context-menu'
+};
 
 const terminalThemes = {
   duskWarm: {
@@ -104,18 +108,26 @@ function resolveTerminalThemeKey(themeKey) {
   return Object.keys(terminalThemes).find((key) => key.toLowerCase() === lower) || fallback;
 }
 
+function resolveTerminalRightClickBehavior(behavior) {
+  return behavior === TERMINAL_RIGHT_CLICK_BEHAVIORS.CONTEXT_MENU
+    ? TERMINAL_RIGHT_CLICK_BEHAVIORS.CONTEXT_MENU
+    : TERMINAL_RIGHT_CLICK_BEHAVIORS.SMART_COPY;
+}
+
 function loadTerminalThemeSettings() {
   const settings = loadPreference('terminalTheme');
   return {
     ...settings,
-    theme: resolveTerminalThemeKey(settings.theme)
+    theme: resolveTerminalThemeKey(settings.theme),
+    rightClickBehavior: resolveTerminalRightClickBehavior(settings.rightClickBehavior)
   };
 }
 
 function saveTerminalThemeSettings(settings) {
   return savePreference('terminalTheme', {
     ...settings,
-    theme: resolveTerminalThemeKey(settings?.theme)
+    theme: resolveTerminalThemeKey(settings?.theme),
+    rightClickBehavior: resolveTerminalRightClickBehavior(settings?.rightClickBehavior)
   });
 }
 
@@ -152,10 +164,12 @@ function getTerminalThemeOptions() {
 
 export {
   TERMINAL_THEME_KEY,
+  TERMINAL_RIGHT_CLICK_BEHAVIORS,
   terminalThemes,
   defaultTerminalThemeSettings,
   loadTerminalThemeSettings,
   saveTerminalThemeSettings,
   getTerminalTheme,
-  getTerminalThemeOptions
+  getTerminalThemeOptions,
+  resolveTerminalRightClickBehavior
 };

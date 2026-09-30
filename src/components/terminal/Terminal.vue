@@ -1448,9 +1448,8 @@ function handleZoomReset() {
   term.options.fontSize = 14;
   doFit({ force: true });
 }
-async function handleCopy() {
-  if (!term) return;
-  const selection = term.getSelection();
+async function copyTerminalText(text) {
+  const selection = String(text || '');
   if (selection) {
     try {
       await navigator.clipboard.writeText(selection);
@@ -1463,17 +1462,52 @@ async function handleCopy() {
       textarea.style.opacity = '0';
       textarea.style.pointerEvents = 'none';
       document.body.appendChild(textarea);
-      textarea.select();
-      document.execCommand('copy');
-      document.body.removeChild(textarea);
-      toast.success('已复制');
+      try {
+        textarea.select();
+        if (!document.execCommand('copy')) {
+          toast.error('复制失败');
+          return false;
+        }
+        toast.success('已复制');
+      } catch {
+        toast.error('复制失败');
+        return false;
+      } finally {
+        textarea.remove();
+      }
     }
+    return true;
   }
+  return false;
 }
+
+async function handleCopy() {
+  if (!term) return;
+  await copyTerminalText(term.getSelection());
+}
+
+function handleTerminalContextMenu(event) {
+  if (terminalThemeSettings.value.rightClickBehavior !== 'smart-copy') return;
+  const selection = term?.getSelection?.() || '';
+  if (!selection) return;
+
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  void handleCopyAndSafeInsert(selection);
+}
+
 async function handlePaste() {
   if (!term) return;
   const text = await navigator.clipboard.readText();
   term.paste(text);
+}
+
+async function handleCopyAndSafeInsert(selection) {
+  const targetTerm = term;
+  if (!targetTerm || !(await copyTerminalText(selection)) || term !== targetTerm) return;
+
+  // Do not forward Enter or any terminal control sequence from a right-click insert.
+  targetTerm.paste(String(selection).replace(/[\u0000-\u001F\u007F-\u009F\u2028\u2029]/g, ' '));
 }
 function handleSelectAll() {
   term?.selectAll();
@@ -3586,7 +3620,8 @@ onUnmounted(() => {
       </div>
       <ContextMenu @update:open="(v) => contextMenuOpen = v">
         <ContextMenuTrigger class="terminal-container-wrap">
-          <div ref="terminalContainer" class="terminal-container" @mousedown="focusTerminalSurface"></div>
+          <div ref="terminalContainer" class="terminal-container" @mousedown="focusTerminalSurface"
+            @contextmenu.capture="handleTerminalContextMenu"></div>
         </ContextMenuTrigger>
         <ContextMenuContent>
           <ContextMenuItem @select="handleMenuSelect('copy')">复制</ContextMenuItem>

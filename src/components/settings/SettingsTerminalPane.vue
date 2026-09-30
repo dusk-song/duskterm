@@ -46,6 +46,11 @@ const updateTerminalTheme = (theme) => {
   props.terminalThemeSettings.theme = theme;
   emit('preview-change', { ...props.terminalThemeSettings });
 };
+
+const updateRightClickBehavior = (behavior) => {
+  props.terminalThemeSettings.rightClickBehavior = behavior;
+  emit('preview-change', { ...props.terminalThemeSettings });
+};
 </script>
 
 <template>
@@ -73,6 +78,24 @@ const updateTerminalTheme = (theme) => {
       <div class="setting-row">
         <span class="setting-label">行号显示</span>
         <Switch v-model="terminalThemeSettings.showLineNumbers" />
+      </div>
+    </div>
+    <div class="settings-section idea-panel">
+      <div class="settings-section-title-wrap">
+        <div class="settings-section-title">交互</div>
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">右键操作</span>
+        <Select :model-value="terminalThemeSettings.rightClickBehavior"
+          @update:model-value="updateRightClickBehavior">
+          <SelectTrigger size="sm" class="terminal-theme-select" aria-label="终端右键行为">
+            <SelectValue placeholder="选择右键行为" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="smart-copy">智能复制粘贴</SelectItem>
+            <SelectItem value="context-menu">始终显示菜单</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
     </div>
     <div class="settings-section idea-panel">
