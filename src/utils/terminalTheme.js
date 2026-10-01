@@ -4,6 +4,10 @@ import {
   loadPreference,
   savePreference
 } from './preferences';
+import {
+  resolveTerminalSessionPresentation,
+  TERMINAL_SESSION_PRESENTATIONS
+} from './terminalPresentation';
 
 const TERMINAL_THEME_KEY = getPreferenceStorageKey('terminalTheme');
 const TERMINAL_RIGHT_CLICK_BEHAVIORS = {
@@ -119,7 +123,8 @@ function loadTerminalThemeSettings() {
   return {
     ...settings,
     theme: resolveTerminalThemeKey(settings.theme),
-    rightClickBehavior: resolveTerminalRightClickBehavior(settings.rightClickBehavior)
+    rightClickBehavior: resolveTerminalRightClickBehavior(settings.rightClickBehavior),
+    sessionPresentation: resolveTerminalSessionPresentation(settings.sessionPresentation)
   };
 }
 
@@ -127,7 +132,8 @@ function saveTerminalThemeSettings(settings) {
   return savePreference('terminalTheme', {
     ...settings,
     theme: resolveTerminalThemeKey(settings?.theme),
-    rightClickBehavior: resolveTerminalRightClickBehavior(settings?.rightClickBehavior)
+    rightClickBehavior: resolveTerminalRightClickBehavior(settings?.rightClickBehavior),
+    sessionPresentation: resolveTerminalSessionPresentation(settings?.sessionPresentation)
   });
 }
 
@@ -165,11 +171,13 @@ function getTerminalThemeOptions() {
 export {
   TERMINAL_THEME_KEY,
   TERMINAL_RIGHT_CLICK_BEHAVIORS,
+  TERMINAL_SESSION_PRESENTATIONS,
   terminalThemes,
   defaultTerminalThemeSettings,
   loadTerminalThemeSettings,
   saveTerminalThemeSettings,
   getTerminalTheme,
   getTerminalThemeOptions,
-  resolveTerminalRightClickBehavior
+  resolveTerminalRightClickBehavior,
+  resolveTerminalSessionPresentation
 };

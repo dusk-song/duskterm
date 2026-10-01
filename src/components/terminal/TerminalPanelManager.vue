@@ -1,10 +1,16 @@
 <script setup>
 import { X } from '@lucide/vue';
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { computeSplitLayout } from '@/utils/splitTree';
 import { TooltipHint } from '@/components/ui/tooltip';
+import {
+  loadTerminalThemeSettings,
+  resolveTerminalSessionPresentation,
+  TERMINAL_SESSION_PRESENTATIONS
+} from '@/utils/terminalTheme';
 import TunnelQuickActions from '@/components/tunnel/TunnelQuickActions.vue';
 import Terminal from './Terminal.vue';
+import TerminalTabBar from './TerminalTabBar.vue';
 
 const props = defineProps({
   panels: { type: Array, required: true },
@@ -16,7 +22,7 @@ const props = defineProps({
   onSetFocused: { type: Function, required: true }
 });
 
-const emit = defineEmits(['activate', 'close-panel']);
+const emit = defineEmits(['activate', 'close-panel', 'duplicate-panel', 'reconnect-panel']);
 
 const closeActivePanel = () => {
   if (props.activePanelId) emit('close-panel', props.activePanelId);
@@ -25,6 +31,10 @@ const closeActivePanel = () => {
 const rootRef = ref(null);
 const hasPanels = computed(() => props.panels.length > 0);
 const activePanel = computed(() => props.panels.find((panel) => panel.id === props.activePanelId) || null);
+const terminalSettings = ref(loadTerminalThemeSettings());
+const isClassicTabs = computed(
+  () => terminalSettings.value.sessionPresentation === TERMINAL_SESSION_PRESENTATIONS.CLASSIC_TABS
+);
 const activeSavedSessionId = computed(() => {
   const config = activePanel.value?.config;
   const protocol = String(config?.protocol || 'ssh').trim().toLowerCase();
@@ -35,15 +45,24 @@ const activeSavedSessionId = computed(() => {
 const scrollIndex = ref(0);
 const isTransitioning = ref(false);
 
+const focusPanelTerminal = (panelId) => {
+  if (!panelId) return;
+  nextTick(() => {
+    requestAnimationFrame(() => {
+      if (props.activePanelId !== panelId) return;
+      const sessionId = props.focusedLeaf?.[panelId] || panelId;
+      window.dispatchEvent(new CustomEvent('terminal:focus', { detail: { sessionId } }));
+    });
+  });
+};
+
 const syncIndexFromActive = () => {
   const idx = props.panels.findIndex((panel) => panel.id === props.activePanelId);
   if (idx >= 0 && idx !== scrollIndex.value) {
     isTransitioning.value = true;
     scrollIndex.value = idx;
   }
-  if (props.activePanelId) {
-    window.dispatchEvent(new CustomEvent('terminal:focus', { detail: { sessionId: props.activePanelId } }));
-  }
+  focusPanelTerminal(props.activePanelId);
 };
 
 const scrollTo = (index) => {
@@ -56,7 +75,6 @@ const scrollTo = (index) => {
   const target = props.panels[index];
   if (target && target.id !== props.activePanelId) {
     emit('activate', target.id);
-    window.dispatchEvent(new CustomEvent('terminal:focus', { detail: { sessionId: target.id } }));
   }
 };
 
@@ -119,8 +137,23 @@ const onTransitionEnd = (event) => {
   isTransitioning.value = false;
 };
 
+const handleTerminalSettingsChanged = (event) => {
+  const settings = event?.detail?.settings || loadTerminalThemeSettings();
+  terminalSettings.value = {
+    ...settings,
+    sessionPresentation: resolveTerminalSessionPresentation(settings.sessionPresentation)
+  };
+};
+
 watch(() => props.activePanelId, () => {
   syncIndexFromActive();
+});
+
+watch(isClassicTabs, () => {
+  isTransitioning.value = false;
+  nextTick(() => {
+    window.dispatchEvent(new CustomEvent('terminal-layout-resize'));
+  });
 });
 
 onMounted(() => {
@@ -128,12 +161,14 @@ onMounted(() => {
   window.addEventListener('terminal-scroll-to', handleScrollTo);
   window.addEventListener('keydown', handleKeyDown);
   window.addEventListener('wheel', handleWheel, { passive: false });
+  window.addEventListener('terminal-theme-changed', handleTerminalSettingsChanged);
 });
 
 onUnmounted(() => {
   window.removeEventListener('terminal-scroll-to', handleScrollTo);
   window.removeEventListener('keydown', handleKeyDown);
   window.removeEventListener('wheel', handleWheel);
+  window.removeEventListener('terminal-theme-changed', handleTerminalSettingsChanged);
 });
 
 const panelLayouts = computed(() => props.panels.map((panel) => {
@@ -166,21 +201,31 @@ const leafStyle = (leaf) => {
 const dividerStyle = (divider) => divider.direction === 'vertical'
   ? { left: `${divider.x}%`, top: `${divider.y}%`, height: `${divider.height}%` }
   : { left: `${divider.x}%`, top: `${divider.y}%`, width: `${divider.width}%` };
+const panelStripStyle = computed(() => isClassicTabs.value
+  ? undefined
+  : { transform: `translateX(-${scrollIndex.value * 100}%)` });
 </script>
 
 <template>
-  <div ref="rootRef" class="terminal-panel-manager">
-    <TunnelQuickActions v-if="hasPanels && activeSavedSessionId" :session-id="activeSavedSessionId" />
-    <TooltipHint v-if="hasPanels && activePanelId" text="关闭当前会话（Ctrl+Shift+W）" side="bottom">
+  <div ref="rootRef" class="terminal-panel-manager" :class="{ 'is-classic-tabs': isClassicTabs }">
+    <TerminalTabBar v-if="hasPanels && isClassicTabs" :panels="panels" :active-panel-id="activePanelId"
+      @activate="emit('activate', $event)" @close="emit('close-panel', $event)"
+      @duplicate="emit('duplicate-panel', $event)" @reconnect="emit('reconnect-panel', $event)" />
+    <TunnelQuickActions v-if="hasPanels && activeSavedSessionId && !isClassicTabs"
+      :session-id="activeSavedSessionId" />
+    <TooltipHint v-if="hasPanels && activePanelId && !isClassicTabs" text="关闭当前会话（Ctrl+Shift+W）" side="bottom">
       <button type="button" class="terminal-session-close" aria-label="关闭当前会话"
         @mousedown.stop @click.stop="closeActivePanel">
         <X :size="15" stroke-width="1.9" />
       </button>
     </TooltipHint>
     <div v-if="hasPanels" class="panel-scroll-track">
-      <div class="panel-scroll-strip" :style="{ transform: `translateX(-${scrollIndex * 100}%)` }"
-        :class="{ transitioning: isTransitioning }" @transitionend="onTransitionEnd">
-        <div v-for="entry in panelLayouts" :key="entry.panel.id" class="scroll-pane">
+      <TunnelQuickActions v-if="isClassicTabs && activeSavedSessionId" :session-id="activeSavedSessionId" />
+      <div class="panel-scroll-strip" :style="panelStripStyle"
+        :class="{ transitioning: isTransitioning && !isClassicTabs, 'is-stacked': isClassicTabs }"
+        @transitionend="onTransitionEnd">
+        <div v-for="entry in panelLayouts" :key="entry.panel.id" class="scroll-pane"
+          :class="{ 'is-active': entry.panel.id === activePanelId }">
           <div v-for="leaf in entry.leaves" :key="leaf.sessionId" class="split-leaf"
             :class="{ 'split-focused': entry.leaves.length > 1 && focusedLeaf[entry.panel.id] === leaf.sessionId }"
             :style="leafStyle(leaf)"
@@ -259,6 +304,26 @@ const dividerStyle = (divider) => divider.direction === 'vertical'
   transition: transform 150ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
+.panel-scroll-strip.is-stacked {
+  position: relative;
+  display: block;
+  width: 100%;
+  will-change: auto;
+  transform: none;
+}
+
+.panel-scroll-strip.is-stacked .scroll-pane {
+  position: absolute;
+  inset: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+
+.panel-scroll-strip.is-stacked .scroll-pane.is-active {
+  visibility: visible;
+  pointer-events: auto;
+}
+
 .scroll-pane {
   flex: 0 0 100%;
   min-width: 0;
@@ -316,6 +381,11 @@ const dividerStyle = (divider) => divider.direction === 'vertical'
     var(--app-bg-dialog) 82%,
     var(--app-text) 18%
   );
+}
+
+.terminal-panel-manager.is-classic-tabs .panel-scroll-track :deep(.tunnel-quick-actions) {
+  top: 8px;
+  right: 22px;
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -708,6 +708,13 @@ if (typeof requestIdleCallback === 'function') {
 }
 
 const { activeKey, visibleSessions, setActivePanel } = useTerminalPanels(sshStore);
+const duplicateSessionPanel = (panelId = activeKey.value) => {
+  const session = sshStore.getSession(panelId);
+  if (session?.config) void sshStore.connectLogicWithMeta(session.config);
+};
+const reconnectSessionPanel = (panelId = activeKey.value) => {
+  if (panelId) void sshStore.reconnectSession(panelId);
+};
 const recentSessionSettings = computed(() => mainUiSettings.value.recentSessions);
 const recentSessions = computed(() => {
   if (!recentSessionSettings.value.enabled) return [];
@@ -967,10 +974,7 @@ const keybindingActions = {
     return true;
   },
   overview: () => { isOverviewVisible.value = !isOverviewVisible.value; },
-  copySession: () => {
-    const active = sshStore.getSession(activeKey.value);
-    if (active?.config) sshStore.connectLogicWithMeta(active.config);
-  },
+  copySession: () => duplicateSessionPanel(),
   toggleLineNumbers: () => {
     window.dispatchEvent(new CustomEvent('terminal:toggle-line-numbers'));
   },
@@ -1265,7 +1269,8 @@ useWindowInteraction({ onResize: measureWorkspace });
             <TerminalPanelManager v-else :panels="visibleSessions" :active-panel-id="activeKey"
               :split-trees="splitTrees" :focused-leaf="focusedLeaf" :resolve-tree="ensureTree"
               :on-split-drag="startSplitDrag" :on-set-focused="setFocused" @activate="setActivePanel"
-              @close-panel="removePanelRoot" />
+              @close-panel="removePanelRoot" @duplicate-panel="duplicateSessionPanel"
+              @reconnect-panel="reconnectSessionPanel" />
 
             <DesktopPet :settings="desktopPetSettings" :suspend="isAnyModalOpen || hasWorkspaceRightPanel"
               @settings-change="handleDesktopPetSettingsChange" />

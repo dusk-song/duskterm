@@ -34,7 +34,8 @@ const PREFERENCE_DEFINITIONS = {
     defaults: {
       theme: 'duskWarm',
       showLineNumbers: false,
-      rightClickBehavior: 'smart-copy'
+      rightClickBehavior: 'smart-copy',
+      sessionPresentation: 'current'
     }
   },
   commandHistory: {

@@ -51,6 +51,11 @@ const updateRightClickBehavior = (behavior) => {
   props.terminalThemeSettings.rightClickBehavior = behavior;
   emit('preview-change', { ...props.terminalThemeSettings });
 };
+
+const updateSessionPresentation = (presentation) => {
+  props.terminalThemeSettings.sessionPresentation = presentation;
+  emit('preview-change', { ...props.terminalThemeSettings });
+};
 </script>
 
 <template>
@@ -78,6 +83,19 @@ const updateRightClickBehavior = (behavior) => {
       <div class="setting-row">
         <span class="setting-label">行号显示</span>
         <Switch v-model="terminalThemeSettings.showLineNumbers" />
+      </div>
+      <div class="setting-row">
+        <span class="setting-label">会话切换</span>
+        <Select :model-value="terminalThemeSettings.sessionPresentation"
+          @update:model-value="updateSessionPresentation">
+          <SelectTrigger size="sm" class="terminal-theme-select" aria-label="会话切换样式">
+            <SelectValue placeholder="选择会话切换样式" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="current">滑动切换（默认）</SelectItem>
+            <SelectItem value="classic-tabs">标签页切换</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
     </div>
     <div class="settings-section idea-panel">
