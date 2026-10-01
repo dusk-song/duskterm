@@ -5,25 +5,6 @@
   "description": "A cross-platform terminal tool for SSH, Telnet & Serial, built with Tauri 2 and Vue 3.",
   "author": "xiaosong",
   "license": "MIT",
-  "pnpm": {
-    "supportedArchitectures": {
-      "os": [
-        "win32"
-      ],
-      "cpu": [
-        "x64"
-      ]
-    },
-    "overrides": {
-      "@vue/shared": "3.5.38",
-      "@vue/compiler-sfc": "3.5.38",
-      "@vue/compiler-dom": "3.5.38",
-      "@vue/compiler-core": "3.5.38",
-      "@vue/runtime-dom": "3.5.38",
-      "@vue/runtime-core": "3.5.38",
-      "@vue/reactivity": "3.5.38"
-    }
-  },
   "repository": {
     "type": "git",
     "url": "https://github.com/dusk-song/duskterm.git"

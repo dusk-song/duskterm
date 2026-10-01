@@ -1,0 +1,18 @@
+allowBuilds:
+  esbuild: true
+  vue-demi: true
+
+supportedArchitectures:
+  os:
+    - win32
+  cpu:
+    - x64
+
+overrides:
+  '@vue/shared': 3.5.38
+  '@vue/compiler-sfc': 3.5.38
+  '@vue/compiler-dom': 3.5.38
+  '@vue/compiler-core': 3.5.38
+  '@vue/runtime-dom': 3.5.38
+  '@vue/runtime-core': 3.5.38
+  '@vue/reactivity': 3.5.38
