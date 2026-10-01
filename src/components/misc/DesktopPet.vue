@@ -1,5 +1,5 @@
 ﻿<script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import {
   defaultDesktopPetAssetSrc,
   normalizeDesktopPetSettings,
@@ -42,6 +42,8 @@ const SNAP_RIGHT = 12;
 const SNAP_THRESHOLD = 22;
 let nextNodeTimer = 0;
 let dragState = null;
+let dragFrame = 0;
+let pendingDragPosition = null;
 const lastHostW = ref(window.innerWidth);
 const lastHostH = ref(window.innerHeight);
 
@@ -237,11 +239,34 @@ function stopDragging() {
   if (!dragState) return;
   window.removeEventListener('mousemove', handleDragMove);
   window.removeEventListener('mouseup', handleDragEnd);
-  dragState = null;
-  if (isDragging.value) {
-    isDragging.value = false;
-    emitPositionSettings();
+  if (dragFrame) {
+    cancelAnimationFrame(dragFrame);
+    dragFrame = 0;
   }
+  const finalPosition = pendingDragPosition;
+  dragState = null;
+  pendingDragPosition = null;
+  if (isDragging.value) {
+    if (finalPosition) {
+      petFracTop.value = finalPosition.top / Math.max(1, lastHostH.value);
+      petFracRight.value = finalPosition.right / Math.max(1, lastHostW.value);
+    }
+    emitPositionSettings();
+    nextTick(() => {
+      petHostRef.value?.style.removeProperty('transform');
+      isDragging.value = false;
+    });
+  } else {
+    petHostRef.value?.style.removeProperty('transform');
+  }
+}
+
+function applyDragTransform() {
+  dragFrame = 0;
+  if (!dragState || !pendingDragPosition || !petHostRef.value) return;
+  const translateX = dragState.startRightPx - pendingDragPosition.right;
+  const translateY = pendingDragPosition.top - dragState.startTopPx;
+  petHostRef.value.style.transform = `translate3d(${translateX}px, ${translateY}px, 0)`;
 }
 
 function handleDragMove(event) {
@@ -254,10 +279,11 @@ function handleDragMove(event) {
       dragState.startRightPx - deltaX
     )
   );
-  petFracTop.value = nextPosition.top / Math.max(1, lastHostH.value);
-  petFracRight.value = nextPosition.right / Math.max(1, lastHostW.value);
-  probeEdge.value = resolveProbeEdge({ top: petTopPx.value, right: petRightPx.value });
+  pendingDragPosition = nextPosition;
+  const nextProbeEdge = resolveProbeEdge(nextPosition);
+  if (nextProbeEdge !== probeEdge.value) probeEdge.value = nextProbeEdge;
   isDragging.value = true;
+  if (!dragFrame) dragFrame = requestAnimationFrame(applyDragTransform);
 }
 
 function handleDragEnd() {
@@ -272,6 +298,10 @@ function handleDragStart(event) {
     startClientY: event.clientY,
     startTopPx: petTopPx.value,
     startRightPx: petRightPx.value
+  };
+  pendingDragPosition = {
+    top: dragState.startTopPx,
+    right: dragState.startRightPx
   };
   isDragging.value = false;
   window.addEventListener('mousemove', handleDragMove);
@@ -314,12 +344,14 @@ onBeforeUnmount(() => {
   stopDragging();
   window.removeEventListener('resize', handleWindowResize);
   if (resizeHandle) cancelAnimationFrame(resizeHandle);
+  if (dragFrame) cancelAnimationFrame(dragFrame);
 });
 
 </script>
 
 <template>
-  <div ref="petHostRef" v-if="displayNode" class="desktop-pet-layer" :style="petLayerStyle">
+  <div ref="petHostRef" v-if="displayNode" class="desktop-pet-layer" :class="{ 'is-dragging': isDragging }"
+    :style="petLayerStyle">
     <div class="desktop-pet-stage" :style="petStageStyle">
       <TooltipHint :text="dragHintVisible ? dragButtonTitle : ''">
         <div class="desktop-pet-shell" :style="petShellStyle">
@@ -342,8 +374,11 @@ onBeforeUnmount(() => {
 .desktop-pet-layer {
   position: fixed;
   z-index: 24;
-  will-change: top, right, opacity;
   pointer-events: none;
+}
+
+.desktop-pet-layer.is-dragging {
+  will-change: transform;
 }
 
 .desktop-pet-stage {
@@ -360,8 +395,23 @@ onBeforeUnmount(() => {
   min-height: 156px;
 }
 
+.desktop-pet-shell::before {
+  content: '';
+  position: absolute;
+  z-index: 0;
+  right: 18px;
+  bottom: 10px;
+  width: 82px;
+  height: 16px;
+  border-radius: 50%;
+  box-shadow: 0 8px 16px 5px rgba(0, 0, 0, 0.14);
+  pointer-events: none;
+}
+
 .desktop-pet-drag-surface {
   display: inline-flex;
+  position: relative;
+  z-index: 1;
   align-items: flex-start;
   justify-content: flex-end;
   padding: 0;
@@ -376,12 +426,13 @@ onBeforeUnmount(() => {
 }
 
 .desktop-pet-image {
+  position: relative;
+  z-index: 1;
   width: 132px;
   height: 132px;
   object-fit: contain;
   user-select: none;
   pointer-events: none;
-  filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.16));
 }
 
 /* crossfade transition for pet image swap */

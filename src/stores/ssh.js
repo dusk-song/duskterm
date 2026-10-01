@@ -208,22 +208,39 @@ export const useSshStore = defineStore('ssh', () => {
 
   // --- Storage Actions ---
 
-  async function loadSavedSessions() {
-    try {
-      const data = await invokeCommand('load_sessions');
-      savedSessions.value = data;
-      syncGroupOrder();
-      syncGroupPrefs();
-    } catch (e) {
-      console.error('Failed to load sessions:', e);
-      toast.error('加载会话列表失败');
+  let savedSessionsLoaded = false;
+  let savedSessionsLoadPromise = null;
+
+  function loadSavedSessions({ ifNeeded = false, force = false } = {}) {
+    if (ifNeeded && savedSessionsLoaded) return Promise.resolve();
+    if (savedSessionsLoadPromise) {
+      return force
+        ? savedSessionsLoadPromise.then(() => loadSavedSessions({ force: true }))
+        : savedSessionsLoadPromise;
     }
+
+    savedSessionsLoadPromise = (async () => {
+      try {
+        const data = await invokeCommand('load_sessions');
+        savedSessions.value = data;
+        syncGroupOrder();
+        syncGroupPrefs();
+        savedSessionsLoaded = true;
+      } catch (e) {
+        console.error('Failed to load sessions:', e);
+        toast.error('加载会话列表失败');
+      } finally {
+        savedSessionsLoadPromise = null;
+      }
+    })();
+
+    return savedSessionsLoadPromise;
   }
 
   async function saveSessionToStorage(sessionConfig) {
     try {
       await invokeCommand('save_session', { session: sessionConfig });
-      await loadSavedSessions(); // Reload
+      await loadSavedSessions({ force: true }); // Reload after the write is visible.
       toast.success('会话已保存');
       return true;
     } catch (e) {
@@ -238,7 +255,7 @@ export const useSshStore = defineStore('ssh', () => {
       const config = await invokeCommand('get_decrypted_session', { id: sessionId });
       config.group = groupName && groupName.trim() ? groupName.trim() : '';
       await invokeCommand('save_session', { session: config });
-      await loadSavedSessions();
+      await loadSavedSessions({ force: true });
     } catch (e) {
       console.error('Failed to update group:', e);
       toast.error('分组更新失败');
@@ -280,7 +297,7 @@ export const useSshStore = defineStore('ssh', () => {
         delete prefs[oldName];
         saveGroupPrefs(prefs);
       }
-      await loadSavedSessions();
+      await loadSavedSessions({ force: true });
       toast.success('分组已重命名');
     } catch (e) {
       console.error('Failed to rename group:', e);
@@ -303,7 +320,7 @@ export const useSshStore = defineStore('ssh', () => {
         delete prefs[groupName];
         saveGroupPrefs(prefs);
       }
-      await loadSavedSessions();
+      await loadSavedSessions({ force: true });
       toast.success('分组已移除（会话已移到未分组）');
     } catch (e) {
       console.error('Failed to remove group:', e);
@@ -314,7 +331,7 @@ export const useSshStore = defineStore('ssh', () => {
   async function deleteSessionFromStorage(id) {
     try {
       await invokeCommand('delete_session', { id });
-      await loadSavedSessions();
+      await loadSavedSessions({ force: true });
       toast.success('会话已删除');
     } catch (e) {
       console.error(e);
@@ -334,7 +351,7 @@ export const useSshStore = defineStore('ssh', () => {
         config.last_connected = Date.now();
         await invokeCommand('save_session', { session: config });
         await invokeCommand('trim_recent_sessions', { limit: recentSessionSettings.limit });
-        await loadSavedSessions();
+        await loadSavedSessions({ force: true });
       }
 
       // Connect using existing logic
@@ -525,7 +542,7 @@ export const useSshStore = defineStore('ssh', () => {
   async function clearRecentSessions() {
     try {
       await invokeCommand('clear_recent_sessions');
-      await loadSavedSessions();
+      await loadSavedSessions({ force: true });
       toast.success('最近会话已清空');
     } catch (e) {
       console.error('Failed to clear recent sessions:', e);

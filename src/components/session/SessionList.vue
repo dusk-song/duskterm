@@ -409,7 +409,7 @@ const duplicateSession = async (session) => {
       remarks: null,
     };
     await invokeCommand('save_session', { session: clone });
-    await sshStore.loadSavedSessions();
+    await sshStore.loadSavedSessions({ force: true });
     toast.success('会话已复制，请在编辑中修改 IP');
   } catch (e) {
     toast.error(`复制失败: ${e}`);
@@ -552,7 +552,7 @@ const handleImportSessions = async () => {
     if (!selected) return;
     const sourcePath = typeof selected === 'string' ? selected : selected.path;
     await invokeCommand('import_sessions_from', { sourcePath });
-    await sshStore.loadSavedSessions();
+    await sshStore.loadSavedSessions({ force: true });
     toast.success('会话已导入');
   } catch (err) {
     toast.error(`导入失败: ${err}`);

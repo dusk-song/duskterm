@@ -50,6 +50,14 @@ import { normalizeMouseBindingEvent } from './utils/keybindings';
 import { loadMainUiSettings, normalizeMainUiSettings, saveMainUiSettings } from './utils/mainUi';
 import { getPreferenceDefaults, loadPreference } from './utils/preferences';
 
+const createOpenedMountState = (visible) => {
+  const mounted = ref(visible.value);
+  watch(visible, (nextVisible) => {
+    if (nextVisible) mounted.value = true;
+  }, { flush: 'sync' });
+  return mounted;
+};
+
 const sshStore = useSshStore();
 const transferStore = useTransfersStore();
 const { theme, setTheme } = useTheme();
@@ -114,10 +122,10 @@ onApp('app:toggle-transfer-panel', () => {
   toggleTransferPanelVisibility();
 });
 onApp('app:refresh-sessions', () => {
-  sshStore.loadSavedSessions();
+  sshStore.loadSavedSessions({ force: true });
 });
 onApp('app:refresh-current-view', () => {
-  sshStore.loadSavedSessions();
+  sshStore.loadSavedSessions({ force: true });
   const sessionId = getActiveSftpWorkspaceId();
   if (sessionId) {
     window.dispatchEvent(new CustomEvent('app:sftp-refresh-active', {
@@ -173,6 +181,7 @@ onApp('app:quit', () => { performQuit(); });
 
 // Settings
 const isSettingsVisible = ref(false);
+const isSettingsMounted = createOpenedMountState(isSettingsVisible);
 
 // Session Panel
 const showSessionModal = (sessionData = null) => {
@@ -196,6 +205,8 @@ async function openSavedSessionEditor(sessionData) {
 }
 const isSessionModalVisible = ref(false);
 const isTunnelModalVisible = ref(false);
+const isSessionModalMounted = createOpenedMountState(isSessionModalVisible);
+const isTunnelModalMounted = createOpenedMountState(isTunnelModalVisible);
 const preferredTunnelSessionId = ref('');
 const currentEditSession = ref(null);
 const showSessionPanel = ref(false);
@@ -634,7 +645,7 @@ async function saveAllSessionsFromMenu() {
     }
   }
 
-  await sshStore.loadSavedSessions();
+  await sshStore.loadSavedSessions({ force: true });
 
   if (successCount === drafts.length) {
     toast.success(`已保存 ${successCount} 个活动会话`);
@@ -696,16 +707,24 @@ function showAboutDialog() {
   });
 }
 
-// Defer saved-session loading to after first paint (prevents blocking the initial render)
-const _deferLoadSessions = () => {
-  sshStore.loadSavedSessions();
+// Defer the single initial session read until after first paint. User-triggered
+// loads can finish first; the store's ifNeeded guard then avoids a second IPC.
+let initialSessionLoadHandle = null;
+let initialSessionLoadUsesIdleCallback = false;
+const scheduleInitialSessionLoad = () => {
+  const load = () => {
+    initialSessionLoadHandle = null;
+    void sshStore.loadSavedSessions({ ifNeeded: true });
+  };
+
+  if (typeof requestIdleCallback === 'function') {
+    initialSessionLoadUsesIdleCallback = true;
+    initialSessionLoadHandle = requestIdleCallback(load, { timeout: 1200 });
+  } else {
+    initialSessionLoadUsesIdleCallback = false;
+    initialSessionLoadHandle = setTimeout(load, 0);
+  }
 };
-// Use requestIdleCallback if available, otherwise setTimeout(0)
-if (typeof requestIdleCallback === 'function') {
-  requestIdleCallback(_deferLoadSessions);
-} else {
-  setTimeout(_deferLoadSessions, 0);
-}
 
 const { activeKey, visibleSessions, setActivePanel } = useTerminalPanels(sshStore);
 const duplicateSessionPanel = (panelId = activeKey.value) => {
@@ -816,6 +835,7 @@ const {
 } = useInputRouter({ sshStore });
 
 const isSyncInputVisible = ref(false);
+const isSyncInputMounted = createOpenedMountState(isSyncInputVisible);
 
 const mainUiSettings = ref(loadMainUiSettings());
 const backgroundAvailable = ref(false);
@@ -838,6 +858,7 @@ const isAnyModalOpen = computed(() =>
   || isOverviewVisible.value
 );
 const isOverviewVisible = ref(false);
+const isOverviewMounted = createOpenedMountState(isOverviewVisible);
 let mainUiSettingsPersistTimer = null;
 
 const closeAllSessionsFromOverview = async () => {
@@ -1136,7 +1157,7 @@ onMounted(async () => {
     unlistenSshHostkey?.();
     unlistenSftpHostkey?.();
   };
-  sshStore.loadSavedSessions();
+  scheduleInitialSessionLoad();
   loadKeybindings();
   refreshMainUiSettings();
   cleanupUnusedBackgroundResources();
@@ -1171,6 +1192,14 @@ onUnmounted(() => {
   window.removeEventListener('mouseup', suppressHandledMouseBinding, true);
   window.removeEventListener('auxclick', suppressHandledMouseBinding, true);
   if (mainUiSettingsPersistTimer) clearTimeout(mainUiSettingsPersistTimer);
+  if (initialSessionLoadHandle !== null) {
+    if (initialSessionLoadUsesIdleCallback && typeof cancelIdleCallback === 'function') {
+      cancelIdleCallback(initialSessionLoadHandle);
+    } else {
+      clearTimeout(initialSessionLoadHandle);
+    }
+    initialSessionLoadHandle = null;
+  }
   // Cleanup all app:* / gesture / storage event listeners
   for (const [event, handler] of _appEvts) {
     window.removeEventListener(event, handler);
@@ -1298,14 +1327,17 @@ useWindowInteraction({ onResize: measureWorkspace });
         @close="closeTransferPanel" />
 
       <!-- Session Modal -->
-      <SessionModal v-model:visible="isSessionModalVisible" :sessionData="currentEditSession" />
+      <SessionModal v-if="isSessionModalMounted" v-model:visible="isSessionModalVisible"
+        :sessionData="currentEditSession" />
 
-      <TunnelModal v-model:visible="isTunnelModalVisible" :preferred-session-id="preferredTunnelSessionId" />
+      <TunnelModal v-if="isTunnelModalMounted" v-model:visible="isTunnelModalVisible"
+        :preferred-session-id="preferredTunnelSessionId" />
 
       <!-- Settings Modal -->
-      <SettingsModal v-model:visible="isSettingsVisible" />
+      <SettingsModal v-if="isSettingsMounted" v-model:visible="isSettingsVisible" />
 
-      <SyncInputModal v-model:visible="isSyncInputVisible" :active-key="activeKey" :sync-channels="syncChannels"
+      <SyncInputModal v-if="isSyncInputMounted" v-model:visible="isSyncInputVisible"
+        :active-key="activeKey" :sync-channels="syncChannels"
         :selected-channel-id="selectedSyncChannelId"
         :replace-sync-channels="replaceSyncChannels" :clear-sync-channels="clearSyncChannels"
         :set-selected-sync-channel-id="setSelectedSyncChannelId" />
@@ -1314,7 +1346,8 @@ useWindowInteraction({ onResize: measureWorkspace });
       <LockScreen />
 
       <!-- Session Overview (Ctrl+`) -->
-      <SessionOverview :visible="isOverviewVisible" :sessions="visibleSessions" :sync-channels="syncChannels"
+      <SessionOverview v-if="isOverviewMounted" :visible="isOverviewVisible" :sessions="visibleSessions"
+        :sync-channels="syncChannels"
         :active-session-id="activeKey"
         @close="isOverviewVisible = false" @select="(id) => { setActivePanel(id); }"
         @close-all="closeAllSessionsFromOverview" />
