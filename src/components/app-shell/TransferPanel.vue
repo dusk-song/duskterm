@@ -1,5 +1,6 @@
 <script setup>
 import IconButton from '@/components/common/IconButton.vue';
+import TransferProgress from './TransferProgress.vue';
 import { TooltipHint } from '@/components/ui/tooltip';
 import { toast } from '@/composables/useToast';
 import { useSshStore } from '@/stores/ssh';
@@ -177,10 +178,6 @@ const secondaryText = (item) => {
   return parts.join(' · ');
 };
 
-const progressPercent = (item) => Math.max(0, Math.min(100, Number(item.progress || 0)));
-const showsProgress = (item) => (
-  ['uploading', 'transferring', 'finalizing', 'cancelling', 'paused'].includes(item.status)
-);
 const isCompact = (item) => COMPACT_TRANSFER_STATUSES.has(item.status);
 const canCancel = (item) => (
   ACTIVE_TRANSFER_STATUSES.has(item.status) && item.status !== 'cancelling' && item.status !== 'paused'
@@ -323,12 +320,7 @@ const clearFinished = () => transferStore.clearFinishedTasks();
                 {{ secondaryText(item) }}
               </div>
             </TooltipHint>
-            <div v-if="showsProgress(item)" class="transfer-progress-row">
-              <div class="transfer-progress">
-                <i :style="{ width: `${progressPercent(item)}%` }" />
-              </div>
-              <span>{{ Math.round(progressPercent(item)) }}%</span>
-            </div>
+            <TransferProgress :item="item" />
           </div>
 
           <div class="transfer-task-side">
@@ -556,34 +548,6 @@ const clearFinished = () => transferStore.clearFinishedTasks();
 
 .transfer-task-meta.error {
   color: color-mix(in srgb, var(--color-danger) 78%, var(--app-text-muted));
-}
-
-.transfer-progress-row {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) 34px;
-  align-items: center;
-  gap: 8px;
-  margin-top: 7px;
-}
-
-.transfer-progress-row > span {
-  color: var(--app-text-muted);
-  font-size: 10px;
-  text-align: right;
-}
-
-.transfer-progress {
-  height: 3px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--app-text) 9%, transparent);
-}
-
-.transfer-progress i {
-  display: block;
-  height: 100%;
-  border-radius: inherit;
-  background: var(--color-primary);
 }
 
 .transfer-task-side {

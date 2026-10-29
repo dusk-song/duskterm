@@ -101,11 +101,12 @@ export const useTransfersStore = defineStore('transfers', () => {
   const isTaskActive = (task) => ACTIVE_STATUSES.has(task.status)
     || (task.protocol === 'zmodem' && !task.terminalRestored);
   const activeCount = computed(() => tasks.value.filter(isTaskActive).length);
-  const dockStatus = computed(() => ({
-    active: activeCount.value,
-    total: tasks.value.length,
-    lastName: tasks.value[0]?.fileName || '',
-    items: tasks.value.map((task) => ({
+  // Each row tracks its own fields; progress from one transfer must not replace every row object.
+  const taskViews = new WeakMap();
+  const getTaskView = (task) => {
+    const existing = taskViews.get(task);
+    if (existing) return existing.value;
+    const view = computed(() => ({
       id: task.id,
       operationId: task.operationId,
       sessionId: task.sessionId,
@@ -129,7 +130,15 @@ export const useTransfersStore = defineStore('transfers', () => {
       phase: task.phase || '',
       terminalRestored: task.terminalRestored,
       error: task.error || '',
-    })),
+    }));
+    taskViews.set(task, view);
+    return view.value;
+  };
+  const dockStatus = computed(() => ({
+    active: activeCount.value,
+    total: tasks.value.length,
+    lastName: tasks.value[0]?.fileName || '',
+    items: tasks.value.map(getTaskView),
   }));
 
   function findTask(sessionId, requestId) {
