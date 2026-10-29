@@ -346,7 +346,7 @@ onUnmounted(() => {
       </div>
       <div class="detail-actions">
         <IconButton :icon="Copy" size="sm" aria-label="复制" :action="() => copyCommand(selectedEntry)" />
-        <IconButton :icon="Send" size="sm" aria-label="发送" :action="() => insertCommand(selectedEntry)" />
+        <IconButton :icon="Send" size="sm" aria-label="填入终端（不执行）" :action="() => insertCommand(selectedEntry)" />
         <IconButton :icon="Play" size="sm" aria-label="执行" :action="() => executeCommand(selectedEntry)" />
         <IconButton :icon="Pencil" size="sm" aria-label="编辑" :action="() => openEditDialog(selectedEntry)" />
         <IconButton :icon="Trash2" size="sm" aria-label="删除" :action="() => removeEntry(selectedEntry)" />

@@ -23,7 +23,7 @@
     --secondary: 36 29% 86%;
     --secondary-foreground: 36 8% 18%;
     --muted: 36 24% 87%;
-    --muted-foreground: 32 9% 48%;
+    --muted-foreground: 32 9% 39%;
     --accent: 35 29% 89%;
     --accent-foreground: 36 8% 18%;
 
@@ -62,7 +62,7 @@
     --app-text-muted: hsl(var(--muted-foreground));
     --app-text-title: hsl(var(--foreground));
 
-    --app-font-family: 'Maple Mono', 'Microsoft YaHei', monospace;
+    --app-font-family: var(--font-sans);
     --app-font-title-size: 16px;
     --app-font-body-size: 13px;
     --app-font-caption-size: 12px;
@@ -330,11 +330,12 @@
 }
 
 .lucide {
-  width: 1em !important;
-  height: 1em !important;
   vertical-align: -0.125em;
   flex-shrink: 0;
 }
+
+/* Explicit Lucide sizes and component classes take precedence over the default icon size. */
+:where(svg.lucide[width="24"][height="24"]) { width: 1em; height: 1em; }
 
 @layer base {
   * {

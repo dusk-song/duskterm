@@ -2,7 +2,6 @@ import { nextTick, onMounted, onUnmounted, ref } from 'vue';
 
 const WINDOW_RESIZE_SETTLE_DELAY = 240;
 const WINDOW_RESIZE_STABLE_FRAMES = 4;
-const WINDOW_RESIZE_MIN_QUIET_MS = 48;
 
 function notifyTerminalLayoutDragging(dragging) {
   window.dispatchEvent(new CustomEvent('terminal-layout-dragging', {
@@ -86,7 +85,7 @@ export function useWindowInteraction({ onResize, settleDelay = WINDOW_RESIZE_SET
 
       if (
         stableFrameCount >= WINDOW_RESIZE_STABLE_FRAMES
-        && performance.now() - lastResizeAt >= WINDOW_RESIZE_MIN_QUIET_MS
+        && performance.now() - lastResizeAt >= settleDelay
       ) {
         finishResize();
         return;

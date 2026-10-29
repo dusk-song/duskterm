@@ -12,10 +12,12 @@
  * adapt rendering behaviour accordingly.
  */
 
+import { ref } from 'vue';
+
 const PERF_ATTR = 'data-performance';
 
-/** @type {'auto'|'reduced'} */
-let currentMode = 'auto';
+/** @type {import('vue').Ref<'auto'|'reduced'>} */
+const currentMode = ref('auto');
 
 /**
  * Re-evaluate and apply the performance mode.
@@ -26,11 +28,11 @@ function applyPerformanceMode() {
   const batterySaver = window._duskBatterySaver === true;
 
   const nextMode = prefersReducedMotion || batterySaver ? 'reduced' : 'auto';
-  if (nextMode !== currentMode) {
-    currentMode = nextMode;
-    document.documentElement.setAttribute(PERF_ATTR, currentMode);
+  if (nextMode !== currentMode.value) {
+    currentMode.value = nextMode;
   }
-  return currentMode;
+  document.documentElement.setAttribute(PERF_ATTR, nextMode);
+  return nextMode;
 }
 
 /**
@@ -84,7 +86,7 @@ export function isOnBattery() {
  * (reduced-motion preference OR battery saver mode).
  */
 export function isReducedPerformance() {
-  return currentMode === 'reduced';
+  return currentMode.value === 'reduced';
 }
 
 export { PERF_ATTR };

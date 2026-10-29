@@ -16,6 +16,7 @@ import { computed, defineAsyncComponent, h, nextTick, onMounted, onUnmounted, re
 
 // ── Lazy-loaded heavy components for faster initial paint ──
 import ConfirmDialog from '@/components/ui/confirm/ConfirmDialog.vue';
+import Button from '@/components/ui/button/Button.vue';
 import ToastContainer from '@/components/ui/toast/ToastContainer.vue';
 import { TooltipHint, TooltipProvider } from '@/components/ui/tooltip';
 import CustomTitlebar from './components/app-shell/CustomTitlebar.vue';
@@ -70,6 +71,16 @@ const onApp = (event, handler) => {
   window.addEventListener(event, handler);
   _appEvts.push([event, handler]);
 };
+
+const layoutInteractionSources = new Set();
+const layoutInteracting = ref(false);
+onApp('terminal-layout-dragging', (event) => {
+  const source = event.detail?.source || 'layout';
+  if (event.detail?.dragging) layoutInteractionSources.add(source);
+  else layoutInteractionSources.delete(source);
+  layoutInteracting.value = layoutInteractionSources.size > 0;
+  document.documentElement.toggleAttribute('data-layout-interacting', layoutInteracting.value);
+});
 
 onApp('app:new-connection', () => { showSessionModal(); });
 onApp('app:open-session-list', () => {
@@ -293,6 +304,7 @@ const workspaceWidth = ref(0);
 const leftColumnWidth = ref(360);
 const toolPanelWidth = ref(440);
 const isDraggingColumn = ref(false);
+let finishWorkspaceResize = null;
 const workspaceSeparatorSize = 4;
 const workspaceGridGap = 6;
 const workspaceGridPaddingX = 8;
@@ -389,6 +401,9 @@ const clampWorkspaceLayout = () => {
 };
 
 const startWorkspaceResize = (axis, event) => {
+  if (event.button !== 0) return;
+  finishWorkspaceResize?.();
+  event.preventDefault();
   if (axis === 'columns' && !hasWorkspaceLeftPanels.value) return;
   if (axis === 'tool' && !hasWorkspaceRightPanel.value) return;
 
@@ -399,6 +414,8 @@ const startWorkspaceResize = (axis, event) => {
   let pendingLeftWidth = startLeftWidth;
   let pendingToolWidth = startToolWidth;
   const workspaceEl = workspaceRef.value;
+  const previousCursor = document.body.style.cursor;
+  const previousUserSelect = document.body.style.userSelect;
 
   isDraggingColumn.value = true;
   notifyTerminalLayoutDragging(true, { source: 'workspace-column', deferFit: true });
@@ -477,10 +494,12 @@ const startWorkspaceResize = (axis, event) => {
   };
 
   const onMouseUp = () => {
+    finishWorkspaceResize = null;
     document.removeEventListener('mousemove', onMouseMove);
     document.removeEventListener('mouseup', onMouseUp);
-    document.body.style.cursor = '';
-    document.body.style.userSelect = '';
+    window.removeEventListener('blur', onMouseUp);
+    document.body.style.cursor = previousCursor;
+    document.body.style.userSelect = previousUserSelect;
     isDraggingColumn.value = false;
 
     if (rafId !== null) {
@@ -501,6 +520,18 @@ const startWorkspaceResize = (axis, event) => {
 
   document.addEventListener('mousemove', onMouseMove);
   document.addEventListener('mouseup', onMouseUp);
+  window.addEventListener('blur', onMouseUp);
+  finishWorkspaceResize = onMouseUp;
+};
+
+const resizeWorkspaceByKey = (axis, event) => {
+  if (!['ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+  event.preventDefault();
+  const delta = event.key === 'ArrowRight' ? 16 : -16;
+  if (axis === 'columns') leftColumnWidth.value = Math.max(leftColumnMinWidth, leftColumnWidth.value + delta);
+  else toolPanelWidth.value = Math.max(toolPanelMinWidth.value, toolPanelWidth.value - delta);
+  clampWorkspaceLayout();
+  nextTick(notifyTerminalLayoutResize);
 };
 
 const workspaceGridStyle = computed(() => {
@@ -794,6 +825,8 @@ const activeSessionSupportsSftp = computed(() => {
 const showActiveSftpPanel = computed(
   () => showSftpPanel.value && visibleSessions.value.length > 0 && activeSessionSupportsSftp.value
 );
+const isSftpMounted = createOpenedMountState(showActiveSftpPanel);
+const isKnowledgeMounted = createOpenedMountState(showCommandKnowledgePanel);
 watch(
   [showSessionPanel, showCommandKnowledgePanel, showActiveSftpPanel],
   ([showLeft, showKnowledge, showSftp]) => {
@@ -833,6 +866,13 @@ const {
   clearSyncChannels,
   setSelectedSyncChannelId,
 } = useInputRouter({ sshStore });
+
+onApp('app:pause-sync-channel', (event) => {
+  const channelId = event.detail?.channelId;
+  if (!syncChannels.value.some((channel) => channel.id === channelId)) return;
+  replaceSyncChannels(syncChannels.value.map((channel) => channel.id === channelId
+    ? { ...channel, enabled: false } : channel));
+});
 
 const isSyncInputVisible = ref(false);
 const isSyncInputMounted = createOpenedMountState(isSyncInputVisible);
@@ -1179,6 +1219,9 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  finishWorkspaceResize?.();
+  if (_measureWorkspaceRaf) cancelAnimationFrame(_measureWorkspaceRaf);
+  document.documentElement.removeAttribute('data-layout-interacting');
   if (unlistenHostkey) unlistenHostkey();
   if (unlistenSftpProgress) unlistenSftpProgress();
   if (sftpPanelTransitionTimer) {
@@ -1265,6 +1308,7 @@ useWindowInteraction({ onResize: measureWorkspace });
 
         <!-- Column resize handle -->
         <div v-if="hasWorkspaceLeftPanels" class="workspace-separator workspace-separator-vertical"
+          role="separator" tabindex="0" aria-label="调整会话面板宽度" aria-orientation="vertical" :aria-valuenow="Math.round(leftColumnWidth)" @keydown="resizeWorkspaceByKey('columns', $event)"
           @mousedown="startWorkspaceResize('columns', $event)" />
 
         <TiledPanel class="workspace-panel workspace-panel-main"
@@ -1273,6 +1317,14 @@ useWindowInteraction({ onResize: measureWorkspace });
           <div class="main-panel-body">
             <div v-if="visibleSessions.length === 0" class="empty-state">
               <div class="empty-left">
+                <div class="welcome-actions">
+                  <h1>DuskTerm</h1>
+                  <p>连接远程主机，开始工作。</p>
+                  <div>
+                    <Button size="sm" @click="showSessionModal(null)">新建连接</Button>
+                    <Button size="sm" variant="outline" @click="showSessionPanel = true; sshStore.loadSavedSessions()">打开会话列表</Button>
+                  </div>
+                </div>
                 <div v-if="recentSessionSettings.enabled" class="recent-sessions-tree-container">
                   <div class="tree-header">
                     <span>最近会话</span>
@@ -1284,7 +1336,7 @@ useWindowInteraction({ onResize: measureWorkspace });
                       </button>
                     </TooltipHint>
                   </div>
-                  <div v-if="recentSessions.length === 0" class="no-recent">无记录</div>
+                  <div v-if="recentSessions.length === 0" class="no-recent">连接过的会话会显示在这里</div>
                   <div v-else class="tree-list">
                     <button v-for="s in recentSessions" :key="s.id" type="button" class="tree-item"
                       @click="openRecentSession(s)">
@@ -1301,24 +1353,23 @@ useWindowInteraction({ onResize: measureWorkspace });
               @close-panel="removePanelRoot" @duplicate-panel="duplicateSessionPanel"
               @reconnect-panel="reconnectSessionPanel" />
 
-            <DesktopPet :settings="desktopPetSettings" :suspend="isAnyModalOpen || hasWorkspaceRightPanel"
+            <DesktopPet :settings="desktopPetSettings" :suspend="isAnyModalOpen || hasWorkspaceRightPanel || layoutInteracting"
               @settings-change="handleDesktopPetSettingsChange" />
           </div>
         </TiledPanel>
 
         <div v-if="hasWorkspaceRightPanel" class="workspace-separator workspace-separator-vertical"
+          role="separator" tabindex="0" aria-label="调整工具面板宽度" aria-orientation="vertical" :aria-valuenow="Math.round(toolPanelWidth)" @keydown="resizeWorkspaceByKey('tool', $event)"
           @mousedown="startWorkspaceResize('tool', $event)" />
 
         <TiledPanel v-show="hasWorkspaceRightPanel" class="workspace-panel workspace-panel-tool" :dense="true"
           :padded="false" :aria-label="showActiveSftpPanel ? 'SFTP 文件管理' : '命令知识库'">
-          <KeepAlive>
-            <FileManager v-if="showActiveSftpPanel"
+            <FileManager v-if="isSftpMounted" v-show="showActiveSftpPanel"
               :sessionId="activeSftpWorkspaceId" :follow-session-id="focusedTerminalRuntimeId"
               :visible="showActiveSftpPanel" @close="showSftpPanel = false" />
-            <CommandKnowledgePanel v-else-if="showCommandKnowledgePanel" @close="showCommandKnowledgePanel = false"
+            <CommandKnowledgePanel v-if="isKnowledgeMounted" v-show="showCommandKnowledgePanel" @close="showCommandKnowledgePanel = false"
               @insert-command="(detail) => dispatchCommandKnowledgeToActiveTerminal('insert', detail)"
               @execute-command="(detail) => dispatchCommandKnowledgeToActiveTerminal('execute', detail)" />
-          </KeepAlive>
         </TiledPanel>
       </div>
 
@@ -1425,12 +1476,15 @@ useWindowInteraction({ onResize: measureWorkspace });
 .app-shell > :not(.global-background):not(.global-toast-layer) { position: relative; z-index: 1; }
 .app-shell > .dusk-titlebar { z-index: var(--z-chrome); }
 .app-shell.has-floating-surfaces {
-  --terminal-surface-bg: color-mix(in srgb, var(--app-bg-dialog) 52%, transparent);
+  --terminal-surface-bg: var(--app-terminal-bg);
   --workspace-side-panel-top-offset: 0px;
   --tb-bg: color-mix(in srgb, var(--app-bg-dialog) 78%, transparent);
   --tb-border: var(--app-panel-border);
   --tb-shadow: var(--app-panel-shadow);
 }
+.app-shell.has-global-background { --terminal-surface-bg: color-mix(in srgb, var(--app-bg-dialog) 52%, transparent); }
+.app-shell.has-floating-surfaces:not(.has-global-background) .workspace-panel.tiled-panel:not(.workspace-panel-main) { background: var(--app-panel-bg); }
+.app-shell.has-floating-surfaces:not(.has-global-background) .workspace-panel { box-shadow: none; }
 .app-shell.has-global-background {
   background: transparent;
 }
@@ -1527,11 +1581,13 @@ useWindowInteraction({ onResize: measureWorkspace });
 }
 
 .workspace-separator {
+  position: relative;
+  z-index: 35;
   background: transparent;
   border: 0;
   margin: 0;
   padding: 0;
-  opacity: 0;
+  opacity: 1;
   user-select: none;
   touch-action: none;
 }
@@ -1540,8 +1596,11 @@ useWindowInteraction({ onResize: measureWorkspace });
 .workspace-separator:active,
 .workspace-separator:focus {
   background: transparent;
-  opacity: 0;
+  opacity: 1;
 }
+.workspace-separator::before { content: ''; position: absolute; inset: 0 -3px; }
+.workspace-separator::after { content: ''; position: absolute; inset: 8px 1px; border-radius: 2px; background: transparent; }
+.workspace-separator:hover::after, .workspace-separator:focus-visible::after { background: var(--app-focus-border); }
 
 .workspace-separator-vertical {
   width: 4px;
@@ -1579,21 +1638,27 @@ useWindowInteraction({ onResize: measureWorkspace });
 .empty-left {
   width: min(340px, calc(100% - 24px));
   min-width: 0;
-  height: 260px;
+  max-height: 100%;
+  overflow-y: auto;
   background: transparent;
   border-right: none;
   display: flex;
   flex-direction: column;
   padding: 0;
-  overflow-y: hidden;
 }
+.welcome-actions { flex-shrink: 0; }
+.welcome-actions { margin-bottom: 22px; padding: 12px 0; }
+.welcome-actions h1 { margin: 0 0 8px; font-size: 24px; font-weight: 650; color: var(--app-text); }
+.welcome-actions p { margin: 0 0 18px; color: var(--app-text-muted); }
+.welcome-actions > div { display: flex; flex-wrap: wrap; gap: 8px; }
 
 /* Tree Styles */
 .recent-sessions-tree-container {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  height: 100%;
+  min-height: 100px;
+  max-height: 260px;
   padding: 12px;
   border: 1px solid color-mix(in srgb, var(--app-border-light) 70%, transparent);
   border-radius: var(--niri-radius-lg, 14px);

@@ -3,7 +3,7 @@ import Button from '@/components/ui/button/Button.vue';
 import Input from '@/components/ui/input/Input.vue';
 import { toast } from '@/composables/useToast';
 import { Lock } from '@lucide/vue';
-import { nextTick, onMounted, ref } from 'vue';
+import { nextTick, ref, watch } from 'vue';
 import { useSecurityStore } from '@/stores/security';
 
 const securityStore = useSecurityStore();
@@ -11,6 +11,10 @@ const password = ref('');
 const loading = ref(false);
 const error = ref('');
 const inputRef = ref(null);
+const focusPassword = () => nextTick(() => {
+  const element = inputRef.value?.$el;
+  if (element instanceof HTMLInputElement) element.focus({ preventScroll: true });
+});
 
 async function handleUnlock() {
   if (!password.value || loading.value) return;
@@ -27,10 +31,7 @@ async function handleUnlock() {
       error.value = '密码错误，请重试';
       toast.error('解锁失败');
       password.value = '';
-      nextTick(() => {
-        const inputEl = inputRef.value?.$el?.querySelector('input');
-        if (inputEl) inputEl.focus();
-      });
+      focusPassword();
     }
   } catch (e) {
     console.error(e);
@@ -40,10 +41,9 @@ async function handleUnlock() {
   }
 }
 
-onMounted(() => {
-  const inputEl = inputRef.value?.$el?.querySelector('input');
-  if (inputEl) inputEl.focus();
-});
+watch(() => securityStore.isLocked, (locked) => {
+  if (locked) focusPassword();
+}, { immediate: true, flush: 'post' });
 </script>
 
 <template>

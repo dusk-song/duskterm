@@ -174,7 +174,7 @@ onBeforeUnmount(() => {
             :tabindex="panel.id === activePanelId ? 0 : -1" @click="activatePanel(panel.id)"
             @keydown="handleTabKeydown($event, panel.id)">
             <span class="terminal-tab-status" :class="panel.status" aria-hidden="true" />
-            <span class="terminal-tab-label">{{ getDisplayName(panel) }}</span>
+            <span class="terminal-tab-label" :title="`${getDisplayName(panel)} · ${{ connected: '已连接', connecting: '连接中', error: '连接失败', disconnected: '已断开' }[panel.status] || panel.status}`">{{ getDisplayName(panel) }}</span>
           </button>
           <button type="button" class="terminal-tab-close" :aria-label="`关闭 ${getDisplayName(panel)}`"
             @mousedown.stop @click.stop="closePanel(panel.id)">

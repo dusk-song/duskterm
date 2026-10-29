@@ -114,6 +114,7 @@ const handleClick = (event) => {
           '--icon-btn-size': computedSize,
         }"
         :aria-label="ariaLabel"
+        :aria-pressed="active ? true : undefined"
         :disabled="disabled"
         type="button"
         @click="handleClick"

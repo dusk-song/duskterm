@@ -71,6 +71,7 @@ const handleOutsideInteract = (event) => {
       @pointermove="dialogDrag.onPointerMove"
       @pointerup="dialogDrag.onPointerUp"
       @pointercancel="dialogDrag.onPointerCancel"
+      @lostpointercapture="dialogDrag.onPointerCancel"
       @pointer-down-outside="handleOutsideInteract"
       @interact-outside="handleOutsideInteract">
       <slot />
@@ -78,7 +79,7 @@ const handleOutsideInteract = (event) => {
       <DialogClose v-if="showCloseButton" data-slot="dialog-close" as-child>
         <Button variant="ghost" class="absolute top-4 right-4" size="icon-sm">
           <XIcon />
-          <span class="sr-only">Close</span>
+          <span class="sr-only">关闭</span>
         </Button>
       </DialogClose>
     </DialogContent>

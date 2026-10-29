@@ -1,5 +1,5 @@
-import { nextTick, ref, watch } from 'vue';
-import { collectSplitLeafIds, createSplitLeaf, removeSplitLeaf, splitLeaf } from '@/utils/splitTree';
+import { nextTick, onBeforeUnmount, ref, watch } from 'vue';
+import { collectSplitLeafIds, computeSplitLayout, createSplitLeaf, getSplitLeafStyle, removeSplitLeaf, splitLeaf } from '@/utils/splitTree';
 
 const STORAGE_KEY = 'terminal-panel-layout-v1';
 const MODE_KEY = 'terminal-layout-mode-v1';
@@ -13,6 +13,8 @@ export function usePanelLayout({ sshStore, activeKey, ensureSplitSession, visibl
   let isDraggingLayout = false;
   let hasPendingLayoutSave = false;
   let dragGestureActive = false;
+  let finishActiveDrag = null;
+  onBeforeUnmount(() => finishActiveDrag?.());
 
   const notifyLayoutDragging = (dragging) => {
     window.dispatchEvent(new CustomEvent('terminal-layout-dragging', {
@@ -293,6 +295,8 @@ export function usePanelLayout({ sshStore, activeKey, ensureSplitSession, visibl
   };
 
   const startSplitDrag = (e, node, layoutBounds = null) => {
+    if (e.button !== 0) return;
+    finishActiveDrag?.();
     e.preventDefault();
     e.stopPropagation();
     const container = e.currentTarget?.parentElement;
@@ -305,6 +309,14 @@ export function usePanelLayout({ sshStore, activeKey, ensureSplitSession, visibl
       height: rootRect.height * layoutBounds.height / 100
     } : rootRect;
     const isVertical = node.direction === 'vertical';
+    const tree = splitTrees.value[container.dataset.panelId];
+    const leafElements = new Map(Array.from(container.querySelectorAll('.split-leaf'))
+      .map((element) => [element.dataset.sessionId, element]));
+    const dividerElements = Array.from(container.querySelectorAll('.split-divider'));
+    const originalStyles = [...leafElements.values(), ...dividerElements]
+      .map((element) => [element, element.style.cssText]);
+    const previousCursor = document.body.style.cursor;
+    const previousUserSelect = document.body.style.userSelect;
     dragGestureActive = true;
     notifyLayoutDragging(true);
     let rafId = null;
@@ -321,7 +333,20 @@ export function usePanelLayout({ sshStore, activeKey, ensureSplitSession, visibl
 
       if (rafId === null) {
         rafId = requestAnimationFrame(() => {
-          if (Math.abs(node.ratio - pendingRatio) > RATIO_EPSILON) {
+          // Change this pane's DOM geometry during the gesture, commit Vue state on release.
+          if (tree) {
+            const preview = computeSplitLayout(tree, { node, ratio: pendingRatio });
+            preview.leaves.forEach((leaf) => {
+              const element = leafElements.get(leaf.sessionId);
+              if (element) Object.assign(element.style, getSplitLeafStyle(leaf));
+            });
+            preview.dividers.forEach((divider, index) => {
+              const element = dividerElements[index];
+              if (element) Object.assign(element.style, divider.direction === 'vertical'
+                ? { left: `${divider.x}%`, top: `${divider.y}%`, height: `${divider.height}%` }
+                : { left: `${divider.x}%`, top: `${divider.y}%`, width: `${divider.width}%` });
+            });
+          } else if (Math.abs(node.ratio - pendingRatio) > RATIO_EPSILON) {
             isDraggingLayout = true;
             node.ratio = pendingRatio;
           }
@@ -331,15 +356,20 @@ export function usePanelLayout({ sshStore, activeKey, ensureSplitSession, visibl
     };
 
     const onUp = () => {
+      finishActiveDrag = null;
       document.removeEventListener('mousemove', onMove);
       document.removeEventListener('mouseup', onUp);
-      document.body.style.cursor = '';
-      document.body.style.userSelect = '';
+      window.removeEventListener('blur', onUp);
+      document.body.style.cursor = previousCursor;
+      document.body.style.userSelect = previousUserSelect;
 
       if (rafId !== null) {
         cancelAnimationFrame(rafId);
         rafId = null;
       }
+
+      // Restore the VDOM baseline, including dragging back to the original ratio.
+      originalStyles.forEach(([element, cssText]) => { element.style.cssText = cssText; });
 
       if (Math.abs(node.ratio - pendingRatio) > RATIO_EPSILON) {
         isDraggingLayout = true;
@@ -357,13 +387,15 @@ export function usePanelLayout({ sshStore, activeKey, ensureSplitSession, visibl
         notifyLayoutDragging(false);
       }
 
-      window.dispatchEvent(new CustomEvent('terminal-layout-resize'));
+      scheduleLayoutResize();
     };
 
     document.body.style.cursor = isVertical ? 'col-resize' : 'row-resize';
     document.body.style.userSelect = 'none';
     document.addEventListener('mousemove', onMove);
     document.addEventListener('mouseup', onUp);
+    window.addEventListener('blur', onUp);
+    finishActiveDrag = onUp;
   };
 
   const startTileSplitDrag = (e, node) => {

@@ -48,7 +48,21 @@ export function removeSplitLeaf(node, targetId) {
   return { ...node, first, second };
 }
 
-export function computeSplitLayout(node) {
+export function getSplitLeafStyle(leaf) {
+  const left = leaf.x > 0.001 ? 4 : 0;
+  const top = leaf.y > 0.001 ? 4 : 0;
+  const right = leaf.x + leaf.width < 99.999 ? 4 : 0;
+  const bottom = leaf.y + leaf.height < 99.999 ? 4 : 0;
+  return {
+    left: `calc(${leaf.x}% + ${left}px)`,
+    top: `calc(${leaf.y}% + ${top}px)`,
+    width: `calc(${leaf.width}% - ${left + right}px)`,
+    height: `calc(${leaf.height}% - ${top + bottom}px)`,
+  };
+}
+
+// Preview one divider without mutating the reactive tree or its persisted snapshot.
+export function computeSplitLayout(node, preview = null) {
   const leaves = [];
   const dividers = [];
 
@@ -58,7 +72,8 @@ export function computeSplitLayout(node) {
       leaves.push({ sessionId: current.sessionId, ...rect });
       return;
     }
-    const ratio = Number.isFinite(current.ratio) ? Math.min(0.85, Math.max(0.15, current.ratio)) : 0.5;
+    const value = preview?.node === current ? preview.ratio : current.ratio;
+    const ratio = Number.isFinite(value) ? Math.min(0.85, Math.max(0.15, value)) : 0.5;
     if (current.direction === 'vertical') {
       const firstWidth = rect.width * ratio;
       visit(current.first, { x: rect.x, y: rect.y, width: firstWidth, height: rect.height });

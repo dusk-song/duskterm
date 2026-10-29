@@ -37,7 +37,7 @@ const stateClass = (session) => ({
     <DuskDock interactive class="session-current">
       <span class="session-center session-drag-region">
         <span class="session-state" :class="active ? stateClass(active) : null" />
-        <span class="session-identity">{{ sessionDisplayName }}</span>
+        <span class="session-identity" :title="sessionDisplayName">{{ sessionDisplayName }}</span>
       </span>
     </DuskDock>
   </div>

@@ -276,6 +276,42 @@ const { visibleItems, totalHeight, translateY, onScroll: onVirtualScroll, setVie
   rowHeight: 34,
 });
 const contextMenuNode = ref(null);
+const selectedNodeKey = ref('');
+
+function handleTreeKeydown(event) {
+  if (event.isComposing || event.target instanceof HTMLInputElement) return;
+  const items = flatList.value;
+  if (!items.length) return;
+  let index = Math.max(0, items.findIndex((item) => item.key === selectedNodeKey.value));
+  const current = items[index];
+  if (event.key === 'ArrowDown') index = Math.min(items.length - 1, index + 1);
+  else if (event.key === 'ArrowUp') index = Math.max(0, index - 1);
+  else if (event.key === 'Home') index = 0;
+  else if (event.key === 'End') index = items.length - 1;
+  else if (event.key === 'Enter') {
+    if (current.isLeaf) sshStore.connectStoredSession(current.key);
+    else toggleGroup(current.key);
+  } else if (event.key === 'ArrowRight' && current._isGroup) {
+    if (!expandedKeys.value.includes(current.key)) toggleGroup(current.key);
+    else index = Math.min(items.length - 1, index + 1);
+  } else if (event.key === 'ArrowLeft') {
+    if (current._isGroup && expandedKeys.value.includes(current.key)) toggleGroup(current.key);
+    else {
+      for (let parent = index - 1; parent >= 0; parent--) {
+        if (items[parent]._depth < current._depth) { index = parent; break; }
+      }
+    }
+  } else return;
+  event.preventDefault();
+  event.stopPropagation();
+  selectedNodeKey.value = items[index]?.key || '';
+  const viewport = viewportRef.value;
+  if (viewport) {
+    const top = index * 34;
+    if (top < viewport.scrollTop) viewport.scrollTop = top;
+    else if (top + 34 > viewport.scrollTop + viewport.clientHeight) viewport.scrollTop = top + 34 - viewport.clientHeight;
+  }
+}
 
 function prepareContextMenu(event) {
   const row = event.target instanceof Element
@@ -432,8 +468,8 @@ const splitTitle = (text) => {
 onMounted(() => {
   void loadLocalShellProfiles();
   resizeObserver = new ResizeObserver(() => {
-    if (panelContentRef.value) {
-      setViewportHeight(Math.max(200, panelContentRef.value.clientHeight - 6));
+    if (viewportRef.value) {
+      setViewportHeight(viewportRef.value.clientHeight);
     }
   });
   if (panelContentRef.value) resizeObserver.observe(panelContentRef.value);
@@ -564,14 +600,14 @@ const handleImportSessions = async () => {
 <template>
   <div class="session-panel" :style="panelWidthStyle">
     <div class="panel-content" ref="panelContentRef">
+      <div class="session-heading"><strong>会话</strong><div class="search-actions">
+        <IconButton :icon="Plus" size="sm" aria-label="新建会话" :action="() => $emit('open-create')" />
+        <IconButton :icon="Upload" size="sm" aria-label="导入会话" :action="handleImportSessions" />
+        <IconButton :icon="Download" size="sm" aria-label="导出会话" :action="handleExportSessions" />
+        <IconButton :icon="X" size="sm" aria-label="关闭面板" :action="() => $emit('close')" />
+      </div></div>
       <div class="search-bar">
-        <Input v-model="searchKeyword" placeholder="搜索…" size="sm" class="session-search-input" />
-        <div class="search-actions">
-          <IconButton :icon="Plus" size="sm" aria-label="新建会话" :action="() => $emit('open-create')" />
-          <IconButton :icon="Upload" size="sm" aria-label="导入" :action="handleImportSessions" />
-          <IconButton :icon="Download" size="sm" aria-label="导出" :action="handleExportSessions" />
-          <IconButton :icon="X" size="sm" aria-label="关闭面板" :action="() => $emit('close')" />
-        </div>
+        <Input v-model="searchKeyword" placeholder="搜索会话、主机、分组…" aria-label="搜索会话" size="sm" class="session-search-input" />
       </div>
       <div v-if="localShellButtons.length" class="local-shell-launcher"
         :style="{ '--local-shell-button-count': localShellButtons.length }">
@@ -584,10 +620,15 @@ const handleImportSessions = async () => {
       </div>
       <ContextMenu v-if="sshStore.savedSessions.length > 0">
         <ContextMenuTrigger as-child>
-          <div class="session-tree-viewport" @scroll="onVirtualScroll" @contextmenu.capture="prepareContextMenu">
+          <div ref="viewportRef" class="session-tree-viewport" tabindex="0" role="tree" aria-label="已保存的会话"
+            :aria-activedescendant="selectedNodeKey ? `session-tree-${selectedNodeKey}` : undefined"
+            @keydown="handleTreeKeydown" @scroll="onVirtualScroll" @contextmenu.capture="prepareContextMenu">
+            <div v-if="!filteredSessions.length" class="empty-tip">没有匹配的会话，试试其他关键词</div>
             <div :style="{ height: totalHeight + 'px', position: 'relative' }">
               <div :style="{ transform: `translateY(${translateY}px)` }">
                 <div v-for="item in visibleItems" :key="item.key" class="tree-row"
+                  :id="`session-tree-${item.key}`" role="treeitem" :aria-level="item._depth + 1"
+                  :aria-selected="selectedNodeKey === item.key" :aria-expanded="item._isGroup ? expandedKeys.includes(item.key) : undefined"
                   :class="{
                     'drag-over': dragOverGroupName === (item.data?.groupName || item.title),
                     'is-dragging': draggingGroupName === (item.data?.groupName || item.title)
@@ -595,7 +636,7 @@ const handleImportSessions = async () => {
                   :data-session-context-key="item.key"
                   :data-group-name="item._isGroup ? (item.data?.groupName || item.title) : null"
                   :style="{ paddingLeft: (item._depth * 16 + 4) + 'px', height: '34px' }"
-                  @click="onTreeRowClick(item)"
+                  @click="selectedNodeKey = item.key; onTreeRowClick(item)"
                   @dblclick="item.isLeaf ? sshStore.connectStoredSession(item.key) : null">
 
                   <span v-if="item._isGroup" class="tree-arrow"
@@ -669,6 +710,10 @@ const handleImportSessions = async () => {
 </template>
 
 <style scoped>
+.session-heading { display: flex; align-items: center; gap: 6px; min-height: 36px; padding: 4px 8px; border-bottom: 1px solid var(--app-panel-border); }
+.session-heading strong { font-size: 13px; }
+.tree-row[aria-selected="true"] { background: var(--app-selection-bg); box-shadow: inset 2px 0 var(--color-primary); }
+.session-tree-viewport:focus-visible { outline: 1px solid var(--app-focus-border); outline-offset: -1px; }
 .session-panel {
   display: flex;
   flex-direction: column;

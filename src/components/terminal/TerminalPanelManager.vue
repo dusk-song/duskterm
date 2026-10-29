@@ -1,7 +1,7 @@
 <script setup>
 import { X } from '@lucide/vue';
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
-import { computeSplitLayout } from '@/utils/splitTree';
+import { computeSplitLayout, getSplitLeafStyle } from '@/utils/splitTree';
 import { TooltipHint } from '@/components/ui/tooltip';
 import {
   loadTerminalThemeSettings,
@@ -180,24 +180,7 @@ const panelLayouts = computed(() => props.panels.map((panel) => {
     dividers: layout.dividers
   };
 }));
-const SPLIT_PANEL_GAP = 8;
-const SPLIT_EDGE_EPSILON = 0.001;
-const leafStyle = (leaf) => {
-  const halfGap = SPLIT_PANEL_GAP / 2;
-  const right = leaf.x + leaf.width;
-  const bottom = leaf.y + leaf.height;
-  const insetLeft = leaf.x > SPLIT_EDGE_EPSILON ? halfGap : 0;
-  const insetTop = leaf.y > SPLIT_EDGE_EPSILON ? halfGap : 0;
-  const insetRight = right < 100 - SPLIT_EDGE_EPSILON ? halfGap : 0;
-  const insetBottom = bottom < 100 - SPLIT_EDGE_EPSILON ? halfGap : 0;
-
-  return {
-    left: `calc(${leaf.x}% + ${insetLeft}px)`,
-    top: `calc(${leaf.y}% + ${insetTop}px)`,
-    width: `calc(${leaf.width}% - ${insetLeft + insetRight}px)`,
-    height: `calc(${leaf.height}% - ${insetTop + insetBottom}px)`
-  };
-};
+const leafStyle = getSplitLeafStyle;
 const dividerStyle = (divider) => divider.direction === 'vertical'
   ? { left: `${divider.x}%`, top: `${divider.y}%`, height: `${divider.height}%` }
   : { left: `${divider.x}%`, top: `${divider.y}%`, width: `${divider.width}%` };
@@ -224,9 +207,9 @@ const panelStripStyle = computed(() => isClassicTabs.value
       <div class="panel-scroll-strip" :style="panelStripStyle"
         :class="{ transitioning: isTransitioning && !isClassicTabs, 'is-stacked': isClassicTabs }"
         @transitionend="onTransitionEnd">
-        <div v-for="entry in panelLayouts" :key="entry.panel.id" class="scroll-pane"
+        <div v-for="entry in panelLayouts" :key="entry.panel.id" class="scroll-pane" :data-panel-id="entry.panel.id"
           :class="{ 'is-active': entry.panel.id === activePanelId }">
-          <div v-for="leaf in entry.leaves" :key="leaf.sessionId" class="split-leaf"
+          <div v-for="leaf in entry.leaves" :key="leaf.sessionId" class="split-leaf" :data-session-id="leaf.sessionId"
             :class="{ 'split-focused': entry.leaves.length > 1 && focusedLeaf[entry.panel.id] === leaf.sessionId }"
             :style="leafStyle(leaf)"
             @mousedown="onSetFocused(entry.panel.id, leaf.sessionId)">
@@ -297,10 +280,11 @@ const panelStripStyle = computed(() => isClassicTabs.value
 .panel-scroll-strip {
   display: flex;
   height: 100%;
-  will-change: transform;
+  will-change: auto;
 }
 
 .panel-scroll-strip.transitioning {
+  will-change: transform;
   transition: transform 150ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -343,6 +327,7 @@ const panelStripStyle = computed(() => isClassicTabs.value
 }
 
 .split-leaf {
+  contain: layout style;
   position: absolute;
   display: flex;
   flex-direction: column;
@@ -362,6 +347,9 @@ const panelStripStyle = computed(() => isClassicTabs.value
   background: transparent;
   transition: opacity 120ms ease;
 }
+
+.split-divider::after { content: ''; position: absolute; inset: 2px; border-radius: 2px; background: transparent; }
+.split-divider:hover::after { background: var(--app-focus-border); }
 
 .divider-vertical {
   width: 8px;

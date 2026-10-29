@@ -336,7 +336,7 @@ watch(() => currentChannelDraft.value?.sourceMode, (mode) => {
         <DialogDescription class="sr-only">管理临时同步输入频道、会话成员与广播规则</DialogDescription>
       </DialogHeader>
 
-      <div class="flex min-h-0 flex-1 gap-3 overflow-hidden px-1 pb-1">
+      <div class="sync-dialog-layout flex min-h-0 flex-1 gap-3 overflow-hidden px-1 pb-1">
         <div class="sync-channel-sidebar flex w-[220px] shrink-0 flex-col rounded-md border border-border bg-muted/20">
           <div class="flex items-center justify-between border-b border-border px-3 py-2">
             <span class="text-xs font-semibold text-foreground">频道列表</span>
@@ -364,7 +364,7 @@ watch(() => currentChannelDraft.value?.sourceMode, (mode) => {
           </div>
         </div>
 
-        <div class="flex min-w-0 flex-1 gap-3 overflow-hidden">
+        <div class="sync-dialog-main flex min-w-0 flex-1 gap-3 overflow-hidden">
           <div class="flex min-w-0 flex-[1.2] flex-col rounded-md border border-border bg-muted/10">
             <div class="flex items-center justify-between border-b border-border px-3 py-2">
               <span class="text-xs font-semibold text-foreground">会话选择</span>
@@ -419,7 +419,7 @@ watch(() => currentChannelDraft.value?.sourceMode, (mode) => {
             </div>
           </div>
 
-          <div class="flex w-[280px] shrink-0 flex-col rounded-md border border-border bg-muted/10">
+          <div class="sync-rules flex w-[280px] shrink-0 flex-col rounded-md border border-border bg-muted/10">
             <div class="flex items-center justify-between border-b border-border px-3 py-2">
               <span class="text-xs font-semibold text-foreground">频道规则</span>
               <Button size="sm" variant="ghost" @click="deleteCurrentChannel" :disabled="!currentChannelDraft">删除频道</Button>
@@ -509,3 +509,13 @@ watch(() => currentChannelDraft.value?.sourceMode, (mode) => {
     </DialogContent>
   </Dialog>
 </template>
+
+<style scoped>
+@media (max-width: 900px) {
+  .sync-dialog-layout { overflow-y: auto; display: block; }
+  .sync-channel-sidebar { width: 100%; max-height: 140px; margin-bottom: 10px; }
+  .sync-dialog-main { display: block; overflow: visible; }
+  .sync-dialog-main > div { overflow: visible; }
+  .sync-rules { width: 100%; margin-top: 10px; }
+}
+</style>

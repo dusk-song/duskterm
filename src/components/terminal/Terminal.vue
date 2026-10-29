@@ -154,6 +154,10 @@ const syncBadgeState = ref({
   broadcastEnabled: false,
 });
 const nonPrimaryInputWarnAt = ref(0);
+const openSyncSettings = () => window.dispatchEvent(new CustomEvent('app:open-sync-input'));
+const pauseSyncChannel = () => window.dispatchEvent(new CustomEvent('app:pause-sync-channel', {
+  detail: { channelId: syncBadgeState.value.channelId },
+}));
 let serialWriteErrorToastAt = 0;
 const serialReceiveVisible = ref(true);
 const serialRawReceiveChunks = ref([]);
@@ -2750,6 +2754,10 @@ function handleResize() {
 }
 
 function handleLayoutResize() {
+  if (isLayoutDragging && deferLayoutFit) {
+    needsFitOnActivation = true;
+    return;
+  }
   if (!props.active) {
     needsFitOnActivation = true;
     return;
@@ -2778,6 +2786,17 @@ function handleLayoutDragging(event) {
   }
   isLayoutDragging = layoutDragSources.size > 0;
   deferLayoutFit = isLayoutDragging && [...layoutDragSources.values()].some(Boolean);
+  if (isLayoutDragging && deferLayoutFit) {
+    // A resize callback queued before the gesture must not reflow the terminal mid-drag.
+    if (resizeTimeout) clearTimeout(resizeTimeout);
+    resizeTimeout = null;
+    if (layoutFitRafId) cancelAnimationFrame(layoutFitRafId);
+    layoutFitRafId = null;
+    if (dragFitRafId) cancelAnimationFrame(dragFitRafId);
+    dragFitRafId = null;
+    if (dragFitTimerId) clearTimeout(dragFitTimerId);
+    dragFitTimerId = null;
+  }
   if (!isLayoutDragging) {
     deferLayoutFit = false;
     if (dragFitRafId) {
@@ -3606,6 +3625,13 @@ onUnmounted(() => {
 
 <template>
   <div ref="terminalWrapperRef" class="terminal-wrapper">
+    <div v-if="syncBadgeState.visible" class="terminal-sync-status" :class="{ broadcasting: syncBadgeState.broadcastEnabled }">
+      <button type="button" class="sync-status-label" @click="openSyncSettings">
+        {{ syncBadgeState.channelName }} · {{ syncBadgeState.broadcastEnabled ? '同步中' : '已暂停' }} · {{ syncBadgeState.connectedCount }} 个终端
+        <span v-if="syncBadgeState.sourceMode === 'primary'"> · {{ syncBadgeState.isPrimary ? '主控' : '受控' }}</span>
+      </button>
+      <button v-if="syncBadgeState.broadcastEnabled" type="button" @click="pauseSyncChannel">暂停同步</button>
+    </div>
     <div class="terminal-main">
         <div v-if="terminalTransferOwned" class="terminal-transfer-overlay">
           ZMODEM 传输中 · 终端输入已暂停
@@ -3720,6 +3746,7 @@ onUnmounted(() => {
       <TooltipHint text="区分大小写" side="bottom">
         <button type="button" class="terminal-find-button terminal-find-icon-button option-button"
           :class="{ active: searchOptions.matchCase }" aria-label="区分大小写"
+          :aria-pressed="searchOptions.matchCase"
           @click="toggleSearchOption('matchCase')">
           <CaseSensitive :size="15" stroke-width="1.9" />
         </button>
@@ -3727,6 +3754,7 @@ onUnmounted(() => {
       <TooltipHint text="全词匹配" side="bottom">
         <button type="button" class="terminal-find-button terminal-find-icon-button option-button"
           :class="{ active: searchOptions.wholeWord }" aria-label="全词匹配"
+          :aria-pressed="searchOptions.wholeWord"
           @click="toggleSearchOption('wholeWord')">
           <WholeWord :size="15" stroke-width="1.9" />
         </button>
@@ -3734,6 +3762,7 @@ onUnmounted(() => {
       <TooltipHint text="正则表达式" side="bottom">
         <button type="button" class="terminal-find-button terminal-find-icon-button option-button"
           :class="{ active: searchOptions.regex }" aria-label="正则表达式"
+          :aria-pressed="searchOptions.regex"
           @click="toggleSearchOption('regex')">
           <Regex :size="15" stroke-width="1.9" />
         </button>
@@ -3826,6 +3855,11 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.terminal-sync-status { display: flex; flex-shrink: 0; align-items: center; justify-content: space-between; gap: 8px; min-height: 30px; padding: 3px 10px; border-bottom: 1px solid var(--app-panel-border); color: var(--app-text-muted); background: var(--app-panel-bg); font: 12px var(--app-font-family); }
+.terminal-sync-status.broadcasting { color: var(--app-risk-warning); background: var(--app-risk-warning-bg); }
+.terminal-sync-status button { padding: 3px 5px; border: 0; border-radius: 4px; color: inherit; background: transparent; white-space: nowrap; }
+.terminal-sync-status .sync-status-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; text-align: left; }
+.terminal-sync-status button:hover, .terminal-sync-status button:focus-visible { background: var(--app-btn-hover); outline: 1px solid var(--app-focus-border); }
 .terminal-wrapper {
   width: 100%;
   height: 100%;
@@ -3833,7 +3867,7 @@ onUnmounted(() => {
   flex-direction: column;
   align-items: stretch;
   box-sizing: border-box;
-  background-color: var(--terminal-surface-bg, var(--app-bg-dialog));
+  background-color: var(--terminal-theme-bg, var(--terminal-surface-bg, var(--app-bg-dialog)));
   position: relative;
   overflow: hidden;
   border-radius: 0;

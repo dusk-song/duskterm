@@ -34,3 +34,8 @@ tests/
 .agents/
 design-system/
 landing/
+
+# Personal task records (keep existing tracked project documents)
+/doc/task/
+/docs/task/agent.md
+/docs/task/task-ui-polish-resize.md

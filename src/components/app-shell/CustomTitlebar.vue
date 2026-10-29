@@ -1,6 +1,6 @@
 <script setup>
 import { Copy, FolderOpen, Minus, Moon, Square, Sun, X } from '@lucide/vue';
-import { onMounted, onUnmounted, ref } from 'vue';
+import { nextTick, onMounted, onUnmounted, ref } from 'vue';
 import { executeMenuAction } from '@/composables/useMenu';
 import { useTheme } from '@/composables/useTheme';
 import { useWindowChrome } from '@/composables/useWindowChrome';
@@ -69,7 +69,11 @@ const updateTitlebarSideClearance = () => {
   if (next > 0 && next !== titlebarSideClearance.value) titlebarSideClearance.value = next;
 };
 
-const closeMenu = () => { openKey.value = ''; };
+let activeMenuTrigger = null;
+const closeMenu = (restoreFocus = false) => {
+  openKey.value = '';
+  if (restoreFocus) activeMenuTrigger?.focus();
+};
 const itemChecked = (key) => ({
   view_tool_sessions: props.sessionPanelActive,
   view_tool_sftp: props.sftpActive,
@@ -85,16 +89,55 @@ const handleClick = (key) => {
 function openMenu(key, event) {
   if (openKey.value === key) return closeMenu();
   const rect = event.currentTarget.getBoundingClientRect();
+  activeMenuTrigger = event.currentTarget;
   dropdownPos.value = { top: rect.bottom + 4, left: rect.left };
   openKey.value = key;
 }
 function hoverMenu(key, event) {
   if (!openKey.value || openKey.value === key) return;
   const rect = event.currentTarget.getBoundingClientRect();
+  activeMenuTrigger = event.currentTarget;
   dropdownPos.value = { top: rect.bottom + 4, left: rect.left };
   openKey.value = key;
 }
-const dropdownStyle = () => ({ position: 'fixed', top: `${dropdownPos.value.top}px`, left: `${dropdownPos.value.left}px` });
+const dropdownStyle = () => ({ position: 'fixed', top: `${dropdownPos.value.top}px`,
+  left: `${Math.max(8, Math.min(dropdownPos.value.left, window.innerWidth - 236))}px`,
+  maxHeight: `${Math.max(80, window.innerHeight - dropdownPos.value.top - 8)}px`, overflowY: 'auto' });
+function onMenuTriggerKeydown(event, key) {
+  if (!['ArrowDown', 'ArrowUp', 'ArrowLeft', 'ArrowRight'].includes(event.key)) return;
+  event.preventDefault();
+  if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+    const index = menus.findIndex((menu) => menu.key === key);
+    titlebarLeftRef.value?.querySelectorAll('.tb-menu-item')[(index + (event.key === 'ArrowRight' ? 1 : -1) + menus.length) % menus.length]?.focus();
+    return;
+  }
+  if (openKey.value !== key) openMenu(key, event);
+  nextTick(() => {
+    const entries = document.querySelectorAll('.tb-dropdown .tb-entry:not(:disabled)');
+    entries[event.key === 'ArrowUp' ? entries.length - 1 : 0]?.focus();
+  });
+}
+function onMenuKeydown(event) {
+  if (event.key === 'Escape') { event.preventDefault(); closeMenu(true); return; }
+  if (event.key === 'Tab') { closeMenu(); return; }
+  const entries = Array.from(event.currentTarget.querySelectorAll('.tb-entry:not(:disabled)'));
+  const index = entries.indexOf(document.activeElement);
+  let next;
+  if (event.key === 'ArrowDown') next = (index + 1) % entries.length;
+  else if (event.key === 'ArrowUp') next = (index - 1 + entries.length) % entries.length;
+  else if (event.key === 'Home') next = 0;
+  else if (event.key === 'End') next = entries.length - 1;
+  else if (event.key === 'ArrowLeft' || event.key === 'ArrowRight') {
+    const menuIndex = menus.findIndex((menu) => menu.key === openKey.value);
+    const nextIndex = (menuIndex + (event.key === 'ArrowRight' ? 1 : -1) + menus.length) % menus.length;
+    const trigger = titlebarLeftRef.value?.querySelectorAll('.tb-menu-item')[nextIndex];
+    if (trigger) onMenuTriggerKeydown({ key: 'ArrowDown', preventDefault() {}, currentTarget: trigger }, menus[nextIndex].key);
+    event.preventDefault();
+    return;
+  } else return;
+  event.preventDefault();
+  entries[next]?.focus();
+}
 const itemShortcut = (item) => item?.bindingKey
   ? String(props.keybindings[item.bindingKey] || '')
   : String(item?.shortcut || '');
@@ -113,7 +156,7 @@ function onKeydown(event) {
   parts.push(event.key.length === 1 ? event.key.toUpperCase() : event.key);
   const action = shortcuts[parts.join('+').toLowerCase()];
   if (action) { event.preventDefault(); executeMenuAction(action); }
-  if (event.key === 'Escape') closeMenu();
+  if (event.key === 'Escape' && openKey.value) { event.preventDefault(); closeMenu(true); }
 }
 function onDocumentClick(event) {
   if (!event.target.closest('.tb-menu-item') && !event.target.closest('.tb-dropdown')) closeMenu();
@@ -142,6 +185,7 @@ onUnmounted(() => {
       <DuskDock class="menu-dock" interactive>
         <img src="/tauri.svg" class="app-icon" alt="DuskTerm" draggable="false" />
         <button v-for="menu in menus" :key="menu.key" class="tb-menu-item" :class="{ open: openKey === menu.key }"
+          aria-haspopup="menu" :aria-expanded="openKey === menu.key" @keydown="onMenuTriggerKeydown($event, menu.key)"
           @click.stop="openMenu(menu.key, $event)" @mouseenter="hoverMenu(menu.key, $event)">{{ menu.label }}</button>
       </DuskDock>
     </div>
@@ -153,7 +197,7 @@ onUnmounted(() => {
         <TransferDock :expanded="props.transferVisible"
           @toggle="emit('toggle-transfer')" />
         <IconButton :icon="FolderOpen" size="sm" tone="primary" :active="props.sftpActive"
-          :disabled="props.sftpDisabled" aria-label="文件管理（F9）" :action="() => emit('toggle-sftp')" />
+          :disabled="props.sftpDisabled" :aria-label="`文件管理${props.keybindings.sftpPanel ? `（${props.keybindings.sftpPanel}）` : ''}`" :action="() => emit('toggle-sftp')" />
         <IconButton :icon="isDark ? Sun : Moon" size="sm"
           :aria-label="isDark ? '切换亮色主题' : '切换暗色主题'" :action="toggleTheme" />
         <IconButton :icon="Minus" size="sm" aria-label="最小化" :action="minimize" />
@@ -163,10 +207,10 @@ onUnmounted(() => {
       </DuskDock>
     </div>
     <Teleport to="body">
-      <div v-if="openKey" class="tb-dropdown" :style="dropdownStyle()" @click.stop>
+      <div v-if="openKey" class="tb-dropdown" role="menu" :style="dropdownStyle()" @keydown="onMenuKeydown" @click.stop>
         <template v-for="(item, index) in menus.find((menu) => menu.key === openKey)?.items" :key="item.key || index">
           <div v-if="item.type === 'divider'" class="tb-divider" />
-          <button v-else class="tb-entry" :class="{ checked: itemChecked(item.key) }"
+          <button v-else class="tb-entry" role="menuitem" :class="{ checked: itemChecked(item.key) }"
             :disabled="itemDisabled(item.key)" @click="handleClick(item.key)">
             <span class="tb-entry-label"><span class="tb-check">{{ itemChecked(item.key) ? '✓' : '' }}</span>{{ item.label }}</span>
             <span v-if="itemShortcut(item)" class="tb-shortcut">{{ itemShortcut(item) }}</span>
@@ -188,6 +232,13 @@ onUnmounted(() => {
 .tb-menu-item { height: 24px; flex: 0 0 auto; padding: 0 7px; border: 0; border-radius: var(--icon-btn-rect-radius, 8px); color: var(--tb-text, var(--app-text)); background: transparent; font-size: 12px; white-space: nowrap; cursor: default; }
 .tb-menu-item:hover, .tb-menu-item.open { background: var(--tb-hover-bg, color-mix(in srgb, var(--app-text) 8%, transparent)); }
 .utility-dock { min-width: max-content; flex: 0 0 auto; gap: 1px; padding: 0 4px; }
+.tb-menu-item:focus-visible { outline: 1px solid var(--app-focus-border); background: var(--app-focus-bg); }
+@media (max-width: 620px) {
+  .menu-dock { padding: 0 4px; }
+  .app-icon { display: none; }
+  .tb-menu-item { padding: 0 4px; }
+  .utility-dock { padding: 0 2px; }
+}
 </style>
 
 <style>
@@ -202,7 +253,7 @@ html[data-window-drag-mode="native-region"] .window-no-drag {
 }
 .tb-dropdown { min-width: 220px; padding: 5px; border: 1px solid var(--tb-dropdown-border, var(--app-border-shadow)); border-radius: 9px; background: color-mix(in srgb, var(--tb-dropdown-bg, var(--app-bg-dialog)) 95%, transparent); box-shadow: var(--niri-shadow-dialog); backdrop-filter: blur(12px); z-index: var(--z-dropdown); }
 .tb-entry { display: flex; width: 100%; min-height: 28px; align-items: center; justify-content: space-between; padding: 0 9px; border: 0; border-radius: 6px; color: var(--tb-text, var(--app-text)); background: transparent; font-size: 12px; }
-.tb-entry:hover { background: var(--tb-entry-hover, color-mix(in srgb, var(--app-text) 8%, transparent)); }
+.tb-entry:hover, .tb-entry:focus-visible { outline: none; background: var(--tb-entry-hover, color-mix(in srgb, var(--app-text) 8%, transparent)); }
 .tb-entry:disabled { opacity: .38; }
 .tb-entry-label { display: inline-flex; align-items: center; }
 .tb-check { display: inline-block; width: 16px; color: var(--color-primary); }

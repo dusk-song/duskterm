@@ -330,6 +330,8 @@ watch(
   { immediate: true }
 );
 
+watch(isVisible, scheduleNextNode);
+
 watch(
   () => [settings.value.positionTop, settings.value.positionRight, settings.value.scale].join('|'),
   () => {
@@ -350,7 +352,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="petHostRef" v-if="displayNode" class="desktop-pet-layer" :class="{ 'is-dragging': isDragging }"
+  <div ref="petHostRef" v-if="displayNode && isVisible" class="desktop-pet-layer" :class="{ 'is-dragging': isDragging }"
     :style="petLayerStyle">
     <div class="desktop-pet-stage" :style="petStageStyle">
       <TooltipHint :text="dragHintVisible ? dragButtonTitle : ''">

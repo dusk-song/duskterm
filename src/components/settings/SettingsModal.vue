@@ -65,6 +65,8 @@ let persistedBackgroundIds = new Set();
 const temporaryBackgroundIds = new Set();
 const pendingBackgroundCleanupIds = new Set();
 const backgroundImporting = ref(false);
+const saving = ref(false);
+const saveError = ref('');
 let backgroundPreviewFrame = null;
 
 const getBackgroundResourceIds = (settings) => {
@@ -197,6 +199,7 @@ const currentLockPassword = ref('');
 // Sync when opening
 watch(() => props.visible, (val) => {
   if (val) {
+    saveError.value = '';
     // Reset password fields
     lockPassword.value = '';
     lockPasswordConfirm.value = '';
@@ -219,6 +222,17 @@ watch(() => props.visible, (val) => {
 });
 
 const handleSave = async () => {
+  if (saving.value || backgroundImporting.value) return;
+  saving.value = true;
+  saveError.value = '';
+  try {
+    await saveSettings();
+  } finally {
+    saving.value = false;
+  }
+};
+
+const saveSettings = async () => {
   if (backgroundImporting.value) return;
   cancelMainUiSettingsPreview();
   if (keybindingConflictEntries.value.length > 0) {
@@ -234,13 +248,13 @@ const handleSave = async () => {
     savePreference('keybindings', keybindings.value);
     window.dispatchEvent(new CustomEvent('keybindings-changed'));
   } catch (e) {
-    toast.error('快捷键保存失败');
+    saveError.value += '快捷键保存失败。';
   }
   try {
     saveTerminalThemeSettings(terminalThemeSettings.value);
     window.dispatchEvent(new CustomEvent('terminal-theme-changed'));
   } catch (e) {
-    toast.error('终端样式保存失败');
+    saveError.value += '终端样式保存失败。';
   }
   let mainUiSaved = false;
   try {
@@ -248,13 +262,13 @@ const handleSave = async () => {
     window.dispatchEvent(new CustomEvent('main-ui-settings-changed'));
     mainUiSaved = true;
   } catch (e) {
-    toast.error('主界面设置保存失败');
+    saveError.value += '主界面设置保存失败。';
   }
   try {
     savePreference('commandHistory', commandHistorySettings.value);
     commandHistoryStore.setEnabled(commandHistorySettings.value.enabled);
   } catch (e) {
-    toast.error('命令历史设置保存失败');
+    saveError.value += '命令历史设置保存失败。';
   }
   if (!mainUiSaved) return;
   const normalizedRecentSessions = normalizeMainUiSettings(mainUiSettings.value).recentSessions;
@@ -262,7 +276,7 @@ const handleSave = async () => {
     try {
       await invokeCommand('trim_recent_sessions', { limit: normalizedRecentSessions.limit });
     } catch (e) {
-      toast.error('最近会话数量应用失败');
+      saveError.value += '最近会话数量应用失败。';
     }
   }
   const currentBackgroundIds = getBackgroundResourceIds(mainUiSettings.value);
@@ -277,13 +291,14 @@ const handleSave = async () => {
   failedCleanupIds.forEach((resourceId) => pendingBackgroundCleanupIds.add(resourceId));
   temporaryBackgroundIds.clear();
   persistedBackgroundIds = currentBackgroundIds;
+  if (saveError.value) return;
   emit('update:visible', false);
   if (failedCleanupIds.length) toast.error('部分旧背景文件暂时无法清理，将在下次启动时重试');
   toast.success('设置已保存');
 };
 
 const handleCancel = async () => {
-  if (backgroundImporting.value) return;
+  if (backgroundImporting.value || saving.value) return;
   cancelMainUiSettingsPreview();
   const cleanupCandidates = [...temporaryBackgroundIds, ...pendingBackgroundCleanupIds];
   window.dispatchEvent(new CustomEvent('main-ui-settings-changed'));
@@ -549,7 +564,7 @@ async function verifyAndChange() {
         <DialogDescription class="sr-only">配置应用的安全、外观、终端、快捷键等设置</DialogDescription>
       </DialogHeader>
 
-      <div class="flex-1 min-h-0 flex overflow-hidden">
+      <div class="flex-1 min-h-0 flex overflow-hidden" :inert="saving || undefined">
         <div class="config-tab-sidebar flex flex-col gap-0.5 w-34 shrink-0 pr-2 border-r border-border">
           <button v-for="tab in settingsTabs" :key="tab.key" type="button" :disabled="backgroundImporting"
             :class="['flex items-center gap-2 px-2 py-1.5 rounded text-sm text-left outline-none transition-[background,color,box-shadow]', 'focus-visible:bg-[var(--app-focus-bg)] focus-visible:text-foreground focus-visible:shadow-[var(--app-focus-shadow)]', activeKey === tab.key ? 'bg-primary/15 text-primary font-semibold' : 'text-muted-foreground hover:text-foreground']"
@@ -594,8 +609,9 @@ async function verifyAndChange() {
       </div>
 
       <DialogFooter>
-        <Button variant="outline" size="sm" :disabled="backgroundImporting" @click="handleCancel">取消</Button>
-        <Button size="sm" :disabled="backgroundImporting" @click="handleSave">保存</Button>
+        <p v-if="saveError" role="alert" class="mr-auto text-xs text-destructive">{{ saveError }}已保存的项目保留，可重试。</p>
+        <Button variant="outline" size="sm" :disabled="backgroundImporting || saving" @click="handleCancel">取消</Button>
+        <Button size="sm" :disabled="backgroundImporting || saving" @click="handleSave">{{ saving ? '保存中…' : '保存' }}</Button>
       </DialogFooter>
     </DialogContent>
   </Dialog>

@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useTheme } from '@/composables/useTheme';
 import { normalizeBackgroundSettings, resolveBackgroundUrl } from '@/utils/background';
 import { invokeCommand } from '@/utils/ipc';
+import { isReducedPerformance } from '@/utils/performance';
 
 const props = defineProps({ settings: { type: Object, default: () => ({}) } });
 const emit = defineEmits(['availability-change']);
@@ -11,6 +12,7 @@ const config = computed(() => normalizeBackgroundSettings(props.settings));
 const mediaUrl = ref('');
 const resolvedMediaType = ref('image');
 const videoRef = ref(null);
+const layoutSuspended = ref(false);
 let resolveToken = 0;
 let lastDisplayTarget = '';
 let resizeTimer = null;
@@ -58,7 +60,7 @@ const syncVideoPlayback = () => {
   const video = videoRef.value;
   if (!video) return;
   video.muted = true;
-  if (document.hidden || !config.value.enabled || config.value.opacity <= 0) {
+  if (document.hidden || layoutSuspended.value || isReducedPerformance() || !config.value.enabled || config.value.opacity <= 0) {
     video.pause();
     return;
   }
@@ -138,6 +140,11 @@ watch(
   { immediate: true }
 );
 watch(() => config.value.opacity, syncVideoPlayback);
+watch(isReducedPerformance, syncVideoPlayback);
+watch(layoutSuspended, syncVideoPlayback);
+const handleLayoutInteraction = () => {
+  layoutSuspended.value = document.documentElement.hasAttribute('data-layout-interacting');
+};
 
 const fitStyle = computed(() => {
   const fit = config.value.fit;
@@ -175,11 +182,13 @@ const overlayStyle = computed(() => ({
 }));
 
 onMounted(() => {
+  window.addEventListener('terminal-layout-dragging', handleLayoutInteraction);
   document.addEventListener('visibilitychange', syncVideoPlayback);
   window.addEventListener('resize', scheduleDisplayRefresh);
 });
 
 onBeforeUnmount(() => {
+  window.removeEventListener('terminal-layout-dragging', handleLayoutInteraction);
   resolveToken += 1;
   if (resizeTimer) clearTimeout(resizeTimer);
   document.removeEventListener('visibilitychange', syncVideoPlayback);

@@ -15,11 +15,11 @@ import {
   resolveTransferLocateTarget,
 } from '@/utils/transferPanel';
 import { revealItemInDir } from '@tauri-apps/plugin-opener';
-import { ChevronDown, ChevronUp, FolderOpen, LoaderCircle, Pause, Trash2, X } from '@lucide/vue';
+import { ChevronDown, ChevronUp, FolderOpen, LoaderCircle, Trash2, X } from '@lucide/vue';
 import { storeToRefs } from 'pinia';
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 
-defineProps({ expanded: Boolean });
+const props = defineProps({ expanded: Boolean });
 const emit = defineEmits(['toggle', 'close']);
 
 const transferStore = useTransfersStore();
@@ -43,7 +43,7 @@ const stopClock = () => {
 };
 
 onMounted(() => {
-  stopClockWatch = watch(needsLiveClock, (active) => {
+  stopClockWatch = watch(() => props.expanded && needsLiveClock(), (active) => {
     stopClock();
     if (!active) return;
     clock.value = typeof performance !== 'undefined' ? performance.now() : Date.now();
@@ -58,22 +58,9 @@ onUnmounted(() => {
   stopClock();
 });
 
-const statusOrder = {
-  uploading: 0,
-  transferring: 0,
-  finalizing: 1,
-  negotiating: 2,
-  waiting: 3,
-  cancelling: 4,
-  failed: 5,
-  success: 6,
-  cancelled: 7,
-  skipped: 8,
-};
 
-const orderedItems = computed(() => [...status.value.items].sort((a, b) => (
-  (statusOrder[a.status] ?? 9) - (statusOrder[b.status] ?? 9)
-)));
+// Keep rows stable while tasks change phase, so pointer targets never jump away.
+const orderedItems = computed(() => status.value.items);
 const activeItems = computed(() => orderedItems.value.filter(isActiveTransfer));
 const failedItems = computed(() => orderedItems.value.filter((item) => item.status === 'failed'));
 const clearableItems = computed(() => orderedItems.value.filter(isClearableTransfer));
@@ -198,7 +185,6 @@ const isCompact = (item) => COMPACT_TRANSFER_STATUSES.has(item.status);
 const canCancel = (item) => (
   ACTIVE_TRANSFER_STATUSES.has(item.status) && item.status !== 'cancelling' && item.status !== 'paused'
 );
-const showsPausePlaceholder = (item) => ['uploading', 'transferring'].includes(item.status);
 const canRemove = (item) => !isActiveTransfer(item)
   && (item.protocol !== 'zmodem' || item.terminalRestored);
 
@@ -348,11 +334,6 @@ const clearFinished = () => transferStore.clearFinishedTasks();
           <div class="transfer-task-side">
             <span class="transfer-state">{{ displayStatusLabel(item) }}</span>
             <div class="transfer-actions">
-              <TooltipHint v-if="showsPausePlaceholder(item)" text="暂不支持暂停">
-                <span class="disabled-action">
-                  <IconButton :icon="Pause" size="28px" aria-label="暂不支持暂停" :tooltip="false" disabled />
-                </span>
-              </TooltipHint>
               <IconButton v-if="canCancel(item)" :icon="X" size="28px" aria-label="取消传输"
                 tooltip-side="top" :action="() => cancel(item)" />
               <TooltipHint v-else-if="item.status === 'cancelling'" text="正在取消">
@@ -397,8 +378,7 @@ const clearFinished = () => transferStore.clearFinishedTasks();
   border-radius: 9px;
   background: color-mix(in srgb, var(--app-bg-dialog) 92%, transparent);
   box-shadow: var(--niri-shadow-panel);
-  backdrop-filter: blur(12px);
-  transition: flex-basis var(--app-motion-panel, 160ms ease);
+  transition: none;
 }
 
 .transfer-panel.expanded {

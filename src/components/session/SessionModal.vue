@@ -28,7 +28,7 @@ import {
   Zap
 } from '@lucide/vue';
 import { v4 as uuidv4 } from 'uuid';
-import { computed, onUnmounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onUnmounted, reactive, ref, watch } from 'vue';
 import { useSshStore } from '@/stores/ssh';
 import { invokeCommand } from '@/utils/ipc';
 
@@ -46,6 +46,30 @@ const dialogOpen = computed({
 
 const sshStore = useSshStore();
 const confirmLoading = ref(false);
+const formContentRef = ref(null);
+const validationError = ref(null);
+let invalidInput = null;
+const clearValidationError = () => {
+  invalidInput?.removeAttribute('aria-invalid');
+  invalidInput?.removeAttribute('aria-describedby');
+  invalidInput = null;
+  validationError.value = null;
+};
+const reportFieldError = (field, message) => {
+  clearValidationError();
+  validationError.value = { field, message };
+  activeConfigTab.value = ['connect_timeout', 'keep_alive_interval', 'serial_connect_delay_ms', 'serial_line_delay_ms'].includes(field)
+    ? 'connection' : 'basic';
+  nextTick(() => {
+    const wrapper = Array.from(formContentRef.value?.querySelectorAll('[name]') || [])
+      .find((element) => element.getAttribute('name') === field);
+    invalidInput = wrapper?.querySelector('input, textarea, [role="combobox"]') || null;
+    invalidInput?.setAttribute('aria-invalid', 'true');
+    invalidInput?.setAttribute('aria-describedby', 'session-validation-error');
+    invalidInput?.focus({ preventScroll: true });
+    wrapper?.scrollIntoView({ block: 'nearest' });
+  });
+};
 const isTestingConnection = ref(false);
 const activeProtocol = ref('ssh');
 const activeConfigTab = ref('basic');
@@ -241,6 +265,7 @@ const serialPortSelectOptions = computed(() => {
 
 // --- Lifecycle ---
 watch(() => props.visible, (val) => {
+  clearValidationError();
   if (!val) {
     serialPortRequestId += 1;
     serialPortsLoading.value = false;
@@ -621,14 +646,16 @@ const handleSelectJumpKeyFile = async () => {
 };
 
 const handleOk = async () => {
+  if (confirmLoading.value) return;
+  clearValidationError();
   // Code validation for the local form controls
   if (supportsHostPort.value) {
-    if (!formState.host?.trim()) { toast.error('请输入主机地址'); return; }
-    if (!formState.port || formState.port < 1 || formState.port > 65535) { toast.error('端口范围 1-65535'); return; }
+    if (!formState.host?.trim()) { reportFieldError('host', '请输入主机地址'); return; }
+    if (!formState.port || formState.port < 1 || formState.port > 65535) { reportFieldError('port', '端口范围 1-65535'); return; }
   }
-  if (isSshProtocol.value && !formState.username?.trim()) { toast.error('请输入用户名'); return; }
-  if (isSshProtocol.value && formState.auth_type === 'password' && !isEditMode.value && !formState.password) { toast.error('请输入密码'); return; }
-  if (isSshProtocol.value && formState.auth_type === 'key' && !formState.private_key_path?.trim()) { toast.error('请选择私钥文件'); return; }
+  if (isSshProtocol.value && !formState.username?.trim()) { reportFieldError('username', '请输入用户名'); return; }
+  if (isSshProtocol.value && formState.auth_type === 'password' && !isEditMode.value && !formState.password) { reportFieldError('password', '请输入密码'); return; }
+  if (isSshProtocol.value && formState.auth_type === 'key' && !formState.private_key_path?.trim()) { reportFieldError('private_key_path', '请选择私钥文件'); return; }
   if (!validateSerialFields()) return;
 
   confirmLoading.value = true;
@@ -697,7 +724,8 @@ const groupOptions = computed(() => {
       <DialogHeader>
         <DialogTitle>{{ sessionData ? '编辑会话' : '新建会话' }}</DialogTitle>
       </DialogHeader>
-      <div class="flex-1 min-h-0 overflow-y-auto px-4 py-2">
+      <div ref="formContentRef" class="session-form-content flex-1 min-h-0 overflow-y-auto px-4 py-2" @input="clearValidationError">
+        <p v-if="validationError" id="session-validation-error" role="alert" class="session-validation-error">{{ validationError.message }}</p>
         <div class="protocol-tabs mb-3">
           <div class="flex gap-1 mb-1">
             <button v-for="item in protocolOptions" :key="item.key"
@@ -1157,6 +1185,13 @@ const groupOptions = computed(() => {
 </template>
 
 <style scoped>
+.session-validation-error { position: sticky; top: 0; z-index: 2; margin: 0 0 8px; padding: 8px 10px; border: 1px solid var(--app-risk-danger-border); border-radius: 6px; background: var(--app-bg-dialog); color: var(--app-risk-danger); font-size: 12px; }
+@media (max-width: 700px) {
+  .session-form-content { padding-left: 0; padding-right: 0; }
+  .config-tabs { flex-direction: column; max-height: none !important; }
+  .config-tab-sidebar { width: 100% !important; flex-direction: row !important; flex-wrap: wrap; border-right: 0; margin-bottom: 10px; }
+  .form-item > :is(input, button, div) { max-width: calc(100vw - 180px); }
+}
 /* =============================================
    Tailwind @apply — 组件样式层
    ============================================= */

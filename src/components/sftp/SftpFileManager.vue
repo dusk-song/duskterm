@@ -91,7 +91,7 @@ const OPTIONAL_COLUMN_WIDTHS = Object.freeze({
   permissions: 92,
   ownerGroup: 104,
 });
-const renderedColumns = computed(() => {
+const renderedColumns = computed((previous) => {
   let remaining = Math.max(0, containerWidth.value - FILE_NAME_MIN_WIDTH);
   const result = { size: false, modified: false, permissions: false, ownerGroup: false };
   for (const key of ['size', 'modified', 'permissions', 'ownerGroup']) {
@@ -99,7 +99,7 @@ const renderedColumns = computed(() => {
     result[key] = true;
     remaining -= OPTIONAL_COLUMN_WIDTHS[key];
   }
-  return result;
+  return previous && Object.keys(result).every((key) => result[key] === previous[key]) ? previous : result;
 });
 const fileListColumns = computed(() => [
   `minmax(${FILE_NAME_MIN_WIDTH}px, 1fr)`,
@@ -198,6 +198,37 @@ const visibleRows = computed(() => listVirtual.visibleItems.value.map((item, idx
   index: listVirtual.startIndex.value + idx
 })));
 const ctxRecord = ref(null);
+const focusedFileIndex = ref(-1);
+
+function handleFileListKeydown(event) {
+  if (event.isComposing || event.target !== event.currentTarget || !connected.value) return;
+  const items = listItems.value;
+  if (!items.length) return;
+  let index = Math.min(items.length - 1, focusedFileIndex.value);
+  if (event.key === 'ArrowDown') index = Math.min(items.length - 1, index + 1);
+  else if (event.key === 'ArrowUp') index = Math.max(0, index - 1);
+  else if (event.key === 'Home') index = 0;
+  else if (event.key === 'End') index = items.length - 1;
+  else if (event.key === 'Enter' && index >= 0) {
+    event.preventDefault();
+    void handleRowDoubleClick(items[index]);
+    return;
+  } else if (event.key === 'Backspace') {
+    event.preventDefault();
+    void goUp();
+    return;
+  } else return;
+  event.preventDefault();
+  event.stopPropagation();
+  focusedFileIndex.value = index;
+  if (!items[index].__parent && !items[index].__draftFolder) selection.handleRowSelect(items[index], index, event);
+  const viewport = bodyScrollRef.value;
+  if (viewport) {
+    const top = index * listVirtual.rowHeight;
+    if (top < viewport.scrollTop) syncListScrollTop(top);
+    else if (top + listVirtual.rowHeight > viewport.scrollTop + viewport.clientHeight) syncListScrollTop(top + listVirtual.rowHeight - viewport.clientHeight);
+  }
+}
 
 function prepareContextMenu(event) {
   const row = event.target instanceof Element
@@ -331,6 +362,7 @@ function isCurrentSessionSync(sessionId, generation) {
 }
 
 function scheduleColumnLayout(width) {
+  if (!props.visible) return;
   const nextWidth = Math.round(Number(width) || 0);
   if (nextWidth <= 0) return;
   _pendingContainerWidth = nextWidth;
@@ -758,6 +790,7 @@ async function queryBackendSftpConnected(sessionId) {
 }
 
 async function syncVisibleSessionState(options = {}) {
+  if (!props.visible) return;
   const { restore = true, sessionId = props.sessionId, generation = sessionSyncGeneration } = options;
 
   if (!sessionId) {
@@ -984,6 +1017,8 @@ function rowClass(record) {
 
 function handleRowClick(record, index, event) {
   if (record.__draftFolder) return;
+  focusedFileIndex.value = index;
+  bodyScrollRef.value?.focus({ preventScroll: true });
   if (record.__parent) {
     navigateTo('..');
     return;
@@ -1022,6 +1057,7 @@ async function navigateTo(segment) {
   navigatingDir.value = true;
   try {
     currentPath.value = nextPath;
+    focusedFileIndex.value = -1;
     selection.clearSelection();
     const loaded = await loadDirectory();
     if (!loaded) throw new Error(netError.value || '目录加载失败');
@@ -1679,6 +1715,7 @@ async function handleClosePanel() {
 }
 
 watch(() => props.sessionId, async (nextSessionId, prevSessionId) => {
+  focusedFileIndex.value = -1;
   const generation = ++sessionSyncGeneration;
   if (prevSessionId && prevSessionId !== nextSessionId) {
     cachePanelStateForSession(prevSessionId);
@@ -1726,6 +1763,7 @@ watch(() => props.followSessionId, () => {
 });
 
 watch(() => followedTerminalSession.value?.cwd, async (cwd, previousCwd) => {
+  if (!props.visible) return;
   const normalized = normalizeTerminalCwd(cwd);
   if (!followTerminalPath.value || !normalized || normalized === normalizeTerminalCwd(previousCwd)) return;
   if (normalized === lastObservedTerminalCwd.value) return;
@@ -1733,6 +1771,7 @@ watch(() => followedTerminalSession.value?.cwd, async (cwd, previousCwd) => {
 });
 
 watch(activeSessionStatus, async (status, prevStatus) => {
+  if (!props.visible) return;
   if (!props.sessionId) return;
 
   if (status !== 'connected') {
@@ -1771,6 +1810,7 @@ onMounted(() => {
       console.warn('[SFTP] native file drag unavailable:', error);
     });
   resizeHandler = () => {
+    if (!props.visible) return;
     const height = bodyScrollRef.value?.clientHeight || viewportRef.value?.clientHeight || 400;
     listVirtual.setViewportHeight(height);
     syncListScrollTop(listVirtual.scrollTop.value);
@@ -1791,7 +1831,7 @@ onMounted(() => {
   sftpLayoutRefreshHandler = () => nextTick(() => {
     resizeHandler?.();
   });
-  sftpGoUpHandler = () => goUp();
+  sftpGoUpHandler = () => { if (props.visible) goUp(); };
   window.addEventListener('resize', scheduleResizeHandler);
   window.addEventListener('app:sftp-refresh-active', activeSftpRefreshHandler);
   window.addEventListener('app:sftp-layout-refresh', sftpLayoutRefreshHandler);
@@ -1855,7 +1895,8 @@ onUnmounted(() => {
       <span>释放以上传 {{ nativeDropPathCount ? `${nativeDropPathCount} 个项目` : '文件' }} 到 {{ nativeDropTargetPath }}</span>
     </div>
     <div class="fm-address fm-address-row">
-      <Input v-model="currentPath" @keyup.enter="manualRefresh" size="sm" class="flex-1" />
+      <div class="fm-panel-heading"><strong>文件管理</strong><span :class="{ online: connected }">{{ connected ? '已连接' : '未连接' }}</span></div>
+      <Input v-model="currentPath" @keyup.enter="manualRefresh" aria-label="远程目录路径" size="sm" class="flex-1 font-mono" />
       <div class="fm-actions">
         <IconButton :icon="ArrowLeft" size="sm" :disabled="currentPath === '/'" aria-label="返回上级目录"
           :action="goUp" />
@@ -1897,7 +1938,7 @@ onUnmounted(() => {
         <div class="fm-content" ref="viewportRef" @contextmenu.capture="prepareContextMenu">
           <div v-if="!connected" class="fm-state">
             <div>{{ initializing ? '正在连接 SFTP...' : (netError || '暂无连接') }}</div>
-            <!-- <a-button size="small" @click="retryConnection" :loading="initializing">重试</a-button> -->
+            <Button v-if="!initializing && activeSessionStatus === 'connected'" size="sm" variant="outline" @click="retryConnection">重新连接</Button>
           </div>
 
           <div v-else class="fm-table">
@@ -1911,17 +1952,20 @@ onUnmounted(() => {
               </div>
             </div>
 
-            <div class="fm-table-body" ref="bodyScrollRef" @scroll="handleBodyScroll">
+            <div class="fm-table-body" ref="bodyScrollRef" tabindex="0" role="listbox" aria-label="远程文件" aria-multiselectable="true"
+              :aria-activedescendant="focusedFileIndex >= 0 ? `sftp-file-${focusedFileIndex}` : undefined"
+              @keydown="handleFileListKeydown" @scroll="handleBodyScroll">
               <div v-if="navigatingDir || (directory.loading.value && listItems.length === 0)" class="fm-nav-loading-mask">
                 <LoadingSpinner tip="正在加载目录..." />
               </div>
-              <div v-else-if="netError" class="fm-list-state fm-list-error">{{ netError }}</div>
+              <div v-else-if="netError" class="fm-list-state fm-list-error" role="alert">{{ netError }} <Button size="sm" variant="outline" @click="manualRefresh">重试</Button></div>
               <div v-else-if="!directory.loading.value && listItems.length === 0" class="fm-list-state">目录为空</div>
               <div class="fm-body-inner" :style="{ height: listVirtual.totalHeight.value + 'px' }">
                 <div class="fm-virtual" :style="{ transform: `translateY(${listVirtual.translateY.value}px)` }">
                   <div v-for="row in visibleRows"
                     :key="row.item.__draftFolder ? '__draft-folder-row' : (row.item.name + '-' + row.index)"
                     :class="rowClass(row.item)" :style="{ gridTemplateColumns: fileListColumns }"
+                    :id="`sftp-file-${row.index}`" role="option" :aria-selected="selection.isSelected(row.item)"
                     :data-sftp-context-index="row.index"
                     :data-sftp-drop-path="dropTargetPathForRecord(row.item) || null"
                     @pointerenter="(event) => showRowTooltip(event, row.item)"
@@ -1982,6 +2026,8 @@ onUnmounted(() => {
           @select="runContextAction('prop', ctxRecord)">属性</ContextMenuItem>
       </ContextMenuContent>
     </ContextMenu>
+
+    <div class="fm-selection-status" aria-live="polite">{{ directory.items.value.length }} 项 · 已选 {{ selectedRecords.length }} 项</div>
 
     <Teleport to="body">
       <div ref="rowTooltipRef" class="fm-row-tooltip" role="tooltip" aria-hidden="true">
@@ -2052,6 +2098,12 @@ onUnmounted(() => {
 </template>
 
 <style scoped>
+.fm-table-body:focus-visible { outline: 1px solid var(--app-focus-border); outline-offset: -1px; }
+.fm-panel-heading { display: flex; flex: 1 1 100%; align-items: center; gap: 8px; min-height: 28px; }
+.fm-panel-heading strong { font-size: 13px; }
+.fm-panel-heading span { margin-left: auto; color: var(--app-text-muted); font-size: 12px; }
+.fm-panel-heading .online { color: var(--app-connection-online); }
+.fm-selection-status { flex-shrink: 0; padding: 6px 10px; border-top: 1px solid var(--app-panel-border); color: var(--app-text-muted); font-size: 12px; }
 .file-manager {
   position: relative;
   display: flex;
@@ -2088,13 +2140,14 @@ onUnmounted(() => {
 
 .fm-address {
   flex-shrink: 0;
-  padding: 6px 16px 8px;
+  padding: 8px;
 }
 
 .fm-address-row {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
   /* keep actions fixed to right */
   background: transparent;
   border-bottom: 1px solid color-mix(in srgb, var(--app-border-shadow) 64%, transparent);
@@ -2104,7 +2157,7 @@ onUnmounted(() => {
 .fm-address-row :deep(input),
 .fm-address-input {
   /* allow the input to grow and match session-list top behavior */
-  flex: 1 1 auto;
+  flex: 1 1 100%;
   width: auto;
   min-width: 80px;
   max-width: none;
@@ -2118,10 +2171,11 @@ onUnmounted(() => {
 }
 
 .fm-actions {
-  margin-left: auto;
+  margin-left: 0;
   display: flex;
   gap: 4px;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .fm-column-options {
