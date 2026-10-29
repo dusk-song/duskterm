@@ -19,7 +19,6 @@ defineProps({ compact: Boolean, interactive: Boolean });
   border-radius: var(--niri-radius-md, 8px);
   color: var(--tb-text, var(--app-text));
   background: var(--tb-bg, var(--app-bg-dialog));
-  box-shadow: var(--tb-shadow, 0 2px 10px color-mix(in srgb, var(--app-workspace-gap, #000) 30%, transparent));
   pointer-events: none;
 }
 

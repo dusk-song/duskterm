@@ -234,7 +234,7 @@ const panelStripStyle = computed(() => isClassicTabs.value
   overflow: hidden;
   box-sizing: border-box;
   border-radius: var(--niri-radius-lg, 14px);
-  background: var(--terminal-surface-bg, var(--app-bg-dialog));
+  background: var(--workspace-surface-bg, var(--app-panel-bg));
 }
 
 .terminal-session-close {
@@ -248,11 +248,11 @@ const panelStripStyle = computed(() => isClassicTabs.value
   align-items: center;
   justify-content: center;
   padding: 0;
-  border: 1px solid var(--app-border-shadow);
+  border: 1px solid transparent;
   border-radius: 7px;
   color: var(--app-terminal-close-color);
-  background: var(--app-terminal-close-bg);
-  box-shadow: var(--app-control-shadow);
+  background: transparent;
+  box-shadow: none;
   opacity: .82;
   transition: color var(--app-motion-control), background var(--app-motion-control), opacity var(--app-motion-control);
 }
@@ -344,6 +344,7 @@ const panelStripStyle = computed(() => isClassicTabs.value
 .split-divider {
   position: absolute;
   z-index: 10;
+  border: 0;
   background: transparent;
   transition: opacity 120ms ease;
 }
@@ -363,12 +364,17 @@ const panelStripStyle = computed(() => isClassicTabs.value
   cursor: row-resize;
 }
 
-.split-focused {
-  box-shadow: inset 0 0 0 2px color-mix(
-    in srgb,
-    var(--app-bg-dialog) 82%,
-    var(--app-text) 18%
-  );
+.split-focused::after {
+  content: '';
+  position: absolute;
+  z-index: 2;
+  top: 0;
+  left: calc(50% - 12px);
+  width: 24px;
+  height: 2px;
+  border-radius: 999px;
+  background: var(--color-primary);
+  pointer-events: none;
 }
 
 .terminal-panel-manager.is-classic-tabs .panel-scroll-track :deep(.tunnel-quick-actions) {

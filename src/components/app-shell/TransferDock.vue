@@ -23,6 +23,8 @@ function handleToggle(event) {
 <style scoped>
 .transfer-dock-root {
   position: relative;
+  display: flex;
+  align-items: center;
   pointer-events: auto;
 }
 </style>

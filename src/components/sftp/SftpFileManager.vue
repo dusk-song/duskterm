@@ -1895,7 +1895,7 @@ onUnmounted(() => {
       <span>释放以上传 {{ nativeDropPathCount ? `${nativeDropPathCount} 个项目` : '文件' }} 到 {{ nativeDropTargetPath }}</span>
     </div>
     <div class="fm-address fm-address-row">
-      <div class="fm-panel-heading"><strong>文件管理</strong><span :class="{ online: connected }">{{ connected ? '已连接' : '未连接' }}</span></div>
+      <div class="fm-panel-heading"><strong>文件管理</strong></div>
       <Input v-model="currentPath" @keyup.enter="manualRefresh" aria-label="远程目录路径" size="sm" class="flex-1 font-mono" />
       <div class="fm-actions">
         <IconButton :icon="ArrowLeft" size="sm" :disabled="currentPath === '/'" aria-label="返回上级目录"
@@ -2101,9 +2101,7 @@ onUnmounted(() => {
 .fm-table-body:focus-visible { outline: 1px solid var(--app-focus-border); outline-offset: -1px; }
 .fm-panel-heading { display: flex; flex: 1 1 100%; align-items: center; gap: 8px; min-height: 28px; }
 .fm-panel-heading strong { font-size: 13px; }
-.fm-panel-heading span { margin-left: auto; color: var(--app-text-muted); font-size: 12px; }
-.fm-panel-heading .online { color: var(--app-connection-online); }
-.fm-selection-status { flex-shrink: 0; padding: 6px 10px; border-top: 1px solid var(--app-panel-border); color: var(--app-text-muted); font-size: 12px; }
+.fm-selection-status { flex-shrink: 0; padding: 6px 10px; border-top: 1px solid transparent; color: var(--app-text-muted); font-size: 12px; }
 .file-manager {
   position: relative;
   display: flex;
@@ -2111,7 +2109,7 @@ onUnmounted(() => {
   height: 100%;
   min-height: 0;
   min-width: 0;
-  background: var(--terminal-surface-bg, var(--app-bg-dialog));
+  background: transparent;
 }
 
 .file-manager.is-native-drop-active {
@@ -2150,7 +2148,7 @@ onUnmounted(() => {
   flex-wrap: wrap;
   /* keep actions fixed to right */
   background: transparent;
-  border-bottom: 1px solid color-mix(in srgb, var(--app-border-shadow) 64%, transparent);
+  border-bottom: 1px solid transparent;
 }
 
 .fm-address-row :deep(.ant-input),
@@ -2162,12 +2160,6 @@ onUnmounted(() => {
   min-width: 80px;
   max-width: none;
   height: 30px;
-  border: 1px solid color-mix(in srgb, var(--app-border-shadow) 82%, transparent) !important;
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--app-input-bg) 72%, transparent) !important;
-  box-shadow: inset 0 1px 0 color-mix(in srgb, var(--app-text) 4%, transparent) !important;
-  padding: 4px 10px;
-  color: var(--app-text);
 }
 
 .fm-actions {
@@ -2180,6 +2172,8 @@ onUnmounted(() => {
 
 .fm-column-options {
   position: relative;
+  display: flex;
+  align-items: center;
 }
 
 .fm-column-menu {
@@ -2285,6 +2279,10 @@ onUnmounted(() => {
   box-shadow: none;
 }
 
+.fm-actions :deep(.icon-button:focus-visible) {
+  box-shadow: var(--app-focus-shadow);
+}
+
 .fm-actions :deep(.ant-btn) {
   width: 24px;
   min-width: 24px;
@@ -2356,7 +2354,7 @@ onUnmounted(() => {
 .fm-table-header {
   overflow: hidden;
   border-bottom: 1px solid color-mix(in srgb, var(--app-border-shadow) 62%, transparent);
-  background: var(--terminal-surface-bg, var(--app-bg-dialog));
+  background: transparent;
 }
 
 .fm-grid,
@@ -2379,7 +2377,7 @@ onUnmounted(() => {
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  background: var(--terminal-surface-bg, var(--app-bg-dialog));
+  background: transparent;
   scrollbar-width: thin;
   scrollbar-color: var(--app-btn-border) transparent;
 }

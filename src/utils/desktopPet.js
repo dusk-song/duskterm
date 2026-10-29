@@ -192,7 +192,7 @@ const defaultDesktopPetSettings = {
   edgeProbeNodeBottom: '__none__',
   edgeProbeNodeLeft: '__none__',
   transitionMs: 220,
-  positionTop: 0.01,
+  positionTop: 0.98,
   positionRight: 0.01,
   nodes: defaultDesktopPetNodes
 };

@@ -366,10 +366,10 @@ const clearFinished = () => transferStore.clearFinishedTasks();
   min-height: 40px;
   margin: 0 4px 4px;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--app-border-shadow) 72%, transparent);
+  border: 1px solid transparent;
   border-radius: 9px;
-  background: color-mix(in srgb, var(--app-bg-dialog) 92%, transparent);
-  box-shadow: var(--niri-shadow-panel);
+  background: var(--workspace-surface-bg, var(--app-panel-bg));
+  box-shadow: none;
   transition: none;
 }
 
@@ -382,10 +382,6 @@ const clearFinished = () => transferStore.clearFinishedTasks();
   height: 38px;
   align-items: center;
   border-bottom: 1px solid transparent;
-}
-
-.expanded .transfer-header {
-  border-bottom-color: color-mix(in srgb, var(--app-border-shadow) 62%, transparent);
 }
 
 .transfer-title {
@@ -407,6 +403,16 @@ const clearFinished = () => transferStore.clearFinishedTasks();
 
 .transfer-title:hover {
   background: color-mix(in srgb, var(--app-text) 5%, transparent);
+}
+
+.transfer-title:focus-visible {
+  outline: 1px solid var(--app-focus-border);
+  outline-offset: -1px;
+  background: var(--app-focus-bg);
+}
+
+.transfer-title:active {
+  background: var(--app-btn-pressed);
 }
 
 .header-action {
@@ -439,21 +445,35 @@ const clearFinished = () => transferStore.clearFinishedTasks();
 }
 
 .transfer-filters button {
-  padding: 0;
+  min-height: 24px;
+  padding: 2px 4px;
   border: 0;
+  border-radius: 4px;
   color: var(--app-text-muted);
   background: transparent;
   font: inherit;
+  font-weight: 600;
   white-space: nowrap;
+  transition: color var(--app-motion-control), background-color var(--app-motion-control);
+}
+
+.transfer-filters button:focus-visible {
+  outline: 1px solid var(--app-focus-border);
+  outline-offset: -1px;
 }
 
 .transfer-filters button:hover {
   color: var(--app-text-secondary);
+  background: var(--app-btn-hover);
 }
 
 .transfer-filters button.active {
   color: var(--app-text);
-  font-weight: 700;
+  background: var(--app-selection-bg);
+}
+
+.transfer-filters button:active {
+  background: var(--app-btn-pressed);
 }
 
 .transfer-filters > span {
@@ -478,7 +498,7 @@ const clearFinished = () => transferStore.clearFinishedTasks();
   align-items: center;
   column-gap: 10px;
   padding: 8px 8px 7px;
-  border-bottom: 1px solid color-mix(in srgb, var(--app-border-shadow) 50%, transparent);
+  border-bottom: 1px solid transparent;
   transition: background-color 120ms ease;
 }
 

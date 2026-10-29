@@ -70,10 +70,6 @@ const forwarded = useForwardPropsEmits(delegatedProps, emits);
   user-select: none;
 }
 
-.app-tooltip-content.icon-button-tooltip {
-  white-space: nowrap;
-}
-
 .app-tooltip-content.tooltip-hint-content {
   white-space: pre-line;
 }

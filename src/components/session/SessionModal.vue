@@ -729,16 +729,16 @@ const groupOptions = computed(() => {
         <div class="protocol-tabs mb-3">
           <div class="flex gap-1 mb-1">
             <button v-for="item in protocolOptions" :key="item.key"
-              :class="['px-3 py-1 rounded text-sm font-medium outline-none transition-[background,color,box-shadow]', 'focus-visible:bg-[var(--app-focus-bg)] focus-visible:text-foreground focus-visible:shadow-[var(--app-focus-shadow)]', activeProtocol === item.key ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground hover:bg-accent']"
+              :class="['px-3 py-1 rounded text-sm font-medium outline-none transition-[background,color,box-shadow]', 'focus-visible:[box-shadow:var(--app-focus-shadow)] disabled:pointer-events-none disabled:opacity-45', activeProtocol === item.key ? 'bg-primary text-primary-foreground active:bg-primary/80' : 'bg-secondary text-secondary-foreground hover:bg-accent active:bg-[var(--app-btn-pressed)]']"
               :disabled="item.disabled" type="button" @click="activeProtocol = item.key">{{ item.label }}</button>
           </div>
         </div>
 
         <div layout="horizontal" class="session-compact-form" autocomplete="off" :model="formState" name="sessionForm">
           <div class="config-tabs flex">
-            <div class="config-tab-sidebar flex w-[100px] shrink-0 flex-col gap-0.5 border-r border-border pr-1">
+            <div class="config-tab-sidebar flex w-[100px] shrink-0 flex-col gap-0.5 pr-1">
               <button v-for="tab in configTabs" :key="tab.key" type="button"
-                :class="['whitespace-nowrap px-2 py-1.5 rounded text-sm text-left outline-none transition-[background,color,box-shadow]', 'focus-visible:bg-[var(--app-focus-bg)] focus-visible:text-foreground focus-visible:shadow-[var(--app-focus-shadow)]', activeConfigTab === tab.key ? 'bg-primary/15 text-primary font-semibold' : 'text-muted-foreground hover:text-foreground']"
+                :class="['whitespace-nowrap px-2 py-1.5 rounded text-sm text-left outline-none transition-[background,color,box-shadow]', 'focus-visible:[box-shadow:var(--app-focus-shadow)] disabled:pointer-events-none disabled:opacity-45', activeConfigTab === tab.key ? 'bg-primary/15 text-primary font-semibold' : 'text-muted-foreground hover:bg-[var(--app-btn-hover)] hover:text-foreground active:bg-[var(--app-btn-pressed)]']"
                 @click="activeConfigTab = tab.key">{{ tab.label }}</button>
             </div>
             <div v-show="activeConfigTab === 'basic'">
@@ -873,13 +873,13 @@ const groupOptions = computed(() => {
                       class="text-sm text-muted-foreground mb-1">认证方式</label>
                     <div class="flex gap-1">
                       <button type="button"
-                        :class="['px-3 py-1 rounded text-sm font-medium outline-none transition-[background,color,box-shadow]', 'focus-visible:bg-[var(--app-focus-bg)] focus-visible:text-foreground focus-visible:shadow-[var(--app-focus-shadow)]', formState.auth_type === 'password' ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground hover:bg-accent']"
+                        :class="['px-3 py-1 rounded text-sm font-medium outline-none transition-[background,color,box-shadow]', 'focus-visible:[box-shadow:var(--app-focus-shadow)] disabled:pointer-events-none disabled:opacity-45', formState.auth_type === 'password' ? 'bg-primary text-primary-foreground active:bg-primary/80' : 'bg-secondary text-secondary-foreground hover:bg-accent active:bg-[var(--app-btn-pressed)]']"
                         @click="formState.auth_type = 'password'">
                         <Eye :size="14" class="auth-icon inline" />
                         <span>密码认证</span>
                       </button>
                       <button type="button"
-                        :class="['px-3 py-1 rounded text-sm font-medium outline-none transition-[background,color,box-shadow]', 'focus-visible:bg-[var(--app-focus-bg)] focus-visible:text-foreground focus-visible:shadow-[var(--app-focus-shadow)]', formState.auth_type === 'key' ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground hover:bg-accent']"
+                        :class="['px-3 py-1 rounded text-sm font-medium outline-none transition-[background,color,box-shadow]', 'focus-visible:[box-shadow:var(--app-focus-shadow)] disabled:pointer-events-none disabled:opacity-45', formState.auth_type === 'key' ? 'bg-primary text-primary-foreground active:bg-primary/80' : 'bg-secondary text-secondary-foreground hover:bg-accent active:bg-[var(--app-btn-pressed)]']"
                         @click="formState.auth_type = 'key'">
                         <FolderOpen :size="14" class="auth-icon inline" />
                         <span>私钥认证</span>
@@ -1123,13 +1123,13 @@ const groupOptions = computed(() => {
                   <div class="form-item mb-2"><label class="text-sm text-muted-foreground mb-1">认证方式</label>
                     <div class="flex gap-1">
                       <button type="button"
-                        :class="['px-3 py-1 rounded text-sm font-medium outline-none transition-[background,color,box-shadow]', 'focus-visible:bg-[var(--app-focus-bg)] focus-visible:text-foreground focus-visible:shadow-[var(--app-focus-shadow)]', formState.jump_auth_type === 'password' ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground hover:bg-accent']"
+                        :class="['px-3 py-1 rounded text-sm font-medium outline-none transition-[background,color,box-shadow]', 'focus-visible:[box-shadow:var(--app-focus-shadow)] disabled:pointer-events-none disabled:opacity-45', formState.jump_auth_type === 'password' ? 'bg-primary text-primary-foreground active:bg-primary/80' : 'bg-secondary text-secondary-foreground hover:bg-accent active:bg-[var(--app-btn-pressed)]']"
                         @click="formState.jump_auth_type = 'password'">
                         <Eye :size="14" class="auth-icon inline" />
                         <span>密码认证</span>
                       </button>
                       <button type="button"
-                        :class="['px-3 py-1 rounded text-sm font-medium outline-none transition-[background,color,box-shadow]', 'focus-visible:bg-[var(--app-focus-bg)] focus-visible:text-foreground focus-visible:shadow-[var(--app-focus-shadow)]', formState.jump_auth_type === 'key' ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground hover:bg-accent']"
+                        :class="['px-3 py-1 rounded text-sm font-medium outline-none transition-[background,color,box-shadow]', 'focus-visible:[box-shadow:var(--app-focus-shadow)] disabled:pointer-events-none disabled:opacity-45', formState.jump_auth_type === 'key' ? 'bg-primary text-primary-foreground active:bg-primary/80' : 'bg-secondary text-secondary-foreground hover:bg-accent active:bg-[var(--app-btn-pressed)]']"
                         @click="formState.jump_auth_type = 'key'">
                         <FolderOpen :size="14" class="auth-icon inline" />
                         <span>私钥认证</span>
@@ -1315,7 +1315,7 @@ const groupOptions = computed(() => {
 
 /* ── 代理配置缩进 ── */
 .proxy-config {
-  @apply mt-2 pl-3 border-l-[3px] border-[var(--app-border-shadow)];
+  @apply mt-2 pl-3;
 }
 
 /* ── 表单网格（单列） ── */

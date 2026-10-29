@@ -131,10 +131,6 @@
   background: var(--icon-btn-hover-bg);
 }
 
-.icon-button:active:not(:disabled):not(.disabled)::before {
-  background: var(--icon-btn-active-bg);
-}
-
 /* 选中状态 */
 .icon-button.active:not(:disabled):not(.disabled) {
   color: var(--icon-btn-hover-color);
@@ -148,11 +144,13 @@
   color: var(--color-primary);
 }
 
-.icon-button.tone-danger:hover:not(:disabled):not(.disabled) {
+.icon-button.tone-danger:hover:not(:disabled):not(.disabled),
+.icon-button.tone-danger:focus-visible:not(:disabled):not(.disabled) {
   color: var(--tb-close-hover-text, var(--color-danger-foreground));
 }
 
 .icon-button.tone-danger:hover:not(:disabled):not(.disabled)::before,
+.icon-button.tone-danger:focus-visible:not(:disabled):not(.disabled)::before,
 .icon-button.tone-danger:active:not(:disabled):not(.disabled)::before {
   background: var(--tb-close-hover, var(--color-danger));
 }
@@ -162,13 +160,20 @@
 ------------------------------ */
 
 .icon-button:focus-visible {
-  color: var(--icon-btn-hover-color);
   outline: none;
   box-shadow: var(--app-focus-shadow);
 }
 
-.icon-button:focus-visible::before {
+.icon-button:focus-visible:not(.active):not(.tone-danger) {
+  color: var(--icon-btn-hover-color);
+}
+
+.icon-button:focus-visible:not(.active):not(.tone-danger)::before {
   background: var(--app-focus-bg);
+}
+
+.icon-button:active:not(:disabled):not(.disabled)::before {
+  background: color-mix(in srgb, var(--icon-btn-active-bg) 90%, var(--app-text));
 }
 
 /* ------------------------------

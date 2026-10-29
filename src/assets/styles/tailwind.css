@@ -56,7 +56,6 @@
     --app-bg-dialog: hsl(var(--popover));
     --app-bg-active: hsl(var(--primary));
     --app-bg-active-end: hsl(34 59% 42%);
-    --app-terminal-bg: #111113;
     --app-text: hsl(var(--foreground));
     --app-text-secondary: hsl(var(--muted-foreground));
     --app-text-muted: hsl(var(--muted-foreground));
@@ -84,6 +83,7 @@
     --app-btn-bg: hsl(var(--popover));
     --app-btn-border: hsl(var(--border));
     --app-btn-hover: color-mix(in srgb, hsl(var(--foreground)) 6%, transparent);
+    --app-btn-pressed: color-mix(in srgb, hsl(var(--accent)) 88%, hsl(var(--foreground)));
     --app-surface-highlight: inset 0 1px 0 rgba(255, 255, 255, 0.78);
     --app-control-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22), 0 1px 1px rgba(52, 47, 41, 0.12);
     --app-control-inset-shadow: inset 0 1px 1px rgba(52, 47, 41, 0.045);
@@ -99,7 +99,7 @@
 
     --app-workspace-bg: #e7e0d5;
     --app-workspace-gap: rgba(91, 80, 68, 0.1);
-    --app-panel-bg: hsl(var(--card));
+    --app-panel-bg: #f1ece3;
     --app-panel-border: hsl(var(--border) / 0.88);
     --app-panel-shadow: var(--niri-shadow-panel);
 
@@ -229,7 +229,6 @@
     --color-warning-foreground: #111113;
 
     --app-bg-dialog: #191919;
-    --app-terminal-bg: #111113;
     --app-text-secondary: hsl(var(--muted-foreground));
     --app-border-light: rgba(228, 224, 216, 0.05);
     --app-border-shadow: rgba(228, 224, 216, 0.09);
@@ -252,7 +251,7 @@
 
     --app-workspace-bg: #0d0d0d;
     --app-workspace-gap: rgba(228, 224, 216, 0.055);
-    --app-panel-bg: #191919;
+    --app-panel-bg: #111113;
     --app-panel-border: rgba(228, 224, 216, 0.1);
     --app-panel-shadow: var(--niri-shadow-panel);
 

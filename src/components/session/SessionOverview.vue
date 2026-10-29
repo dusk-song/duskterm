@@ -475,7 +475,7 @@ watch(selectableSessionIds, () => {
   margin: 0;
   padding: 0 11px;
   overflow: hidden;
-  border: 1px solid var(--app-border-shadow);
+  border: 1px solid transparent;
   border-radius: var(--niri-radius-md, 8px);
   color: var(--app-text);
   text-align: left;
@@ -485,13 +485,11 @@ watch(selectableSessionIds, () => {
 }
 
 .overview-session-row:hover {
-  border-color: color-mix(in srgb, var(--app-text) 18%, var(--app-border-shadow));
   background: color-mix(in srgb, var(--app-input-bg) 78%, var(--app-bg-dialog));
 }
 
 .overview-session-row.current { box-shadow: inset 3px 0 0 var(--color-primary); }
 .overview-session-row.selected {
-  border-color: color-mix(in srgb, var(--color-primary) 78%, var(--app-border-shadow));
   background: color-mix(in srgb, var(--color-primary) 11%, var(--app-bg-dialog));
 }
 
@@ -502,7 +500,7 @@ watch(selectableSessionIds, () => {
   flex: 0 0 26px;
   align-items: center;
   justify-content: center;
-  border: 1px solid color-mix(in srgb, var(--app-text) 9%, transparent);
+  border: 1px solid transparent;
   border-radius: 6px;
   color: var(--app-text-muted);
   background: color-mix(in srgb, var(--app-input-bg) 82%, transparent);
@@ -550,7 +548,7 @@ watch(selectableSessionIds, () => {
 .overview-channel {
   flex: 0 0 auto;
   overflow: hidden;
-  border: 1px solid var(--app-border-shadow);
+  border: 1px solid transparent;
   border-radius: var(--niri-radius-md, 8px);
   background: color-mix(in srgb, var(--app-bg-dialog) 91%, var(--app-input-bg));
 }
@@ -604,7 +602,7 @@ watch(selectableSessionIds, () => {
   flex-direction: column;
   margin: 0 10px 10px;
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--app-text) 8%, transparent);
+  border: 1px solid transparent;
   border-radius: 6px;
   background: color-mix(in srgb, var(--app-input-bg) 54%, transparent);
 }
@@ -612,7 +610,7 @@ watch(selectableSessionIds, () => {
 .overview-session-row.channel-member {
   min-height: 38px;
   border: 0;
-  border-top: 1px solid color-mix(in srgb, var(--app-text) 7%, transparent);
+  border-top: 1px solid transparent;
   border-radius: 0;
   background: transparent;
   box-shadow: none;
@@ -702,7 +700,7 @@ watch(selectableSessionIds, () => {
 }
 
 :global(html:not(.dark)) .overview-session-row {
-  border-color: color-mix(in srgb, var(--app-text) 12%, var(--app-border-shadow));
+  border-color: transparent;
   background: color-mix(in srgb, var(--app-input-bg) 68%, var(--app-bg-dialog));
 }
 
@@ -711,7 +709,7 @@ watch(selectableSessionIds, () => {
 }
 
 :global(html:not(.dark)) .overview-session-row.selected {
-  border-color: color-mix(in srgb, var(--color-primary) 72%, var(--app-border-shadow));
+  border-color: transparent;
   background: color-mix(in srgb, var(--color-primary) 9%, var(--app-bg-dialog));
 }
 

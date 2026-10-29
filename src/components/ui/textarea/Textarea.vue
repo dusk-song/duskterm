@@ -22,7 +22,7 @@ const modelValue = useVModel(props, "modelValue", emits, {
     data-slot="textarea"
     :class="
       cn(
-        'border-input dark:bg-input/30 focus-visible:border-[var(--app-focus-border)] focus-visible:shadow-[var(--app-focus-shadow)] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive dark:aria-invalid:border-destructive/50 rounded-md border bg-transparent px-2.5 py-2 text-base shadow-xs transition-[color,border-color,box-shadow] aria-invalid:ring-3 md:text-sm flex field-sizing-content min-h-16 w-full resize-y outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50',
+        'border-input bg-[var(--app-input-bg)] focus-visible:border-[var(--app-focus-border)] focus-visible:[box-shadow:var(--app-focus-shadow)] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive dark:aria-invalid:border-destructive/50 rounded-[8px] border px-2.5 py-2 text-sm shadow-none transition-[border-color,box-shadow] aria-invalid:ring-3 flex field-sizing-content min-h-16 w-full resize-y outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50',
         props.class,
       )
     "

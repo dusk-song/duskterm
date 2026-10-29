@@ -5,7 +5,7 @@
 
 :root {
   /* ===== Typography ===== */
-  --font-sans: 'Segoe UI', 'Microsoft YaHei UI', 'Microsoft YaHei', sans-serif;
+  --font-sans: 'Maple Mono', 'Microsoft YaHei', monospace;
   --font-mono: 'Maple Mono', 'Microsoft YaHei Mono', 'SimSun', monospace;
   --font-size-base: 0.8125rem;
   /* 13px */

@@ -34,14 +34,13 @@ const props = defineProps({
   height: 100%;
   border-radius: var(--niri-radius-lg, 14px);
   background: var(--app-panel-bg);
-  border: var(--niri-border-width, 1px) solid var(--app-panel-border);
-  box-shadow: var(--app-panel-shadow);
+  border: var(--niri-border-width, 1px) solid transparent;
+  box-shadow: none;
   overflow: hidden;
 }
 
 html.dark .tiled-panel {
   background: var(--app-panel-bg);
-  box-shadow: var(--app-panel-shadow);
 }
 
 .tiled-panel__body {

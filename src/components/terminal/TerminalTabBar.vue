@@ -252,8 +252,7 @@ onBeforeUnmount(() => {
   height: 26px;
   align-items: center;
   overflow: hidden;
-  border-right: 1px solid var(--app-border-shadow);
-  border-bottom: 1px solid var(--app-border-shadow);
+  border-right: 1px solid transparent;
   color: var(--app-text-muted);
   background: transparent;
   transition: color var(--app-motion-control), background var(--app-motion-control), border-color var(--app-motion-control);
@@ -302,6 +301,10 @@ onBeforeUnmount(() => {
 
 .terminal-tab-main:focus-visible {
   box-shadow: inset 0 0 0 1px var(--app-focus-border);
+}
+
+.terminal-tab-main:active {
+  background: var(--app-btn-pressed);
 }
 
 .terminal-tab-status {
@@ -367,6 +370,12 @@ onBeforeUnmount(() => {
 
 .terminal-tab-close:focus-visible {
   box-shadow: var(--app-focus-shadow);
+}
+
+.terminal-tab-close:active {
+  color: var(--app-terminal-close-hover-color);
+  background: var(--app-terminal-close-hover-bg);
+  opacity: 1;
 }
 
 @media (max-width: 720px) {

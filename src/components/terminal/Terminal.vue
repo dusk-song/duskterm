@@ -981,12 +981,6 @@ const applyTerminalTheme = () => {
   const wrapper = terminalWrapperRef.value;
   if (wrapper) {
     wrapper.style.setProperty('--terminal-theme-bg', themeBackground);
-    wrapper.style.setProperty(
-      '--terminal-surface-bg',
-      hasGlobalBackground
-        ? 'color-mix(in srgb, var(--app-bg-dialog) 52%, transparent)'
-        : opaqueThemeBackground
-    );
     wrapper.style.setProperty('--terminal-theme-fg', theme.foreground || '#d4d4d4');
   }
 
@@ -3867,7 +3861,7 @@ onUnmounted(() => {
   flex-direction: column;
   align-items: stretch;
   box-sizing: border-box;
-  background-color: var(--terminal-theme-bg, var(--terminal-surface-bg, var(--app-bg-dialog)));
+  background-color: var(--terminal-theme-bg, transparent);
   position: relative;
   overflow: hidden;
   border-radius: 0;

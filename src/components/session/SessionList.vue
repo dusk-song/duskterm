@@ -26,6 +26,7 @@ import { computed, h, nextTick, onMounted, onUnmounted, ref } from 'vue';
 import { useVirtualList } from '@/composables/useVirtualList';
 import { useSshStore } from '@/stores/ssh';
 import { invokeCommand } from '@/utils/ipc';
+import { sortSessionsByHost } from '@/utils/sessionSort';
 import IconButton from '@/components/common/IconButton.vue';
 import { TooltipHint } from '@/components/ui/tooltip';
 
@@ -113,7 +114,9 @@ const getSessionMeta = (session) => {
   }
 };
 
-const sessionSearchIndex = computed(() => sshStore.savedSessions.map((session) => {
+const sortedSessions = computed(() => sortSessionsByHost(sshStore.savedSessions));
+
+const sessionSearchIndex = computed(() => sortedSessions.value.map((session) => {
   const searchText = [
     session?.name,
     session?.host,
@@ -133,7 +136,7 @@ const sessionSearchIndex = computed(() => sshStore.savedSessions.map((session) =
 
 const filteredSessions = computed(() => {
   const kw = normalizedKeyword.value;
-  if (!kw) return sshStore.savedSessions;
+  if (!kw) return sortedSessions.value;
   return sessionSearchIndex.value
     .filter(({ searchText }) => searchText.includes(kw))
     .map(({ session }) => session);
@@ -710,7 +713,7 @@ const handleImportSessions = async () => {
 </template>
 
 <style scoped>
-.session-heading { display: flex; align-items: center; gap: 6px; min-height: 36px; padding: 4px 8px; border-bottom: 1px solid var(--app-panel-border); }
+.session-heading { display: flex; align-items: center; gap: 6px; min-height: 36px; padding: 4px 8px; border-bottom: 1px solid transparent; }
 .session-heading strong { font-size: 13px; }
 .tree-row[aria-selected="true"] { background: var(--app-selection-bg); box-shadow: inset 2px 0 var(--color-primary); }
 .session-tree-viewport:focus-visible { outline: 1px solid var(--app-focus-border); outline-offset: -1px; }
@@ -749,8 +752,6 @@ const handleImportSessions = async () => {
   min-width: 120px;
   height: 30px;
   border-radius: 8px;
-  background: var(--app-input-bg) !important;
-  border: 1px solid var(--app-border-shadow) !important;
   font-size: 13px;
   color: var(--app-text);
 }
@@ -785,7 +786,7 @@ const handleImportSessions = async () => {
   justify-content: center;
   gap: 6px;
   padding: 0 10px;
-  border: 1px solid var(--app-border-shadow);
+  border: 1px solid transparent;
   border-radius: 8px;
   background: var(--app-input-bg);
   color: var(--app-text);
@@ -814,6 +815,10 @@ const handleImportSessions = async () => {
 .local-shell-button:focus-visible {
   outline: 2px solid var(--app-focus-border);
   outline-offset: 1px;
+}
+
+.local-shell-button:active:not(:disabled) {
+  background: var(--app-btn-pressed);
 }
 
 .local-shell-button:disabled {
@@ -863,16 +868,15 @@ const handleImportSessions = async () => {
 }
 
 .tree-row:hover {
-  background-color: hsl(var(--accent) / 0.15);
-  border: 1px dotted hsl(var(--border));
+  background-color: var(--app-btn-hover);
 }
 
-html.dark .tree-row:hover {
-  background-color: hsl(var(--accent) / 0.2);
-  border: 1px solid hsl(var(--border));
+.tree-row[aria-selected="true"]:hover {
+  background: var(--app-selection-bg);
 }
 
-.tree-row.drag-over {
+.tree-row.drag-over,
+.tree-row.drag-over:hover {
   border-color: hsl(var(--primary));
   background: color-mix(in srgb, hsl(var(--primary)) 12%, transparent);
 }

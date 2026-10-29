@@ -478,7 +478,7 @@ onBeforeUnmount(() => {
             <HelpCircle class="section-tip-icon" />
           </TooltipTrigger>
           <TooltipContent>
-            桌面宠物动画，支持自定义节点和资源。
+            桌面宠物动画，支持自定义节点和资源；点击穿透开启时按住 Alt 拖动，关闭时直接拖动；后台和调整布局时暂停播放。
           </TooltipContent>
         </Tooltip>
       </div>
@@ -708,9 +708,9 @@ onBeforeUnmount(() => {
 }
 
 .background-recent { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; margin: 8px 0 12px; }
-.background-recent-item { position: relative; min-width: 0; padding: 4px; overflow: hidden; border: 1px solid var(--app-border-shadow); border-radius: 8px; background: color-mix(in srgb, var(--app-input-bg) 88%, transparent); color: var(--app-text-muted); text-align: left; cursor: pointer; }
+.background-recent-item { position: relative; min-width: 0; padding: 4px; overflow: hidden; border: 1px solid transparent; border-radius: 8px; background: color-mix(in srgb, var(--app-input-bg) 88%, transparent); color: var(--app-text-muted); text-align: left; cursor: pointer; }
 .background-recent-item:hover { border-color: color-mix(in srgb, var(--color-primary) 55%, var(--app-border-shadow)); }
-.background-recent-item.active { border-color: var(--color-primary); box-shadow: 0 0 0 1px color-mix(in srgb, var(--color-primary) 45%, transparent); }
+.background-recent-item.active { border-color: var(--color-primary); }
 .background-recent-item.unavailable { opacity: 0.55; cursor: not-allowed; }
 .background-recent-thumb { display: flex; width: 100%; aspect-ratio: 16 / 9; align-items: center; justify-content: center; overflow: hidden; border-radius: 5px; background: color-mix(in srgb, var(--app-bg-dialog) 82%, #000); background-position: center; background-size: cover; }
 .background-recent-thumb svg { width: 22px; height: 22px; }
@@ -739,9 +739,9 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 10px;
   padding: 12px;
-  border: 1px solid var(--app-border-shadow);
+  border: 1px solid transparent;
   border-radius: 14px;
-  background: color-mix(in srgb, var(--app-input-bg) 80%, transparent);
+  background: transparent;
   height: fit-content;
 }
 
@@ -789,7 +789,7 @@ onBeforeUnmount(() => {
   min-width: 0;
   padding: 8px 10px;
   border-radius: 8px;
-  border: 1px solid var(--app-border-shadow);
+  border: 1px solid transparent;
   background: color-mix(in srgb, var(--app-input-bg) 70%, transparent);
   color: var(--mac-text-primary);
   text-align: left;
@@ -904,13 +904,9 @@ onBeforeUnmount(() => {
   flex-direction: column;
   gap: 12px;
   padding: 12px;
-  border: 1px solid var(--app-border-shadow);
+  border: 1px solid transparent;
   border-radius: 12px;
-  background: linear-gradient(
-    180deg,
-    color-mix(in srgb, var(--app-input-bg) 88%, transparent),
-    color-mix(in srgb, var(--app-bg-dialog) 96%, transparent)
-  );
+  background: transparent;
 }
 
 .pet-asset-item-head {
@@ -919,7 +915,7 @@ onBeforeUnmount(() => {
   justify-content: space-between;
   gap: 12px;
   padding-bottom: 6px;
-  border-bottom: 1px solid var(--app-border-shadow);
+  border-bottom: 1px solid transparent;
 }
 
 .pet-asset-meta {
@@ -998,8 +994,8 @@ onBeforeUnmount(() => {
   min-width: 0;
   padding: 10px 12px;
   border-radius: 10px;
-  background: color-mix(in srgb, var(--app-input-bg) 78%, transparent);
-  border: 1px solid var(--app-border-shadow);
+  background: transparent;
+  border: 1px solid transparent;
 }
 
 .pet-asset-field-card span {
@@ -1022,8 +1018,8 @@ onBeforeUnmount(() => {
   gap: 10px;
   padding: 12px;
   border-radius: 12px;
-  border: 1px solid var(--app-border-shadow);
-  background: color-mix(in srgb, var(--app-input-bg) 70%, transparent);
+  border: 1px solid transparent;
+  background: transparent;
 }
 
 .pet-inspector-title {

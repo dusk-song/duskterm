@@ -133,9 +133,9 @@ const keybindingItems = [
   { key: 'closeSplitTerminal', label: '关闭当前分屏终端', placeholder: 'Ctrl+Alt+W' },
   { key: 'nextSession', label: '下一个会话', placeholder: 'Ctrl+Tab' },
   { key: 'prevSession', label: '上一个会话', placeholder: 'Ctrl+Shift+Tab' },
-  { key: 'sessionList', label: '会话列表', placeholder: 'Ctrl+Alt+1' },
+  { key: 'sessionList', label: '会话列表', placeholder: 'Alt+1' },
   { key: 'sftpPanel', label: '文件管理', placeholder: 'Alt+2' },
-  { key: 'commandKnowledge', label: '命令知识库', placeholder: 'Ctrl+Alt+3' },
+  { key: 'commandKnowledge', label: '命令知识库', placeholder: 'Alt+3' },
   { key: 'transferList', label: '传输列表', placeholder: 'Alt+4' },
   { key: 'sftpParentDirectory', label: 'SFTP 返回上一级', placeholder: 'Mouse4' },
   { key: 'overview', label: '总览模式', placeholder: 'Ctrl+`' },
@@ -565,9 +565,9 @@ async function verifyAndChange() {
       </DialogHeader>
 
       <div class="flex-1 min-h-0 flex overflow-hidden" :inert="saving || undefined">
-        <div class="config-tab-sidebar flex flex-col gap-0.5 w-34 shrink-0 pr-2 border-r border-border">
+        <div class="config-tab-sidebar flex flex-col gap-0.5 w-34 shrink-0 pr-2">
           <button v-for="tab in settingsTabs" :key="tab.key" type="button" :disabled="backgroundImporting"
-            :class="['flex items-center gap-2 px-2 py-1.5 rounded text-sm text-left outline-none transition-[background,color,box-shadow]', 'focus-visible:bg-[var(--app-focus-bg)] focus-visible:text-foreground focus-visible:shadow-[var(--app-focus-shadow)]', activeKey === tab.key ? 'bg-primary/15 text-primary font-semibold' : 'text-muted-foreground hover:text-foreground']"
+            :class="['flex items-center gap-2 px-2 py-1.5 rounded text-sm text-left outline-none transition-[background,color,box-shadow]', 'focus-visible:[box-shadow:var(--app-focus-shadow)] disabled:pointer-events-none disabled:opacity-45', activeKey === tab.key ? 'bg-primary/15 text-primary font-semibold' : 'text-muted-foreground hover:bg-[var(--app-btn-hover)] hover:text-foreground active:bg-[var(--app-btn-pressed)]']"
             @click="activeKey = tab.key">
             <component :is="tab.icon" class="settings-tab-icon" aria-hidden="true" />
             {{ tab.label }}

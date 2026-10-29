@@ -444,7 +444,7 @@ onUnmounted(() => {
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
-  border-top: 1px solid var(--app-border-light);
+  border-top: 1px solid transparent;
   border-bottom: 1px solid var(--app-border-light);
 }
 
@@ -467,7 +467,7 @@ onUnmounted(() => {
   height: 36px;
   padding: 0 8px;
   border: 0;
-  border-bottom: 1px solid color-mix(in srgb, var(--app-border-light) 72%, transparent);
+  border-bottom: 1px solid transparent;
   background: transparent;
   color: var(--app-text);
   text-align: left;
@@ -495,8 +495,9 @@ onUnmounted(() => {
 .knowledge-trigger {
   display: block;
   padding: 1px 5px;
-  border: 1px solid var(--app-border-light);
+  border: 1px solid transparent;
   border-radius: 4px;
+  background: var(--app-btn-hover);
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--app-text-muted);
@@ -504,6 +505,7 @@ onUnmounted(() => {
 
 .knowledge-trigger.empty {
   border-color: transparent;
+  background: transparent;
 }
 
 .knowledge-row-title {

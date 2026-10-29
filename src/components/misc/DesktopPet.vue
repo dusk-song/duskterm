@@ -16,6 +16,10 @@ const props = defineProps({
   suspend: {
     type: Boolean,
     default: false
+  },
+  paused: {
+    type: Boolean,
+    default: false
   }
 });
 
@@ -23,18 +27,21 @@ const emit = defineEmits(['settings-change']);
 
 const settings = computed(() => normalizeDesktopPetSettings(props.settings || {}));
 const shouldHide = computed(() => props.suspend && settings.value.autoHideOnModal);
-const isVisible = computed(() => settings.value.enabled && !shouldHide.value && !isReducedPerformance());
+const pageVisible = ref(!document.hidden);
 const enabledNodes = computed(() => {
   const nodes = Array.isArray(settings.value.nodes) ? settings.value.nodes : [];
-  const filtered = nodes.filter((node) => node.enabled !== false);
-  return filtered.length ? filtered : nodes;
+  return nodes.filter((node) => node.enabled !== false);
 });
+const isVisible = computed(() => settings.value.enabled && enabledNodes.value.length > 0
+  && !shouldHide.value && !props.paused && pageVisible.value && !isReducedPerformance());
 
 const activeNodeIndex = ref(0);
-const renderNonce = ref(0);
+const renderedAssetUrl = ref('');
+const isAssetLoading = ref(false);
 const petFracTop = ref(0.01);
 const petFracRight = ref(0.01);
 const isDragging = ref(false);
+const altHeld = ref(false);
 const probeEdge = ref('');
 const petHostRef = ref(null);
 const SNAP_TOP = 10;
@@ -44,6 +51,7 @@ let nextNodeTimer = 0;
 let dragState = null;
 let dragFrame = 0;
 let pendingDragPosition = null;
+let disposed = false;
 const lastHostW = ref(window.innerWidth);
 const lastHostH = ref(window.innerHeight);
 
@@ -71,7 +79,7 @@ const resolveProbeNode = (edge) => {
   };
   const targetId = (map[edge] || '').trim();
   if (!targetId) return null;
-  return allNodes.value.find((n) => n.id === targetId) || null;
+  return allNodes.value.find((n) => n.id === targetId && n.enabled !== false) || null;
 };
 const displayNode = computed(() => {
   if (probeEdge.value && edgeProbeEnabled.value) {
@@ -81,7 +89,6 @@ const displayNode = computed(() => {
   return activeNode.value || null;
 });
 const activeNodeAssetUrl = computed(() => resolveDesktopPetAssetUrl(displayNode.value?.src || defaultDesktopPetAssetSrc));
-const activeNodeKey = computed(() => `${displayNode.value?.id || 'node'}-${renderNonce.value}`);
 const stageWidth = computed(() => Math.round(156 * Number(settings.value.scale || 1)));
 const stageHeight = computed(() => Math.round(156 * Number(settings.value.scale || 1)));
 
@@ -91,7 +98,8 @@ const nodeOwnScale = computed(() => Number(displayNode.value?.scale ?? 1));
 const nodeFinalScale = computed(() => (nodeOwnScale.value * probeScaleFactor.value).toFixed(3));
 
 const imageAlt = computed(() => displayNode.value?.name || '桌宠');
-const dragHintVisible = computed(() => isVisible.value && !props.suspend);
+const dragHintVisible = computed(() => isVisible.value && !props.suspend
+  && (!settings.value.clickThrough || altHeld.value || isDragging.value));
 const dragButtonTitle = computed(() => isDragging.value ? '拖拽中' : '拖拽桌宠位置');
 
 const transitionMs = computed(() => settings.value.transitionMs);
@@ -102,9 +110,7 @@ const petLayerStyle = computed(() => ({
   opacity: isVisible.value ? settings.value.opacity : 0,
   top: `${petTopPx.value}px`,
   right: `${petRightPx.value}px`,
-  transition: isDragging.value
-    ? `opacity ${transStr.value}`
-    : `top 140ms ease, right 140ms ease, opacity ${transStr.value}`
+  transition: `opacity ${transStr.value}`
 }));
 
 const petStageStyle = computed(() => ({
@@ -145,26 +151,28 @@ function normalizeActiveNodeIndex() {
 
 function scheduleNextNode() {
   clearNodeTimer();
-  if (!isVisible.value) return;
+  if (!isVisible.value || isAssetLoading.value || isDragging.value || displayNode.value !== activeNode.value) return;
   const total = enabledNodes.value.length;
   if (total <= 1) return;
   const durationMs = Math.max(200, Number(activeNode.value?.durationMs || 2000));
   nextNodeTimer = window.setTimeout(() => {
     const latestTotal = enabledNodes.value.length || 1;
     activeNodeIndex.value = (activeNodeIndex.value + 1) % latestTotal;
-    renderNonce.value += 1;
-    scheduleNextNode();
   }, durationMs);
 }
 
 function syncPetPositionFromSettings() {
+  lastHostW.value = window.innerWidth;
+  lastHostH.value = window.innerHeight;
   const rawTop = Number(settings.value.positionTop ?? 10);
   const rawRight = Number(settings.value.positionRight ?? 12);
   // If value is < 1, treat as fraction (new format); otherwise legacy absolute px
   petFracTop.value = rawTop < 1 ? rawTop : rawTop / Math.max(1, lastHostH.value);
   petFracRight.value = rawRight < 1 ? rawRight : rawRight / Math.max(1, lastHostW.value);
-  lastHostW.value = window.innerWidth;
-  lastHostH.value = window.innerHeight;
+  // Clamp before the first paint so the bottom default fits small windows and larger pet scales.
+  const position = clampDragPosition(petTopPx.value, petRightPx.value);
+  petFracTop.value = position.top / Math.max(1, lastHostH.value);
+  petFracRight.value = position.right / Math.max(1, lastHostW.value);
 }
 
 function clampDragPosition(nextTop, nextRight) {
@@ -193,7 +201,7 @@ function applyEdgeSnap(position) {
     nextPosition.right = maxRight;
   }
 
-  return nextPosition;
+  return clampDragPosition(nextPosition.top, nextPosition.right);
 }
 
 function resolveProbeEdge(position) {
@@ -222,6 +230,7 @@ function emitPositionSettings() {
 
 let resizeHandle = 0;
 function handleWindowResize() {
+  if (!isVisible.value) return;
   if (resizeHandle) cancelAnimationFrame(resizeHandle);
   resizeHandle = requestAnimationFrame(() => {
     resizeHandle = 0;
@@ -235,7 +244,7 @@ function handleWindowResize() {
   });
 }
 
-function stopDragging() {
+function stopDragging(commit = true) {
   if (!dragState) return;
   window.removeEventListener('mousemove', handleDragMove);
   window.removeEventListener('mouseup', handleDragEnd);
@@ -244,26 +253,32 @@ function stopDragging() {
     dragFrame = 0;
   }
   const finalPosition = pendingDragPosition;
+  const moved = dragState.moved;
   dragState = null;
   pendingDragPosition = null;
-  if (isDragging.value) {
+  if (isDragging.value && commit && moved && !disposed) {
     if (finalPosition) {
       petFracTop.value = finalPosition.top / Math.max(1, lastHostH.value);
       petFracRight.value = finalPosition.right / Math.max(1, lastHostW.value);
+      probeEdge.value = resolveProbeEdge(finalPosition);
     }
     emitPositionSettings();
     nextTick(() => {
+      if (disposed || dragState) return;
       petHostRef.value?.style.removeProperty('transform');
       isDragging.value = false;
     });
   } else {
     petHostRef.value?.style.removeProperty('transform');
+    isDragging.value = false;
   }
 }
 
 function applyDragTransform() {
   dragFrame = 0;
   if (!dragState || !pendingDragPosition || !petHostRef.value) return;
+  const nextProbeEdge = resolveProbeEdge(pendingDragPosition);
+  if (nextProbeEdge !== probeEdge.value) probeEdge.value = nextProbeEdge;
   const translateX = dragState.startRightPx - pendingDragPosition.right;
   const translateY = pendingDragPosition.top - dragState.startTopPx;
   petHostRef.value.style.transform = `translate3d(${translateX}px, ${translateY}px, 0)`;
@@ -280,9 +295,7 @@ function handleDragMove(event) {
     )
   );
   pendingDragPosition = nextPosition;
-  const nextProbeEdge = resolveProbeEdge(nextPosition);
-  if (nextProbeEdge !== probeEdge.value) probeEdge.value = nextProbeEdge;
-  isDragging.value = true;
+  dragState.moved = dragState.moved || deltaX !== 0 || deltaY !== 0;
   if (!dragFrame) dragFrame = requestAnimationFrame(applyDragTransform);
 }
 
@@ -291,46 +304,86 @@ function handleDragEnd() {
 }
 
 function handleDragStart(event) {
-  if (event.button !== 0 || props.suspend) return;
+  if (event.button !== 0 || !dragHintVisible.value || dragState) return;
   event.preventDefault();
   dragState = {
     startClientX: event.clientX,
     startClientY: event.clientY,
     startTopPx: petTopPx.value,
-    startRightPx: petRightPx.value
+    startRightPx: petRightPx.value,
+    moved: false
   };
   pendingDragPosition = {
     top: dragState.startTopPx,
     right: dragState.startRightPx
   };
-  isDragging.value = false;
+  isDragging.value = true;
   window.addEventListener('mousemove', handleDragMove);
   window.addEventListener('mouseup', handleDragEnd);
 }
 
+function handleModifierKey(event) {
+  if (event.key !== 'Alt') return;
+  altHeld.value = event.type === 'keydown' && !event.ctrlKey && !event.metaKey;
+}
+
+function handleWindowBlur() {
+  altHeld.value = false;
+  stopDragging();
+}
+
+function handleVisibilityChange() {
+  pageVisible.value = !document.hidden;
+  if (!pageVisible.value) altHeld.value = false;
+}
+
 onMounted(() => {
   window.addEventListener('resize', handleWindowResize);
+  window.addEventListener('keydown', handleModifierKey, true);
+  window.addEventListener('keyup', handleModifierKey, true);
+  window.addEventListener('blur', handleWindowBlur);
+  document.addEventListener('visibilitychange', handleVisibilityChange);
 });
 
-watch(
-  nodeIdsHash,
-  () => {
-    normalizeActiveNodeIndex();
-    renderNonce.value += 1;
-    scheduleNextNode();
-  },
-  { immediate: true }
-);
+watch(nodeIdsHash, normalizeActiveNodeIndex, { immediate: true });
 
-watch(
-  () => [settings.value.enabled, settings.value.transitionMs, settings.value.scale, props.suspend].join('|'),
-  () => {
-    scheduleNextNode();
-  },
-  { immediate: true }
-);
+watch([isVisible, nodeIdsHash, activeNodeIndex, isDragging, isAssetLoading,
+  () => displayNode.value?.id, () => activeNode.value?.durationMs], scheduleNextNode, { immediate: true });
 
-watch(isVisible, scheduleNextNode);
+watch([isVisible, dragHintVisible], ([visible, canDrag], [wasVisible]) => {
+  if (!canDrag) stopDragging();
+  if (visible && !wasVisible) handleWindowResize();
+});
+
+watch([activeNodeAssetUrl, isVisible], async ([url, visible], previous, onCleanup) => {
+  if (!visible) {
+    renderedAssetUrl.value = '';
+    isAssetLoading.value = false;
+    return;
+  }
+  if (url === renderedAssetUrl.value) {
+    isAssetLoading.value = false;
+    return;
+  }
+  const image = new Image();
+  let cancelled = false;
+  onCleanup(() => {
+    cancelled = true;
+    image.src = '';
+  });
+  isAssetLoading.value = true;
+  image.decoding = 'async';
+  image.src = url;
+  try {
+    // Keep the current frame visible until the next asset is ready, without remounting the GIF.
+    await image.decode();
+    if (!cancelled) renderedAssetUrl.value = url;
+  } catch {
+    // A broken user asset must not blank an already usable pet or stop the remaining nodes.
+  } finally {
+    if (!cancelled) isAssetLoading.value = false;
+  }
+}, { immediate: true });
 
 watch(
   () => [settings.value.positionTop, settings.value.positionRight, settings.value.scale].join('|'),
@@ -342,9 +395,14 @@ watch(
 );
 
 onBeforeUnmount(() => {
+  disposed = true;
   clearNodeTimer();
-  stopDragging();
+  stopDragging(false);
   window.removeEventListener('resize', handleWindowResize);
+  window.removeEventListener('keydown', handleModifierKey, true);
+  window.removeEventListener('keyup', handleModifierKey, true);
+  window.removeEventListener('blur', handleWindowBlur);
+  document.removeEventListener('visibilitychange', handleVisibilityChange);
   if (resizeHandle) cancelAnimationFrame(resizeHandle);
   if (dragFrame) cancelAnimationFrame(dragFrame);
 });
@@ -355,17 +413,14 @@ onBeforeUnmount(() => {
   <div ref="petHostRef" v-if="displayNode && isVisible" class="desktop-pet-layer" :class="{ 'is-dragging': isDragging }"
     :style="petLayerStyle">
     <div class="desktop-pet-stage" :style="petStageStyle">
-      <TooltipHint :text="dragHintVisible ? dragButtonTitle : ''">
+      <TooltipHint :text="dragHintVisible ? dragButtonTitle : ''" :disabled="isDragging || !dragHintVisible">
         <div class="desktop-pet-shell" :style="petShellStyle">
-          <Transition name="pet-fade" mode="out-in">
-            <button v-if="dragHintVisible" :key="`${activeNodeKey}-drag`" class="desktop-pet-drag-surface"
-              type="button" @mousedown="handleDragStart">
-              <img class="desktop-pet-image" :style="activeNodeAssetStyle" :src="activeNodeAssetUrl" :alt="imageAlt"
-                draggable="false" />
-            </button>
-            <img v-else :key="`${activeNodeKey}-img`" class="desktop-pet-image" :style="activeNodeAssetStyle"
-              :src="activeNodeAssetUrl" :alt="imageAlt" draggable="false" />
-          </Transition>
+          <button v-if="renderedAssetUrl" class="desktop-pet-drag-surface" :class="{ 'is-pass-through': !dragHintVisible }"
+            :style="activeNodeAssetStyle" :tabindex="dragHintVisible ? 0 : -1" type="button"
+            aria-label="拖动桌宠（穿透开启时按住 Alt）" @mousedown="handleDragStart">
+            <img class="desktop-pet-image" :src="renderedAssetUrl" :alt="imageAlt"
+              decoding="async" draggable="false" />
+          </button>
         </div>
       </TooltipHint>
     </div>
@@ -397,19 +452,6 @@ onBeforeUnmount(() => {
   min-height: 156px;
 }
 
-.desktop-pet-shell::before {
-  content: '';
-  position: absolute;
-  z-index: 0;
-  right: 18px;
-  bottom: 10px;
-  width: 82px;
-  height: 16px;
-  border-radius: 50%;
-  box-shadow: 0 8px 16px 5px rgba(0, 0, 0, 0.14);
-  pointer-events: none;
-}
-
 .desktop-pet-drag-surface {
   display: inline-flex;
   position: relative;
@@ -427,6 +469,10 @@ onBeforeUnmount(() => {
   cursor: grabbing;
 }
 
+.desktop-pet-drag-surface.is-pass-through {
+  pointer-events: none;
+}
+
 .desktop-pet-image {
   position: relative;
   z-index: 1;
@@ -435,16 +481,5 @@ onBeforeUnmount(() => {
   object-fit: contain;
   user-select: none;
   pointer-events: none;
-}
-
-/* crossfade transition for pet image swap */
-.pet-fade-enter-active,
-.pet-fade-leave-active {
-  transition: opacity 0.22s ease;
-}
-
-.pet-fade-enter-from,
-.pet-fade-leave-to {
-  opacity: 0;
 }
 </style>

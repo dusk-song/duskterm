@@ -227,17 +227,25 @@ onUnmounted(() => {
 .titlebar-left { justify-content: flex-start; }
 .titlebar-right { justify-content: flex-end; }
 .titlebar-center { position: absolute; z-index: 0; left: 50%; display: flex; width: min(260px, max(0px, calc(100% - var(--titlebar-side-clearance, 480px)))); min-width: 0; align-items: center; justify-content: center; overflow: hidden; transform: translateX(-50%); pointer-events: none; }
-.menu-dock { width: auto; max-width: none; flex: 0 0 auto; padding: 0 8px; }
-.app-icon { width: 17px; height: 17px; margin-right: 4px; flex: 0 0 auto; }
+.menu-dock { --icon-btn-rect-radius: calc(var(--niri-radius-md, 8px) - 1px); width: auto; max-width: none; flex: 0 0 auto; padding: 0; overflow: hidden; }
+.app-icon { width: 17px; height: 17px; margin-left: 8px; margin-right: 4px; flex: 0 0 auto; }
 .tb-menu-item { height: 24px; flex: 0 0 auto; padding: 0 7px; border: 0; border-radius: var(--icon-btn-rect-radius, 8px); color: var(--tb-text, var(--app-text)); background: transparent; font-size: 12px; white-space: nowrap; cursor: default; }
 .tb-menu-item:hover, .tb-menu-item.open { background: var(--tb-hover-bg, color-mix(in srgb, var(--app-text) 8%, transparent)); }
-.utility-dock { min-width: max-content; flex: 0 0 auto; gap: 1px; padding: 0 4px; }
-.tb-menu-item:focus-visible { outline: 1px solid var(--app-focus-border); background: var(--app-focus-bg); }
+.utility-dock {
+  --icon-btn-rect-radius: calc(var(--niri-radius-md, 8px) - 1px);
+  min-width: max-content;
+  flex: 0 0 auto;
+  gap: 1px;
+  padding: 0;
+  overflow: hidden;
+}
+/* Keep focus inside the shared frame so clipping the edge highlights does not hide it. */
+.utility-dock :deep(.icon-button:focus-visible) { box-shadow: inset 0 0 0 1px var(--app-focus-border); }
+.tb-menu-item:focus-visible { outline: 1px solid var(--app-focus-border); outline-offset: -1px; }
+.tb-menu-item:active:not(:disabled) { background: var(--app-btn-pressed); }
 @media (max-width: 620px) {
-  .menu-dock { padding: 0 4px; }
   .app-icon { display: none; }
   .tb-menu-item { padding: 0 4px; }
-  .utility-dock { padding: 0 2px; }
 }
 </style>
 
@@ -254,7 +262,8 @@ html[data-window-drag-mode="native-region"] .window-no-drag {
 .tb-dropdown { min-width: 220px; padding: 5px; border: 1px solid var(--tb-dropdown-border, var(--app-border-shadow)); border-radius: 9px; background: color-mix(in srgb, var(--tb-dropdown-bg, var(--app-bg-dialog)) 95%, transparent); box-shadow: var(--niri-shadow-dialog); backdrop-filter: blur(12px); z-index: var(--z-dropdown); }
 .tb-entry { display: flex; width: 100%; min-height: 28px; align-items: center; justify-content: space-between; padding: 0 9px; border: 0; border-radius: 6px; color: var(--tb-text, var(--app-text)); background: transparent; font-size: 12px; }
 .tb-entry:hover, .tb-entry:focus-visible { outline: none; background: var(--tb-entry-hover, color-mix(in srgb, var(--app-text) 8%, transparent)); }
-.tb-entry:disabled { opacity: .38; }
+.tb-entry:active:not(:disabled) { background: var(--app-btn-pressed); }
+.tb-entry:disabled { opacity: .38; pointer-events: none; }
 .tb-entry-label { display: inline-flex; align-items: center; }
 .tb-check { display: inline-block; width: 16px; color: var(--color-primary); }
 .tb-shortcut { margin-left: 22px; color: var(--tb-text-muted, var(--app-text-muted)); font-size: 11px; }

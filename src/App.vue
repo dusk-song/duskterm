@@ -50,6 +50,7 @@ import { invokeCommand, listenEvent } from './utils/ipc';
 import { normalizeMouseBindingEvent } from './utils/keybindings';
 import { loadMainUiSettings, normalizeMainUiSettings, saveMainUiSettings } from './utils/mainUi';
 import { getPreferenceDefaults, loadPreference } from './utils/preferences';
+import { getDailyWelcomeMessage } from './utils/dailyWelcome';
 
 const createOpenedMountState = (visible) => {
   const mounted = ref(visible.value);
@@ -758,6 +759,22 @@ const scheduleInitialSessionLoad = () => {
 };
 
 const { activeKey, visibleSessions, setActivePanel } = useTerminalPanels(sshStore);
+const dailyWelcomeMessage = ref(getDailyWelcomeMessage());
+let dailyWelcomeTimer = null;
+const refreshDailyWelcome = () => {
+  if (dailyWelcomeTimer !== null) clearTimeout(dailyWelcomeTimer);
+  dailyWelcomeTimer = null;
+  if (visibleSessions.value.length > 0) return;
+
+  const now = new Date();
+  dailyWelcomeMessage.value = getDailyWelcomeMessage(now);
+  const nextDay = new Date(now);
+  nextDay.setHours(24, 0, 0, 0);
+  dailyWelcomeTimer = setTimeout(refreshDailyWelcome, nextDay.getTime() - now.getTime());
+};
+watch(() => visibleSessions.value.length === 0, refreshDailyWelcome, { immediate: true });
+onApp('focus', refreshDailyWelcome);
+
 const duplicateSessionPanel = (panelId = activeKey.value) => {
   const session = sshStore.getSession(panelId);
   if (session?.config) void sshStore.connectLogicWithMeta(session.config);
@@ -1219,6 +1236,7 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  if (dailyWelcomeTimer !== null) clearTimeout(dailyWelcomeTimer);
   finishWorkspaceResize?.();
   if (_measureWorkspaceRaf) cancelAnimationFrame(_measureWorkspaceRaf);
   document.documentElement.removeAttribute('data-layout-interacting');
@@ -1319,7 +1337,7 @@ useWindowInteraction({ onResize: measureWorkspace });
               <div class="empty-left">
                 <div class="welcome-actions">
                   <h1>DuskTerm</h1>
-                  <p>连接远程主机，开始工作。</p>
+                  <p>{{ dailyWelcomeMessage }}</p>
                   <div>
                     <Button size="sm" @click="showSessionModal(null)">新建连接</Button>
                     <Button size="sm" variant="outline" @click="showSessionPanel = true; sshStore.loadSavedSessions()">打开会话列表</Button>
@@ -1353,7 +1371,8 @@ useWindowInteraction({ onResize: measureWorkspace });
               @close-panel="removePanelRoot" @duplicate-panel="duplicateSessionPanel"
               @reconnect-panel="reconnectSessionPanel" />
 
-            <DesktopPet :settings="desktopPetSettings" :suspend="isAnyModalOpen || hasWorkspaceRightPanel || layoutInteracting"
+            <DesktopPet :settings="desktopPetSettings" :suspend="isAnyModalOpen"
+              :paused="hasWorkspaceRightPanel || layoutInteracting"
               @settings-change="handleDesktopPetSettingsChange" />
           </div>
         </TiledPanel>
@@ -1476,14 +1495,13 @@ useWindowInteraction({ onResize: measureWorkspace });
 .app-shell > :not(.global-background):not(.global-toast-layer) { position: relative; z-index: 1; }
 .app-shell > .dusk-titlebar { z-index: var(--z-chrome); }
 .app-shell.has-floating-surfaces {
-  --terminal-surface-bg: var(--app-terminal-bg);
+  --workspace-surface-bg: var(--app-panel-bg);
   --workspace-side-panel-top-offset: 0px;
   --tb-bg: color-mix(in srgb, var(--app-bg-dialog) 78%, transparent);
   --tb-border: var(--app-panel-border);
   --tb-shadow: var(--app-panel-shadow);
 }
-.app-shell.has-global-background { --terminal-surface-bg: color-mix(in srgb, var(--app-bg-dialog) 52%, transparent); }
-.app-shell.has-floating-surfaces:not(.has-global-background) .workspace-panel.tiled-panel:not(.workspace-panel-main) { background: var(--app-panel-bg); }
+.app-shell.has-global-background { --workspace-surface-bg: color-mix(in srgb, var(--app-panel-bg) 78%, transparent); }
 .app-shell.has-floating-surfaces:not(.has-global-background) .workspace-panel { box-shadow: none; }
 .app-shell.has-global-background {
   background: transparent;
@@ -1494,12 +1512,12 @@ useWindowInteraction({ onResize: measureWorkspace });
   box-shadow: none;
 }
 .app-shell.has-floating-surfaces .workspace-panel.tiled-panel:not(.workspace-panel-main) {
-  background: color-mix(in srgb, var(--app-bg-dialog) 78%, transparent);
+  background: var(--workspace-surface-bg);
 }
 .app-shell.has-floating-surfaces .workspace-panel-main.tiled-panel {
   background: transparent;
-  border-color: var(--app-panel-border);
-  box-shadow: var(--app-panel-shadow);
+  border-color: transparent;
+  box-shadow: none;
 }
 .app-shell.has-floating-surfaces .workspace-panel-main.tiled-panel.is-empty {
   border-color: transparent;
@@ -1512,11 +1530,6 @@ useWindowInteraction({ onResize: measureWorkspace });
 .app-shell.has-floating-surfaces .workspace-panel-tool {
   margin-top: var(--workspace-side-panel-top-offset);
   height: calc(100% - var(--workspace-side-panel-top-offset));
-}
-.app-shell.has-floating-surfaces .file-manager,
-.app-shell.has-floating-surfaces .fm-table-header,
-.app-shell.has-floating-surfaces .fm-load-more {
-  background: color-mix(in srgb, var(--app-bg-dialog) 80%, transparent) !important;
 }
 /* will-change removed: triggers excessive GPU layering on iGPU,
    causing re-rasterization of the entire tiled workspace on every drag frame */

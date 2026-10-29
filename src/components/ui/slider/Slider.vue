@@ -78,6 +78,6 @@ const isVertical = computed(() => props.orientation === 'vertical');
     </SliderTrack>
 
     <SliderThumb v-for="(_, key) in modelValue" :key="key" data-slot="slider-thumb"
-      class="border-primary ring-ring/50 size-4 rounded-full border bg-white shadow-sm transition-[color,box-shadow] hover:ring-4 focus-visible:shadow-[var(--app-focus-shadow)] focus-visible:outline-none block shrink-0 select-none disabled:pointer-events-none disabled:opacity-50" />
+      class="border-primary ring-ring/50 size-4 rounded-full border bg-white shadow-sm transition-[color,box-shadow] hover:ring-4 focus-visible:[box-shadow:var(--app-focus-shadow)] focus-visible:outline-none block shrink-0 select-none disabled:pointer-events-none disabled:opacity-50" />
   </SliderRoot>
 </template>
