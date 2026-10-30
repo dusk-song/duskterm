@@ -8,6 +8,7 @@ const MAX_FINISHED_TASKS = 200;
 const ACTIVE_STATUSES = new Set([
   'waiting',
   'negotiating',
+  'retrying',
   'uploading',
   'transferring',
   'finalizing',
@@ -221,10 +222,14 @@ export const useTransfersStore = defineStore('transfers', () => {
       });
     }
     if (!task) return false;
+    // A delayed progress event must not resurrect a cancelled/finished queue entry.
+    if (TERMINAL_STATUSES.has(task.status) && ACTIVE_STATUSES.has(payload.status)) return false;
 
     const cancellationPending = task.status === 'cancelling';
+    const retryPending = task.protocol === 'sftp' && task.autoRetryPending && payload.status === 'failed' && !String(payload.error || '').includes('[RECOVERY_FAILED]') && !String(payload.error || '').includes('[VERIFY_FAILED]');
+    if (task.status === 'cancelled' && retryPending) return false;
     task.current = Number(payload.current || 0);
-    task.total = Number(payload.total || 0);
+    task.total = Number(payload.total ?? task.total ?? 0);
     task.percent = Number(payload.percent || 0);
     task.direction = payload.direction || task.direction;
     task.phase = payload.phase || task.phase;
@@ -237,7 +242,7 @@ export const useTransfersStore = defineStore('transfers', () => {
     updateTelemetry(task, payload);
 
     if (payload.status === 'failed') {
-      task.status = 'failed';
+      task.status = retryPending ? 'retrying' : 'failed';
       task.error = String(payload.error || `${task.direction === 'download' ? '下载' : '上传'}失败`);
     } else if (payload.status === 'cancelled') {
       task.status = 'cancelled';
@@ -297,7 +302,7 @@ export const useTransfersStore = defineStore('transfers', () => {
   function removeTask(sessionId, requestId) {
     const key = taskKey(sessionId, requestId);
     const index = tasks.value.findIndex((task) => taskKey(task.sessionId, task.id) === key);
-    if (index >= 0) tasks.value.splice(index, 1);
+    if (index >= 0 && !isTaskActive(tasks.value[index])) tasks.value.splice(index, 1);
   }
 
   function clearFinishedTasks() {
@@ -319,7 +324,7 @@ export const useTransfersStore = defineStore('transfers', () => {
   function requestCancel(sessionId, requestId) {
     const task = findTask(sessionId, requestId);
     if (!task) return 'missing';
-    if (task.status === 'waiting' && task.protocol === 'sftp') {
+    if (['waiting', 'retrying'].includes(task.status) && task.protocol === 'sftp') {
       task.status = 'cancelled';
       task.error = '已取消';
       return 'local';

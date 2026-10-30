@@ -6,7 +6,9 @@ import ContextMenuContent from '@/components/ui/context-menu/ContextMenuContent.
 import ContextMenuItem from '@/components/ui/context-menu/ContextMenuItem.vue';
 import ContextMenuSeparator from '@/components/ui/context-menu/ContextMenuSeparator.vue';
 import ContextMenuTrigger from '@/components/ui/context-menu/ContextMenuTrigger.vue';
+import { TooltipHint } from '@/components/ui/tooltip';
 import { toast } from '@/composables/useToast';
+import { useTabReorder } from '@/composables/useTabReorder';
 import { buildSessionDisplayNameMap } from '@/utils/sessionOverview';
 
 const props = defineProps({
@@ -14,11 +16,16 @@ const props = defineProps({
   activePanelId: { type: String, default: null }
 });
 
-const emit = defineEmits(['activate', 'close', 'duplicate', 'reconnect']);
+const emit = defineEmits(['activate', 'close', 'duplicate', 'reconnect', 'move']);
 const tabListRef = ref(null);
 const tabItemRefs = new Map();
 const tabButtonRefs = new Map();
 let resizeObserver = null;
+const { draggingId, dropTarget, ghost, ghostRef, start: startDrag, cancel: cancelDrag, captureClick } = useTabReorder({
+  listRef: tabListRef,
+  itemRefs: tabItemRefs,
+  onMove: (...args) => emit('move', ...args)
+});
 
 const displayNames = computed(() => buildSessionDisplayNameMap(props.panels));
 const panelIds = computed(() => props.panels.map((panel) => panel.id).join('|'));
@@ -85,6 +92,7 @@ const setTabButtonRef = (panelId, element) => {
 };
 
 const scrollActiveIntoView = () => nextTick(() => {
+  if (draggingId.value) return;
   tabItemRefs.get(props.activePanelId)?.scrollIntoView({
     behavior: 'auto',
     block: 'nearest',
@@ -140,7 +148,10 @@ const handleWheel = (event) => {
   event.stopPropagation();
 };
 
-watch([() => props.activePanelId, panelIds], scrollActiveIntoView, { flush: 'post' });
+watch([() => props.activePanelId, panelIds], () => {
+  cancelDrag();
+  scrollActiveIntoView();
+}, { flush: 'post' });
 
 onBeforeUpdate(() => {
   tabItemRefs.clear();
@@ -150,7 +161,10 @@ onBeforeUpdate(() => {
 onMounted(() => {
   scrollActiveIntoView();
   if (typeof ResizeObserver === 'function' && tabListRef.value) {
-    resizeObserver = new ResizeObserver(scrollActiveIntoView);
+    resizeObserver = new ResizeObserver(() => {
+      cancelDrag();
+      scrollActiveIntoView();
+    });
     resizeObserver.observe(tabListRef.value);
   }
 });
@@ -162,24 +176,35 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div class="terminal-tab-bar">
+  <div class="terminal-tab-bar" :class="{ 'is-reordering': draggingId }" @click.capture="captureClick">
     <div ref="tabListRef" class="terminal-tab-list" role="tablist" aria-label="终端会话"
       @wheel="handleWheel">
       <ContextMenu v-for="panel in panels" :key="panel.id">
         <ContextMenuTrigger as-child>
           <div :ref="(element) => setTabItemRef(panel.id, element)"
-            class="terminal-tab-item" :class="{ active: panel.id === activePanelId }">
-          <button :ref="(element) => setTabButtonRef(panel.id, element)" type="button"
-            class="terminal-tab-main" role="tab" :aria-selected="panel.id === activePanelId"
-            :tabindex="panel.id === activePanelId ? 0 : -1" @click="activatePanel(panel.id)"
-            @keydown="handleTabKeydown($event, panel.id)">
-            <span class="terminal-tab-status" :class="panel.status" aria-hidden="true" />
-            <span class="terminal-tab-label" :title="`${getDisplayName(panel)} · ${{ connected: '已连接', connecting: '连接中', error: '连接失败', disconnected: '已断开' }[panel.status] || panel.status}`">{{ getDisplayName(panel) }}</span>
-          </button>
-          <button type="button" class="terminal-tab-close" :aria-label="`关闭 ${getDisplayName(panel)}`"
-            @mousedown.stop @click.stop="closePanel(panel.id)">
-            <X :size="13" stroke-width="1.9" />
-          </button>
+            class="terminal-tab-item" :class="{
+              active: panel.id === activePanelId,
+              'is-dragging': panel.id === draggingId,
+              'drop-before': dropTarget?.id === panel.id && dropTarget.placement === 'before',
+              'drop-after': dropTarget?.id === panel.id && dropTarget.placement === 'after'
+            }" @pointerdown="startDrag($event, panel)" @lostpointercapture="cancelDrag"
+            @dragstart.prevent @contextmenu="cancelDrag">
+            <TooltipHint :text="`${getDisplayName(panel)} · ${{ connected: '已连接', connecting: '连接中', error: '连接失败', disconnected: '已断开' }[panel.status] || panel.status}`"
+              :disabled="!!draggingId" side="bottom">
+              <button :ref="(element) => setTabButtonRef(panel.id, element)" type="button"
+                class="terminal-tab-main" role="tab" :aria-selected="panel.id === activePanelId"
+                :tabindex="panel.id === activePanelId ? 0 : -1" @click="activatePanel(panel.id)"
+                @keydown="handleTabKeydown($event, panel.id)">
+                <span class="terminal-tab-status" :class="panel.status" aria-hidden="true" />
+                <span class="terminal-tab-label">{{ getDisplayName(panel) }}</span>
+              </button>
+            </TooltipHint>
+            <TooltipHint :text="`关闭 ${getDisplayName(panel)}`" :disabled="!!draggingId" side="bottom">
+              <button type="button" class="terminal-tab-close" :aria-label="`关闭 ${getDisplayName(panel)}`"
+                @mousedown.stop @click.stop="closePanel(panel.id)">
+                <X :size="13" stroke-width="1.9" />
+              </button>
+            </TooltipHint>
           </div>
         </ContextMenuTrigger>
         <ContextMenuContent>
@@ -204,6 +229,13 @@ onBeforeUnmount(() => {
         </ContextMenuContent>
       </ContextMenu>
     </div>
+    <Teleport to="body">
+      <div v-if="ghost" ref="ghostRef" class="terminal-tab-ghost" :style="{ width: `${ghost.width}px` }" aria-hidden="true">
+        <span class="terminal-tab-status" :class="ghost.panel.status" />
+        <span class="terminal-tab-label">{{ getDisplayName(ghost.panel) }}</span>
+        <X :size="13" class="terminal-tab-ghost-close" />
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -214,9 +246,9 @@ onBeforeUnmount(() => {
   display: flex;
   flex: 0 0 auto;
   min-width: 0;
-  min-height: 26px;
+  min-height: 32px;
   align-items: stretch;
-  padding: 0;
+  padding: 3px 4px 0;
   border-bottom: 1px solid var(--app-border-shadow);
   background: color-mix(in srgb, var(--app-tab-bg-inactive) 48%, transparent);
 }
@@ -226,9 +258,9 @@ onBeforeUnmount(() => {
   grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
   flex: 1 1 auto;
   min-width: 0;
-  max-height: 78px;
+  max-height: 100px;
   align-content: flex-start;
-  gap: 0;
+  gap: 2px;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior-y: contain;
@@ -249,10 +281,13 @@ onBeforeUnmount(() => {
   display: inline-flex;
   position: relative;
   min-width: 0;
-  height: 26px;
+  height: 32px;
   align-items: center;
   overflow: hidden;
-  border-right: 1px solid transparent;
+  border-right: 1px solid color-mix(in srgb, var(--app-border-shadow) 50%, transparent);
+  border-radius: 5px 5px 0 0;
+  user-select: none;
+  touch-action: none;
   color: var(--app-text-muted);
   background: transparent;
   transition: color var(--app-motion-control), background var(--app-motion-control), border-color var(--app-motion-control);
@@ -260,10 +295,11 @@ onBeforeUnmount(() => {
 
 .terminal-tab-item::after {
   position: absolute;
-  right: 0;
+  right: 8px;
   bottom: 0;
-  left: 0;
-  height: 1px;
+  left: 8px;
+  height: 2px;
+  border-radius: 2px 2px 0 0;
   content: '';
   background: hsl(var(--primary));
   opacity: 0;
@@ -284,14 +320,19 @@ onBeforeUnmount(() => {
   opacity: 1;
 }
 
+.terminal-tab-item.active .terminal-tab-label {
+  font-weight: 600;
+}
+
 .terminal-tab-main {
   display: inline-flex;
   flex: 1 1 auto;
   min-width: 0;
   height: 100%;
   align-items: center;
-  gap: 6px;
-  padding: 0 4px 0 9px;
+  gap: 7px;
+  padding: 0 5px 0 11px;
+  cursor: default;
   border: 0;
   outline: none;
   color: inherit;
@@ -338,6 +379,7 @@ onBeforeUnmount(() => {
 }
 
 .terminal-tab-close {
+  cursor: default;
   display: inline-flex;
   width: 20px;
   height: 20px;
@@ -357,6 +399,7 @@ onBeforeUnmount(() => {
 
 .terminal-tab-item:hover .terminal-tab-close,
 .terminal-tab-item.active .terminal-tab-close,
+.terminal-tab-item:focus-within .terminal-tab-close,
 .terminal-tab-close:focus-visible {
   opacity: .72;
 }
@@ -376,6 +419,55 @@ onBeforeUnmount(() => {
   color: var(--app-terminal-close-hover-color);
   background: var(--app-terminal-close-hover-bg);
   opacity: 1;
+}
+
+.terminal-tab-item.is-dragging {
+  opacity: .35;
+}
+
+.terminal-tab-item::before {
+  position: absolute;
+  z-index: 2;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 2px;
+  background: hsl(var(--primary));
+  pointer-events: none;
+}
+
+.terminal-tab-item.drop-before::before { left: 0; content: ''; }
+.terminal-tab-item.drop-after::before { right: 0; content: ''; }
+.is-reordering, .is-reordering :deep(*) { cursor: default; }
+
+.terminal-tab-ghost {
+  position: fixed;
+  top: 0;
+  left: 0;
+  z-index: 10000;
+  display: flex;
+  height: 32px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 8px 0 11px;
+  box-sizing: border-box;
+  border: 1px solid var(--app-focus-border);
+  border-radius: 6px;
+  color: var(--app-text);
+  background: var(--app-tab-bg-active);
+  box-shadow: 0 6px 18px rgb(0 0 0 / .2);
+  pointer-events: none;
+  will-change: transform;
+  transform: translate3d(-10000px, -10000px, 0);
+}
+.terminal-tab-ghost-close { margin-left: auto; flex-shrink: 0; opacity: .65; }
+
+@media (prefers-reduced-motion: reduce) {
+  .terminal-tab-item, .terminal-tab-item::after, .terminal-tab-close { transition: none; }
+}
+
+@media (hover: none) {
+  .terminal-tab-close { opacity: .72; }
 }
 
 @media (max-width: 720px) {

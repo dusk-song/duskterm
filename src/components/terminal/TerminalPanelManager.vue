@@ -22,7 +22,7 @@ const props = defineProps({
   onSetFocused: { type: Function, required: true }
 });
 
-const emit = defineEmits(['activate', 'close-panel', 'duplicate-panel', 'reconnect-panel']);
+const emit = defineEmits(['activate', 'close-panel', 'duplicate-panel', 'reconnect-panel', 'move-panel']);
 
 const closeActivePanel = () => {
   if (props.activePanelId) emit('close-panel', props.activePanelId);
@@ -145,7 +145,7 @@ const handleTerminalSettingsChanged = (event) => {
   };
 };
 
-watch(() => props.activePanelId, () => {
+watch([() => props.activePanelId, () => props.panels.map((panel) => panel.id).join('|')], () => {
   syncIndexFromActive();
 });
 
@@ -193,6 +193,7 @@ const panelStripStyle = computed(() => isClassicTabs.value
   <div ref="rootRef" class="terminal-panel-manager" :class="{ 'is-classic-tabs': isClassicTabs }">
     <TerminalTabBar v-if="hasPanels && isClassicTabs" :panels="panels" :active-panel-id="activePanelId"
       @activate="emit('activate', $event)" @close="emit('close-panel', $event)"
+      @move="(...args) => emit('move-panel', ...args)"
       @duplicate="emit('duplicate-panel', $event)" @reconnect="emit('reconnect-panel', $event)" />
     <TunnelQuickActions v-if="hasPanels && activeSavedSessionId && !isClassicTabs"
       :session-id="activeSavedSessionId" />

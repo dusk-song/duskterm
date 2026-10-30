@@ -1953,25 +1953,36 @@ fn build_client_config(
 pub async fn open_sftp_subsystem_for_session(
     shared_session_slot: &SharedSshSessionSlot,
 ) -> Result<russh_sftp::client::SftpSession, String> {
+    open_sftp_subsystem_for_session_traced(shared_session_slot, |_| {}).await
+}
+
+pub async fn open_sftp_subsystem_for_session_traced(
+    shared_session_slot: &SharedSshSessionSlot,
+    report: impl Fn(&'static str) + Send + Sync,
+) -> Result<russh_sftp::client::SftpSession, String> {
     let shared_session = shared_session_slot
         .lock()
         .unwrap()
         .clone()
         .ok_or_else(|| "SSH session not ready for SFTP reuse".to_string())?;
 
+    report("wait_ssh_session");
     let channel = {
         let session = shared_session.lock().await;
+        report("open_channel");
         session
             .channel_open_session()
             .await
             .map_err(|e| format!("Failed to open shared SSH channel: {}", e))?
     };
 
+    report("request_subsystem");
     channel
         .request_subsystem(true, "sftp")
         .await
         .map_err(|e| format!("Failed to request shared sftp subsystem: {}", e))?;
 
+    report("init_sftp");
     russh_sftp::client::SftpSession::new_with_config(
         channel.into_stream(),
         crate::sftp::sftp_client_config(),

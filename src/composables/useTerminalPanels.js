@@ -15,9 +15,9 @@ export function useTerminalPanels(sshStore) {
     activeKey.value = panelId;
   };
 
-  const movePanel = (dragId, dropId) => {
+  const movePanel = (dragId, dropId, placement) => {
     if (!dragId || !dropId || dragId === dropId) return;
-    sshStore.moveSession(dragId, dropId);
+    sshStore.moveSession(dragId, dropId, placement);
   };
 
   return {

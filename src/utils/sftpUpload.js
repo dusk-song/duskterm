@@ -15,11 +15,14 @@ export function normalizeLocalUploadPaths(sources) {
 
 export function classifyLocalUploadEntries(entries) {
   const files = [];
+  const errors = [];
   let directoryCount = 0;
   let unsupportedCount = 0;
 
   for (const entry of Array.isArray(entries) ? entries : []) {
-    if (entry?.isFile && entry.path) {
+    if (entry?.error && entry.path) {
+      errors.push(entry);
+    } else if (entry?.isFile && entry.path) {
       files.push(entry);
     } else if (entry?.isDir) {
       directoryCount += 1;
@@ -28,5 +31,5 @@ export function classifyLocalUploadEntries(entries) {
     }
   }
 
-  return { files, directoryCount, unsupportedCount };
+  return { files, errors, directoryCount, unsupportedCount };
 }

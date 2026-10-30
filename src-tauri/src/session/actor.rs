@@ -4,12 +4,13 @@ use crate::{local_terminal, sftp, ssh, tunnel};
 
 use super::{
     message::SessionMessage,
-    state::{LifecycleState, SessionRuntimeState, SharedHostkeyDecision},
+    state::{LifecycleState, SessionRuntimeState, SharedHostkeyDecision, TransferState},
 };
 
 #[derive(Clone)]
 pub struct SessionActorHandle {
     pub sender: UnboundedSender<SessionMessage>,
+    pub transfers: TransferState,
 }
 
 fn reap_finished_transfer_tasks(runtime_state: &mut SessionRuntimeState) {
@@ -33,10 +34,13 @@ pub fn spawn_session_actor(
 ) -> SessionActorHandle {
     let (sender, mut receiver) = unbounded_channel::<SessionMessage>();
     let actor_sender = sender.clone();
+    let transfers = TransferState::default();
+    let actor_transfers = transfers.clone();
 
     tokio::spawn(async move {
         let mut runtime_state =
             SessionRuntimeState::with_hostkey_decisions(pending_ssh_hostkey, pending_sftp_hostkey);
+        runtime_state.transfers = transfers;
 
         while let Some(message) = receiver.recv().await {
             match message {
@@ -623,6 +627,7 @@ pub fn spawn_session_actor(
                         (
                             runtime.state.clone(),
                             runtime.handle.sftp.clone(),
+                            runtime.handle.shared_ssh_session.clone(),
                             runtime.handle.reused_from_ssh,
                             runtime.handle.connection_config.clone(),
                         )
@@ -637,6 +642,7 @@ pub fn spawn_session_actor(
                         let result = if let Some((
                             runtime_state,
                             sftp_handle,
+                            shared_ssh_session,
                             reused_from_ssh,
                             connection_config,
                         )) = transfer_runtime
@@ -645,6 +651,7 @@ pub fn spawn_session_actor(
                                 window,
                                 &runtime_state,
                                 sftp_handle,
+                                shared_ssh_session,
                                 reused_from_ssh,
                                 connection_config,
                                 pending_sftp_hostkey,
@@ -662,10 +669,6 @@ pub fn spawn_session_actor(
                         let _ = respond_to.send(result);
                     });
                     runtime_state.transfer_tasks.insert(transfer_req_id, task);
-                }
-                SessionMessage::CancelSftpTransfer { req_id, respond_to } => {
-                    let result = runtime_state.transfers.cancel(&req_id);
-                    let _ = respond_to.send(result);
                 }
                 SessionMessage::StartTunnel {
                     app_handle,
@@ -729,5 +732,6 @@ pub fn spawn_session_actor(
 
     SessionActorHandle {
         sender: actor_sender,
+        transfers: actor_transfers,
     }
 }

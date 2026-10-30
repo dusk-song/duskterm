@@ -3,6 +3,7 @@ import { defineStore } from 'pinia';
 import { ref } from 'vue';
 import { invokeCommand } from '../utils/ipc';
 import { loadMainUiSettings } from '../utils/mainUi';
+import { moveSessionInList } from '../utils/tabReorder';
 import { ensureSessionDisplayMetadata } from '../utils/sessionOverview';
 
 export const useSshStore = defineStore('ssh', () => {
@@ -181,25 +182,8 @@ export const useSshStore = defineStore('ssh', () => {
     sftpConnectedSessionIds.value = (sftpConnectedSessionIds.value || []).filter(id => id !== sessionId);
   }
 
-  function moveSession(dragId, dropId) {
-    const dragIdx = sessions.value.findIndex(s => s.id === dragId);
-    const dropIdx = sessions.value.findIndex(s => s.id === dropId);
-
-    if (dragIdx > -1 && dropIdx > -1 && dragIdx !== dropIdx) {
-      const item = sessions.value.splice(dragIdx, 1)[0];
-      // If we removed an item before the drop target, the drop index shifts
-      // We want to insert *before* or *after*? 
-      // Simplified: insert at the new index.
-      // Re-find drop index because array changed
-      const newDropIdx = sessions.value.findIndex(s => s.id === dropId);
-
-      // If we are moving forward/backward matters, but usually "insert at drop location" is fine.
-      // However, usually detailed drag logic requires knowing "after" or "before".
-      // For tabs, if I drop ON a tab, typically I want to place it *before* it, or swap.
-      // Let's implement "insert before dropId".
-
-      sessions.value.splice(newDropIdx, 0, item);
-    }
+  function moveSession(dragId, dropId, placement = 'before') {
+    moveSessionInList(sessions.value, dragId, dropId, placement);
   }
 
   function getSession(id) {

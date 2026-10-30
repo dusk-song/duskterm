@@ -1,6 +1,7 @@
 export const ACTIVE_TRANSFER_STATUSES = new Set([
   'waiting',
   'negotiating',
+  'retrying',
   'uploading',
   'transferring',
   'finalizing',

@@ -22,6 +22,8 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncSeekExt, AsyncWrite, AsyncWriteExt
 use tokio::sync::oneshot;
 use tokio::sync::{Mutex as AsyncMutex, OwnedMutexGuard};
 use zeroize::Zeroize;
+mod transfer_io;
+use transfer_io::{traced_transfer_step, transfer_step};
 const SFTP_TRANSFER_BUFFER_SIZE: usize = 256 * 1024;
 pub(crate) const SFTP_TRANSFER_CHANNEL_SIZE: usize = 8;
 const SFTP_MAX_CONCURRENT_WRITES: usize = 64;
@@ -733,7 +735,10 @@ pub async fn connect_sftp_legacy(
     session_id: String,
     config: SshConfig,
 ) -> Result<SftpConnectionHandle, String> {
-    cleanup_session_state(&state, &session_id);
+    // Active transfers may still own locks from the previous metadata connection.
+    // Replacing that connection must not create a second lock for the same path.
+    invalidate_session_cache(&state, &session_id);
+    state.ug_cache.lock().unwrap().remove(&session_id);
 
     if let Some(shared_session_slot) = shared_session_slot.as_ref() {
         if let Ok(sftp) = ssh::open_sftp_subsystem_for_session(shared_session_slot).await {
@@ -1101,17 +1106,20 @@ pub async fn sftp_drag_download_stream_runtime(
             0,
             total_size,
         )?;
-        let transfer_session = open_transfer_sftp_session(
-            &state,
-            window.app_handle(),
-            sftp,
-            reused_from_ssh,
-            connection_config,
-            pending_hostkey,
-            &session_id,
-            &req_id,
+        let transfer_session = transfer_step(
+            &cancel,
+            open_transfer_sftp_session(
+                &state,
+                window.app_handle(),
+                sftp,
+                reused_from_ssh,
+                connection_config,
+                pending_hostkey,
+                &session_id,
+                &req_id,
+            ),
         )
-        .await?;
+        .await??;
         let mut remote = transfer_session
             .sftp
             .open(&remote_path)
@@ -1128,9 +1136,8 @@ pub async fn sftp_drag_download_stream_runtime(
                 return Err("Transfer cancelled".to_string());
             }
 
-            let read = remote
-                .read(&mut buffer)
-                .await
+            let read = transfer_step(&cancel, remote.read(&mut buffer))
+                .await?
                 .map_err(|error| format!("Read Error: {error}"))?;
             if read == 0 {
                 send_sftp_stream_message(&sender, SftpStreamMessage::End, &cancel).await?;
@@ -1229,6 +1236,7 @@ pub async fn sftp_upload_file_runtime(
     window: Window,
     state: &SftpAppState,
     sftp: Arc<SftpSession>,
+    shared_ssh_session: Option<crate::ssh::SharedSshSessionSlot>,
     reused_from_ssh: bool,
     connection_config: SshConfig,
     pending_hostkey: crate::session::state::SharedHostkeyDecision,
@@ -1242,6 +1250,7 @@ pub async fn sftp_upload_file_runtime(
         window,
         state,
         sftp,
+        shared_ssh_session,
         reused_from_ssh,
         connection_config,
         pending_hostkey,
@@ -3021,10 +3030,12 @@ async fn read_sftp_range(
         }
         let read_offset = offset + data.len() as u64;
         let remaining = length - data.len();
-        let response = raw
-            .read(handle.clone(), read_offset, remaining as u32)
-            .await
-            .map_err(|error| format!("Read Error at offset {}: {}", read_offset, error))?;
+        let response = transfer_step(
+            &cancel,
+            raw.read(handle.clone(), read_offset, remaining as u32),
+        )
+        .await?
+        .map_err(|error| format!("Read Error at offset {}: {}", read_offset, error))?;
         if response.data.is_empty() {
             return Err(format!("Premature EOF at offset {}", read_offset));
         }
@@ -3059,10 +3070,12 @@ async fn parallel_sftp_download(
         ),
     );
     let raw = Arc::new(transfer.raw);
-    let opened = raw
-        .open(remote_path, OpenFlags::READ, FileAttributes::empty())
-        .await
-        .map_err(|error| format!("Open Error: {}", error))?;
+    let opened = transfer_step(
+        cancel,
+        raw.open(remote_path, OpenFlags::READ, FileAttributes::empty()),
+    )
+    .await?
+    .map_err(|error| format!("Open Error: {}", error))?;
     let handle = opened.handle;
     let mut tasks = tokio::task::JoinSet::new();
     let mut pending = BTreeMap::<u64, Vec<u8>>::new();
@@ -3073,7 +3086,8 @@ async fn parallel_sftp_download(
 
     let transfer_result = async {
         while next_write_offset < total_size {
-            while tasks.len() < read_window && next_request_offset < total_size {
+            // A stalled early block must not let later completed blocks grow to file size.
+            while tasks.len() + pending.len() < read_window && next_request_offset < total_size {
                 if cancel.load(Ordering::Relaxed) {
                     return Err("Transfer cancelled".to_string());
                 }
@@ -3094,17 +3108,15 @@ async fn parallel_sftp_download(
                 next_request_offset += length as u64;
             }
 
-            let result = tasks
-                .join_next()
-                .await
+            let result = transfer_step(cancel, tasks.join_next())
+                .await?
                 .ok_or_else(|| "Download pipeline stopped before EOF".to_string())?
                 .map_err(|error| format!("Download task failed: {}", error))??;
             pending.insert(result.0, result.1);
 
             while let Some(chunk) = pending.remove(&next_write_offset) {
-                local
-                    .write_all(&chunk)
-                    .await
+                transfer_step(cancel, local.write_all(&chunk))
+                    .await?
                     .map_err(|error| format!("Write Error: {}", error))?;
                 next_write_offset += chunk.len() as u64;
 
@@ -3140,10 +3152,15 @@ async fn parallel_sftp_download(
         // cancellation yet on high-latency links.
         tasks.shutdown().await;
     }
-    let close_result = raw
-        .close(handle)
-        .await
-        .map_err(|error| format!("Close Error: {}", error));
+    let close_result = if cancel.load(Ordering::Relaxed) {
+        // Data tasks are drained above; a dead peer must not hold cancellation for 30s.
+        tokio::time::timeout(Duration::from_secs(2), raw.close(handle))
+            .await
+            .map_err(|_| "Cancelled download handle close timed out".to_string())?
+    } else {
+        transfer_step(cancel, raw.close(handle)).await?
+    }
+    .map_err(|error| format!("Close Error: {}", error));
     transfer_result.and(close_result.map(|_| next_write_offset))
 }
 
@@ -3180,9 +3197,8 @@ pub async fn sftp_download_file_legacy(
         );
     };
 
-    let total_size = sftp
-        .metadata(&remote_path)
-        .await
+    let total_size = transfer_step(&cancel, sftp.metadata(&remote_path))
+        .await?
         .map_err(|error| {
             let error = format!("Stat Error: {}", error);
             emit_failed(0, 0, error.clone());
@@ -3236,9 +3252,20 @@ pub async fn sftp_download_file_legacy(
             err
         })?;
 
-    let raw_transfer =
-        open_raw_sftp_subsystem_for_transfer(client_session.as_ref(), shared_ssh_session.as_ref())
-            .await;
+    let raw_transfer = transfer_step(
+        &cancel,
+        open_raw_sftp_subsystem_for_transfer(client_session.as_ref(), shared_ssh_session.as_ref()),
+    )
+    .await;
+    let raw_transfer = match raw_transfer {
+        Ok(result) => result,
+        Err(error) => {
+            drop(local);
+            let _ = tokio::fs::remove_file(&local_temp_path).await;
+            emit_transfer_cancelled(&window, &session_id, &req_id, "download", 0, total_size);
+            return Err(error);
+        }
+    };
 
     let _ = window.emit(
         "sftp-progress",
@@ -3474,7 +3501,8 @@ async fn pipelined_sftp_download<RemoteReader: tokio::io::AsyncRead + Unpin + Se
     let read_req_id = req_id.to_string();
     let read_window = window.clone();
 
-    let reader = tokio::spawn(async move {
+    let mut readers = tokio::task::JoinSet::new();
+    readers.spawn(async move {
         let mut buffer = vec![0u8; SFTP_TRANSFER_BUFFER_SIZE];
         loop {
             if read_cancel.load(Ordering::Relaxed) {
@@ -3535,7 +3563,7 @@ async fn pipelined_sftp_download<RemoteReader: tokio::io::AsyncRead + Unpin + Se
     let mut last_emit = std::time::Instant::now();
     let mut last_emit_bytes: u64 = 0;
 
-    while let Some(chunk_result) = rx.recv().await {
+    while let Some(chunk_result) = transfer_step(cancel, rx.recv()).await? {
         let chunk = chunk_result.map_err(|e| {
             if e == "cancelled" {
                 "传输已取消".to_string()
@@ -3544,11 +3572,13 @@ async fn pipelined_sftp_download<RemoteReader: tokio::io::AsyncRead + Unpin + Se
             }
         })?;
         let n = chunk.len();
-        local.write_all(&chunk).await.map_err(|e| {
-            let err = format!("Write Error: {}", e);
-            emit_failed(downloaded, total_size, err.clone());
-            err
-        })?;
+        transfer_step(cancel, local.write_all(&chunk))
+            .await?
+            .map_err(|e| {
+                let err = format!("Write Error: {}", e);
+                emit_failed(downloaded, total_size, err.clone());
+                err
+            })?;
         downloaded += u64::try_from(n).map_err(|_| "Read size conversion error".to_string())?;
 
         if should_emit_transfer_progress(&last_emit, downloaded.saturating_sub(last_emit_bytes)) {
@@ -3574,7 +3604,7 @@ async fn pipelined_sftp_download<RemoteReader: tokio::io::AsyncRead + Unpin + Se
         }
     }
 
-    if let Err(error) = reader.await {
+    if let Some(Err(error)) = readers.join_next().await {
         let error = format!("Download reader task failed: {}", error);
         emit_failed(downloaded, total_size, error.clone());
         return Err(error);
@@ -3582,10 +3612,61 @@ async fn pipelined_sftp_download<RemoteReader: tokio::io::AsyncRead + Unpin + Se
     Ok(downloaded)
 }
 
+async fn discard_upload_temp<W: AsyncWrite + Unpin>(
+    mut remote: W,
+    sftp: &SftpSession,
+    temp_path: &str,
+    session_id: &str,
+) {
+    let cleanup = tokio::time::timeout(Duration::from_secs(2), async {
+        let _ = remote.shutdown().await;
+        drop(remote);
+        sftp.remove_file(temp_path).await
+    })
+    .await;
+    if !matches!(cleanup, Ok(Ok(_))) {
+        connection_log::append(
+            session_id,
+            "sftp upload temporary cleanup failed or timed out; original target untouched",
+        );
+    }
+}
+
+// Never hide a failed restore behind the original cancellation or network error.
+async fn restore_upload_target(
+    sftp: &SftpSession,
+    remote_path: &str,
+    backup_path: &str,
+    had_original: bool,
+    promoted: bool,
+) -> Result<(), String> {
+    if promoted {
+        match sftp.remove_file(remote_path).await {
+            Ok(()) => {}
+            Err(SftpClientError::Status(status))
+                if status.status_code == StatusCode::NoSuchFile => {}
+            Err(error) => {
+                return Err(format!(
+                "[RECOVERY_FAILED] 新目标清理失败：{error}；未继续恢复备份，请检查 {backup_path}"
+            ))
+            }
+        }
+    }
+    if had_original {
+        sftp.rename(backup_path, remote_path)
+            .await
+            .map_err(|error| {
+                format!("[RECOVERY_FAILED] 原文件恢复失败：{error}；备份保留于 {backup_path}")
+            })?;
+    }
+    Ok(())
+}
+
 pub async fn sftp_upload_file_legacy(
     window: Window,
     state: &SftpAppState,
     sftp: Arc<SftpSession>,
+    shared_ssh_session: Option<crate::ssh::SharedSshSessionSlot>,
     reused_from_ssh: bool,
     connection_config: SshConfig,
     pending_hostkey: crate::session::state::SharedHostkeyDecision,
@@ -3596,17 +3677,37 @@ pub async fn sftp_upload_file_legacy(
     req_id: String,
 ) -> Result<(), String> {
     ensure_transfer_active(&window, &cancel, &session_id, &req_id, "upload", 0, 0)?;
-    let transfer_session = open_transfer_sftp_session(
-        state,
-        &window.app_handle(),
-        sftp,
-        reused_from_ssh,
-        connection_config,
-        pending_hostkey,
-        &session_id,
-        &req_id,
-    )
-    .await?;
+    let started = std::time::Instant::now();
+    let preparing = |phase: &'static str| {
+        connection_log::append(
+            &session_id,
+            format!(
+                "sftp upload startup request={req_id} stage={phase} elapsed_ms={}",
+                started.elapsed().as_millis()
+            ),
+        );
+    };
+    preparing("open_transport");
+    let transfer_session = traced_transfer_step(&cancel, async {
+        // Like downloads, use a separate subsystem over the already authenticated SSH
+        // transport. Small files should not pay for a fresh TCP/KEX/authentication each time.
+        if let Some(shared_session) = shared_ssh_session.as_ref() {
+            match ssh::open_sftp_subsystem_for_session_traced(shared_session, &preparing).await {
+                Ok(sftp) => {
+                    connection_log::append(&session_id, "sftp upload transport=shared_ssh_subsystem");
+                    return Ok(TransferSftpSession {
+                        sftp: Arc::new(sftp), owned: None, jump_owned: None, keepalive: None,
+                    });
+                }
+                Err(_) => connection_log::append(&session_id, "sftp upload shared subsystem unavailable; using existing dedicated connection path"),
+            }
+        }
+        preparing("connect_dedicated");
+        open_transfer_sftp_session(
+            state, &window.app_handle(), sftp, reused_from_ssh, connection_config,
+            pending_hostkey, &session_id, &req_id,
+        ).await
+    }, &session_id, "open_transport").await??;
     let sftp = transfer_session.sftp.clone();
 
     ensure_transfer_active(&window, &cancel, &session_id, &req_id, "upload", 0, 0)?;
@@ -3631,6 +3732,7 @@ pub async fn sftp_upload_file_legacy(
         );
     };
 
+    preparing("inspect_local");
     let local = match tokio::fs::File::open(&local_path).await {
         Ok(file) => file,
         Err(e) => {
@@ -3658,19 +3760,16 @@ pub async fn sftp_upload_file_legacy(
         0,
         total_size,
     )?;
-    let source_origin_time = local_meta
-        .created()
+    let local_mtime = local_meta
+        .modified()
         .ok()
-        .or_else(|| local_meta.modified().ok())
         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_secs() as u32);
+        .and_then(|duration| u32::try_from(duration.as_secs()).ok());
     let local_atime = local_meta
         .accessed()
         .ok()
         .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-        .map(|duration| duration.as_secs() as u32)
-        .or(source_origin_time);
-    let local_mtime = source_origin_time;
+        .and_then(|duration| u32::try_from(duration.as_secs()).ok());
 
     let trimmed = remote_path.trim_end_matches('/');
     if trimmed.is_empty() {
@@ -3679,7 +3778,9 @@ pub async fn sftp_upload_file_legacy(
         return Err(err);
     }
 
-    let _path_guard = acquire_path_lock(state, &session_id, trimmed).await;
+    preparing("wait_target_lock");
+    let _path_guard =
+        transfer_step(&cancel, acquire_path_lock(state, &session_id, trimmed)).await?;
 
     let (parent_dir, base_name) = if let Some((dir, name)) = trimmed.rsplit_once('/') {
         if !dir.is_empty() {
@@ -3704,13 +3805,15 @@ pub async fn sftp_upload_file_legacy(
         format!("{}/{}", parent_dir, temp_name)
     };
 
-    let original_meta = match remote_metadata_if_exists(&sftp, &remote_path).await {
-        Ok(metadata) => metadata,
-        Err(error) => {
-            emit_failed(0, total_size, error.clone());
-            return Err(error);
-        }
-    };
+    preparing("stat_target");
+    let original_meta =
+        match transfer_step(&cancel, remote_metadata_if_exists(&sftp, &remote_path)).await? {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                emit_failed(0, total_size, error.clone());
+                return Err(error);
+            }
+        };
     let had_original = original_meta.is_some();
     let original_permissions = original_meta.as_ref().and_then(|meta| meta.permissions);
     let local_permissions = local_permissions_from_metadata(&local_meta);
@@ -3734,6 +3837,7 @@ pub async fn sftp_upload_file_legacy(
         total_size,
     )?;
 
+    preparing("create_temp");
     let mut remote = match sftp.create(&temp_path).await {
         Ok(file) => file,
         Err(error) => {
@@ -3764,6 +3868,13 @@ pub async fn sftp_upload_file_legacy(
         },
     );
 
+    connection_log::append(
+        &session_id,
+        format!(
+            "sftp upload startup request={req_id} stage=ready elapsed_ms={}",
+            started.elapsed().as_millis()
+        ),
+    );
     let data_started_at = std::time::Instant::now();
     let result = pipelined_sftp_upload(
         &window,
@@ -3778,15 +3889,12 @@ pub async fn sftp_upload_file_legacy(
     let uploaded = match result {
         Ok(bytes) => bytes,
         Err(e) => {
-            let _ = remote.shutdown().await;
-            drop(remote);
-            let _ = sftp.remove_file(&temp_path).await;
             if cancel.load(Ordering::Relaxed) {
                 let _ = window.emit(
                     "sftp-progress",
                     ProgressPayload {
                         session_id: session_id.clone(),
-                        id: req_id,
+                        id: req_id.clone(),
                         direction: "upload".to_string(),
                         current: 0,
                         total: total_size,
@@ -3796,13 +3904,11 @@ pub async fn sftp_upload_file_legacy(
                     },
                 );
             }
+            discard_upload_temp(remote, &sftp, &temp_path, &session_id).await;
             return Err(e);
         }
     };
     if cancel.load(Ordering::Relaxed) {
-        let _ = remote.shutdown().await;
-        drop(remote);
-        let _ = sftp.remove_file(&temp_path).await;
         emit_transfer_cancelled(
             &window,
             &session_id,
@@ -3811,6 +3917,7 @@ pub async fn sftp_upload_file_legacy(
             uploaded,
             total_size,
         );
+        discard_upload_temp(remote, &sftp, &temp_path, &session_id).await;
         return Err("Transfer cancelled".to_string());
     }
     if uploaded != total_size {
@@ -3825,11 +3932,26 @@ pub async fn sftp_upload_file_legacy(
         return Err(err);
     }
 
-    if let Err(error) = remote.shutdown().await {
-        let error = format!("Shutdown Error: {}", error);
-        let _ = sftp.remove_file(&temp_path).await;
-        emit_failed(uploaded, total_size, error.clone());
-        return Err(error);
+    match traced_transfer_step(&cancel, remote.shutdown(), &session_id, "drain_write_acks").await {
+        Err(error) => {
+            emit_transfer_cancelled(
+                &window,
+                &session_id,
+                &req_id,
+                "upload",
+                uploaded,
+                total_size,
+            );
+            discard_upload_temp(remote, &sftp, &temp_path, &session_id).await;
+            return Err(error);
+        }
+        Ok(Err(error)) => {
+            let error = format!("Shutdown Error: {}", error);
+            emit_failed(uploaded, total_size, error.clone());
+            discard_upload_temp(remote, &sftp, &temp_path, &session_id).await;
+            return Err(error);
+        }
+        Ok(Ok(())) => {}
     }
     drop(remote);
 
@@ -3873,13 +3995,50 @@ pub async fn sftp_upload_file_legacy(
             return Err(error);
         }
     };
-    if let Err(error) = durable_remote.flush().await {
-        let error = format!("Flush Error: {}", error);
-        let _ = sftp.remove_file(&temp_path).await;
-        emit_failed(uploaded, total_size, error.clone());
-        return Err(error);
+    match traced_transfer_step(&cancel, durable_remote.flush(), &session_id, "remote_fsync").await {
+        Err(error) => {
+            emit_transfer_cancelled(
+                &window,
+                &session_id,
+                &req_id,
+                "upload",
+                uploaded,
+                total_size,
+            );
+            discard_upload_temp(durable_remote, &sftp, &temp_path, &session_id).await;
+            return Err(error);
+        }
+        Ok(Err(error)) => {
+            let error = format!("Flush Error: {}", error);
+            emit_failed(uploaded, total_size, error.clone());
+            discard_upload_temp(durable_remote, &sftp, &temp_path, &session_id).await;
+            return Err(error);
+        }
+        Ok(Ok(())) => {}
     }
-    if let Err(error) = durable_remote.shutdown().await {
+    let shutdown = match traced_transfer_step(
+        &cancel,
+        durable_remote.shutdown(),
+        &session_id,
+        "close_temp_file",
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(error) => {
+            emit_transfer_cancelled(
+                &window,
+                &session_id,
+                &req_id,
+                "upload",
+                uploaded,
+                total_size,
+            );
+            discard_upload_temp(durable_remote, &sftp, &temp_path, &session_id).await;
+            return Err(error);
+        }
+    };
+    if let Err(error) = shutdown {
         let error = format!("Shutdown Error: {}", error);
         let _ = sftp.remove_file(&temp_path).await;
         emit_failed(uploaded, total_size, error.clone());
@@ -3887,7 +4046,6 @@ pub async fn sftp_upload_file_legacy(
     }
 
     if cancel.load(Ordering::Relaxed) {
-        let _ = sftp.remove_file(&temp_path).await;
         emit_transfer_cancelled(
             &window,
             &session_id,
@@ -3896,10 +4054,31 @@ pub async fn sftp_upload_file_legacy(
             uploaded,
             total_size,
         );
+        discard_upload_temp(durable_remote, &sftp, &temp_path, &session_id).await;
         return Err("Transfer cancelled".to_string());
     }
 
-    let temp_size = match read_remote_size_with_retry(&sftp, temp_path.as_str(), 8, 120).await {
+    let temp_size = match transfer_step(
+        &cancel,
+        read_remote_size_with_retry(&sftp, temp_path.as_str(), 8, 120),
+    )
+    .await
+    {
+        Ok(result) => result,
+        Err(error) => {
+            emit_transfer_cancelled(
+                &window,
+                &session_id,
+                &req_id,
+                "upload",
+                uploaded,
+                total_size,
+            );
+            discard_upload_temp(durable_remote, &sftp, &temp_path, &session_id).await;
+            return Err(error);
+        }
+    };
+    let temp_size = match temp_size {
         Ok(size) => size,
         Err(e) => {
             let _ = sftp.remove_file(&temp_path).await;
@@ -3920,7 +4099,6 @@ pub async fn sftp_upload_file_legacy(
     }
 
     if cancel.load(Ordering::Relaxed) {
-        let _ = sftp.remove_file(&temp_path).await;
         emit_transfer_cancelled(
             &window,
             &session_id,
@@ -3929,192 +4107,86 @@ pub async fn sftp_upload_file_legacy(
             uploaded,
             total_size,
         );
+        discard_upload_temp(durable_remote, &sftp, &temp_path, &session_id).await;
         return Err("Transfer cancelled".to_string());
     }
 
     if had_original {
-        if let Err(e) = sftp.rename(&remote_path, &backup_path).await {
-            let _ = sftp.remove_file(&temp_path).await;
-            let err = format!("Backup Error: {}", e);
-            let _ = window.emit(
-                "sftp-progress",
-                ProgressPayload {
-                    session_id: session_id.clone(),
-                    id: req_id.clone(),
-                    direction: "upload".to_string(),
-                    current: uploaded,
-                    total: total_size,
-                    percent: if total_size > 0 {
-                        ((uploaded as f64 / total_size as f64) * 100.0) as u8
-                    } else {
-                        0
-                    },
-                    status: "failed".to_string(),
-                    error: Some(err.clone()),
-                },
+        if let Err(error) = sftp.rename(&remote_path, &backup_path).await {
+            let error = format!("[RECOVERY_FAILED] 备份操作未确认完成：{error}；请检查目标与备份 {backup_path}，未继续替换文件");
+            emit_failed(uploaded, total_size, error.clone());
+            return Err(error);
+        }
+    }
+
+    let mut promoted = false;
+    let commit = async {
+        if cancel.load(Ordering::Relaxed) {
+            return Err("Transfer cancelled".to_string());
+        }
+        sftp.rename(&temp_path, &remote_path)
+            .await
+            .map_err(|error| format!("[VERIFY_FAILED] Promote Error: {error}"))?;
+        promoted = true;
+        if cancel.load(Ordering::Relaxed) {
+            return Err("Transfer cancelled".to_string());
+        }
+        let final_size = read_remote_size_with_retry(&sftp, &remote_path, 10, 200)
+            .await
+            .map_err(|error| format!("[VERIFY_FAILED] Final verify Error: {error}"))?;
+        if final_size != total_size {
+            return Err(format!(
+                "[VERIFY_FAILED] Final size mismatch: expected {total_size}, observed {final_size}"
+            ));
+        }
+        if cancel.load(Ordering::Relaxed) {
+            return Err("Transfer cancelled".to_string());
+        }
+        if local_atime.is_some() || local_mtime.is_some() || target_permissions.is_some() {
+            let mut attrs = FileAttributes::empty();
+            attrs.atime = local_atime;
+            attrs.mtime = local_mtime;
+            attrs.permissions = target_permissions;
+            sftp.set_metadata(&remote_path, attrs)
+                .await
+                .map_err(|error| format!("[VERIFY_FAILED] Timestamp Sync Error: {error}"))?;
+        }
+        if cancel.load(Ordering::Relaxed) {
+            return Err("Transfer cancelled".to_string());
+        }
+        Ok::<(), String>(())
+    }
+    .await;
+
+    if let Err(error) = commit {
+        let error =
+            match restore_upload_target(&sftp, &remote_path, &backup_path, had_original, promoted)
+                .await
+            {
+                Ok(()) => error,
+                Err(recovery) => format!("{recovery}；原操作错误：{error}"),
+            };
+        let _ = tokio::time::timeout(Duration::from_secs(2), sftp.remove_file(&temp_path)).await;
+        if error == "Transfer cancelled" {
+            emit_transfer_cancelled(
+                &window,
+                &session_id,
+                &req_id,
+                "upload",
+                uploaded,
+                total_size,
             );
-            return Err(err);
-        }
-    }
-
-    if cancel.load(Ordering::Relaxed) {
-        if had_original {
-            let _ = sftp.rename(&backup_path, &remote_path).await;
-        }
-        let _ = sftp.remove_file(&temp_path).await;
-        emit_transfer_cancelled(
-            &window,
-            &session_id,
-            &req_id,
-            "upload",
-            uploaded,
-            total_size,
-        );
-        return Err("Transfer cancelled".to_string());
-    }
-
-    if let Err(e) = sftp.rename(&temp_path, &remote_path).await {
-        if had_original {
-            let _ = sftp.rename(&backup_path, &remote_path).await;
-        }
-        let _ = sftp.remove_file(&temp_path).await;
-        let err = format!("Promote Error: {}", e);
-        let _ = window.emit(
-            "sftp-progress",
-            ProgressPayload {
-                session_id: session_id.clone(),
-                id: req_id.clone(),
-                direction: "upload".to_string(),
-                current: uploaded,
-                total: total_size,
-                percent: if total_size > 0 {
-                    ((uploaded as f64 / total_size as f64) * 100.0) as u8
-                } else {
-                    0
-                },
-                status: "failed".to_string(),
-                error: Some(err.clone()),
-            },
-        );
-        return Err(err);
-    }
-
-    if cancel.load(Ordering::Relaxed) {
-        if had_original {
-            let _ = sftp.remove_file(&remote_path).await;
-            let _ = sftp.rename(&backup_path, &remote_path).await;
         } else {
-            let _ = sftp.remove_file(&remote_path).await;
+            emit_failed(uploaded, total_size, error.clone());
         }
-        emit_transfer_cancelled(
-            &window,
-            &session_id,
-            &req_id,
-            "upload",
-            uploaded,
-            total_size,
-        );
-        return Err("Transfer cancelled".to_string());
+        return Err(error);
     }
-
-    // We rely heavily on exact copy streams.
-    // Allow up to 2 seconds for remote metadata updates to sync across clustered file systems
-    let final_size = match read_remote_size_with_retry(&sftp, &remote_path, 10, 200).await {
-        Ok(size) => size,
-        Err(_e) => {
-            // In case of un-stattable targets, we don't rollback immediately if streams finished completely
-            // Just report success locally as best effort.
-            total_size
-        }
-    };
-    // Only strictly rollback if the server definitely reports an unexpected non-zero size mismatch
-    if final_size != total_size {
-        if had_original {
-            let _ = sftp.remove_file(&remote_path).await;
-            let _ = sftp.rename(&backup_path, &remote_path).await;
-        } else {
-            let _ = sftp.remove_file(&remote_path).await;
-        }
-        let err = format!(
-            "Final verify Error: expected {}, observed {}",
-            total_size, final_size
-        );
-        let _ = window.emit(
-            "sftp-progress",
-            ProgressPayload {
-                session_id: session_id.clone(),
-                id: req_id.clone(),
-                direction: "upload".to_string(),
-                current: final_size,
-                total: total_size,
-                percent: if total_size > 0 {
-                    ((final_size as f64 / total_size as f64) * 100.0) as u8
-                } else {
-                    0
-                },
-                status: "failed".to_string(),
-                error: Some(err.clone()),
-            },
-        );
-        return Err(err);
-    }
-
-    if cancel.load(Ordering::Relaxed) {
-        if had_original {
-            let _ = sftp.remove_file(&remote_path).await;
-            let _ = sftp.rename(&backup_path, &remote_path).await;
-        } else {
-            let _ = sftp.remove_file(&remote_path).await;
-        }
-        emit_transfer_cancelled(
-            &window,
-            &session_id,
-            &req_id,
-            "upload",
-            uploaded,
-            total_size,
-        );
-        return Err("Transfer cancelled".to_string());
-    }
-
-    if local_atime.is_some() || local_mtime.is_some() || target_permissions.is_some() {
-        let mut attrs = FileAttributes::empty();
-        attrs.atime = local_atime;
-        attrs.mtime = local_mtime;
-        attrs.permissions = target_permissions;
-        if let Err(e) = sftp.set_metadata(&remote_path, attrs).await {
-            if had_original {
-                let _ = sftp.remove_file(&remote_path).await;
-                let _ = sftp.rename(&backup_path, &remote_path).await;
-            } else {
-                let _ = sftp.remove_file(&remote_path).await;
-            }
-            let err = format!("Timestamp Sync Error: {}", e);
-            emit_failed(uploaded, total_size, err.clone());
-            return Err(err);
-        }
-    }
-
-    if cancel.load(Ordering::Relaxed) {
-        if had_original {
-            let _ = sftp.remove_file(&remote_path).await;
-            let _ = sftp.rename(&backup_path, &remote_path).await;
-        } else {
-            let _ = sftp.remove_file(&remote_path).await;
-        }
-        emit_transfer_cancelled(
-            &window,
-            &session_id,
-            &req_id,
-            "upload",
-            uploaded,
-            total_size,
-        );
-        return Err("Transfer cancelled".to_string());
-    }
-
     if had_original {
-        let _ = sftp.remove_file(&backup_path).await;
+        if let Err(error) = sftp.remove_file(&backup_path).await {
+            let error = format!("[RECOVERY_FAILED] 新文件已上传并校验，但备份清理失败：{error}；备份保留于 {backup_path}");
+            emit_failed(uploaded, total_size, error.clone());
+            return Err(error);
+        }
     }
 
     connection_log::append(
@@ -4182,14 +4254,30 @@ async fn pipelined_sftp_upload<
             .map_err(|_| "Upload buffer pool initialization failed".to_string())?;
     }
     let read_cancel = cancel.clone();
+    let read_session_id = session_id.to_string();
 
-    let reader = tokio::spawn(async move {
+    let mut readers = tokio::task::JoinSet::new();
+    readers.spawn(async move {
         while let Some(mut buffer) = free_rx.recv().await {
             if read_cancel.load(Ordering::Relaxed) {
                 let _ = filled_tx.send(Err("cancelled".into())).await;
                 return;
             }
-            match local.read(&mut buffer).await {
+            let read = match traced_transfer_step(
+                &read_cancel,
+                local.read(&mut buffer),
+                &read_session_id,
+                "read_local",
+            )
+            .await
+            {
+                Ok(result) => result,
+                Err(error) => {
+                    let _ = filled_tx.send(Err(error)).await;
+                    return;
+                }
+            };
+            match read {
                 Ok(0) => return,
                 Ok(n) => {
                     buffer.truncate(n);
@@ -4210,6 +4298,7 @@ async fn pipelined_sftp_upload<
     let mut uploaded: u64 = 0;
     let mut last_emit = std::time::Instant::now();
     let mut last_emit_bytes: u64 = 0;
+    let mut last_diagnostic = std::time::Instant::now();
     let emit_failed = |current: u64, total: u64, err: String| {
         let _ = window.emit(
             "sftp-progress",
@@ -4230,7 +4319,9 @@ async fn pipelined_sftp_upload<
         );
     };
 
-    while let Some(chunk_result) = filled_rx.recv().await {
+    while let Some(chunk_result) =
+        traced_transfer_step(cancel, filled_rx.recv(), session_id, "wait_local_buffer").await?
+    {
         let mut chunk = chunk_result.map_err(|error| {
             if error != "cancelled" {
                 emit_failed(uploaded, total_size, error.clone());
@@ -4238,16 +4329,25 @@ async fn pipelined_sftp_upload<
             error
         })?;
         let n = chunk.len();
-        remote.write_all(&chunk).await.map_err(|e| {
-            let err = format!("Remote Write Error: {}", e);
-            emit_failed(uploaded, total_size, err.clone());
-            err
-        })?;
+        traced_transfer_step(cancel, remote.write_all(&chunk), session_id, "remote_write")
+            .await?
+            .map_err(|e| {
+                let err = format!("Remote Write Error: {}", e);
+                emit_failed(uploaded, total_size, err.clone());
+                err
+            })?;
         uploaded += u64::try_from(n).map_err(|_| "Read size conversion error".to_string())?;
+        if last_diagnostic.elapsed() >= Duration::from_secs(5) {
+            connection_log::append(
+                session_id,
+                format!("sftp upload progress current={uploaded} total={total_size}"),
+            );
+            last_diagnostic = std::time::Instant::now();
+        }
         chunk.resize(SFTP_TRANSFER_BUFFER_SIZE, 0);
         // The reader drops the free-buffer receiver after a normal EOF. Returning the
         // final buffer can therefore fail even though every byte was written successfully.
-        let _ = free_tx.send(chunk).await;
+        let _ = transfer_step(cancel, free_tx.send(chunk)).await?;
 
         if should_emit_transfer_progress(&last_emit, uploaded.saturating_sub(last_emit_bytes)) {
             let _ = window.emit(
@@ -4272,7 +4372,7 @@ async fn pipelined_sftp_upload<
         }
     }
 
-    if let Err(error) = reader.await {
+    if let Some(Err(error)) = readers.join_next().await {
         let error = format!("Upload reader task failed: {}", error);
         emit_failed(uploaded, total_size, error.clone());
         return Err(error);

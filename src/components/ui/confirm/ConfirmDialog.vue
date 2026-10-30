@@ -35,8 +35,9 @@ const confirmVisual = computed(() => confirmVisualMap[confirmVisualTone.value]);
 </script>
 
 <template>
-  <AlertDialog v-model:open="confirmState.visible">
-    <AlertDialogContent :z-index="confirmState.zIndex" aria-describedby="confirm-dialog-desc">
+  <AlertDialog :open="confirmState.visible">
+    <!-- Reka actions emit close before click; settle from each explicit action so OK is not cancelled first. -->
+    <AlertDialogContent :z-index="confirmState.zIndex" aria-describedby="confirm-dialog-desc" @escape-key-down="onCancel">
       <AlertDialogHeader class="grid grid-cols-[auto_1fr] grid-rows-[auto_1fr] place-items-start gap-x-3 gap-y-1.5 text-left">
         <div
           data-slot="confirm-visual"

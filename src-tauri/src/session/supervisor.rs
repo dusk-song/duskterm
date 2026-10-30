@@ -33,6 +33,37 @@ mod tests {
     use tokio::sync::oneshot;
 
     #[tokio::test]
+    async fn cancel_transfer_does_not_wait_for_actor_mailbox() {
+        use crate::session::{actor::SessionActorHandle, state::TransferState};
+        use std::sync::atomic::Ordering;
+        let supervisor = SessionSupervisor::new();
+        // Deliberately keep the mailbox unconsumed, like an actor blocked on path I/O.
+        let (sender, _receiver) = tokio::sync::mpsc::unbounded_channel();
+        let transfers = TransferState::default();
+        let token = transfers.register_cancel_token("pending-upload");
+        supervisor.actors.lock().unwrap().insert(
+            "busy".into(),
+            SessionActorHandle {
+                sender,
+                transfers: transfers.clone(),
+            },
+        );
+        tokio::time::timeout(
+            std::time::Duration::from_millis(250),
+            supervisor.cancel_sftp_transfer("busy".into(), "pending-upload".into()),
+        )
+        .await
+        .expect("cancel must bypass the busy actor")
+        .unwrap();
+        // The queued start message must reuse, rather than reset, this cancellation.
+        let started = transfers.register_cancel_token("pending-upload");
+        assert!(std::sync::Arc::ptr_eq(&token, &started));
+        assert!(started.load(Ordering::Relaxed));
+        transfers.cleanup("pending-upload");
+        assert!(transfers.cancel("pending-upload").is_err());
+    }
+
+    #[tokio::test]
     async fn confirm_hostkey_resolves_pending_decision_without_actor_roundtrip() {
         let supervisor = SessionSupervisor::new();
         let (tx, rx) = oneshot::channel();
@@ -846,6 +877,8 @@ impl SessionSupervisor {
         req_id: String,
     ) -> Result<(), String> {
         let actor = self.get_or_spawn_actor(&session_id);
+        actor.transfers.register_cancel_token(&req_id);
+        let cleanup_req_id = req_id.clone();
         let (respond_to, rx) = oneshot::channel();
         actor
             .sender
@@ -856,7 +889,10 @@ impl SessionSupervisor {
                 req_id,
                 respond_to,
             })
-            .map_err(|_| "Failed to send SFTP download request to session actor".to_string())?;
+            .map_err(|_| {
+                actor.transfers.cleanup(&cleanup_req_id);
+                "Failed to send SFTP download request to session actor".to_string()
+            })?;
 
         rx.await
             .map_err(|_| "Session actor dropped SFTP download response".to_string())?
@@ -871,6 +907,8 @@ impl SessionSupervisor {
         total_size: u64,
     ) -> Result<SftpStreamBridge, String> {
         let actor = self.get_or_spawn_actor(&session_id);
+        actor.transfers.register_cancel_token(&req_id);
+        let cleanup_req_id = req_id.clone();
         let (respond_to, rx) = oneshot::channel();
         actor
             .sender
@@ -882,6 +920,7 @@ impl SessionSupervisor {
                 respond_to,
             })
             .map_err(|_| {
+                actor.transfers.cleanup(&cleanup_req_id);
                 "Failed to send SFTP drag download request to session actor".to_string()
             })?;
 
@@ -898,6 +937,8 @@ impl SessionSupervisor {
         req_id: String,
     ) -> Result<(), String> {
         let actor = self.get_or_spawn_actor(&session_id);
+        actor.transfers.register_cancel_token(&req_id);
+        let cleanup_req_id = req_id.clone();
         let (respond_to, rx) = oneshot::channel();
         actor
             .sender
@@ -908,7 +949,10 @@ impl SessionSupervisor {
                 req_id,
                 respond_to,
             })
-            .map_err(|_| "Failed to send SFTP upload request to session actor".to_string())?;
+            .map_err(|_| {
+                actor.transfers.cleanup(&cleanup_req_id);
+                "Failed to send SFTP upload request to session actor".to_string()
+            })?;
 
         rx.await
             .map_err(|_| "Session actor dropped SFTP upload response".to_string())?
@@ -919,15 +963,8 @@ impl SessionSupervisor {
         session_id: String,
         req_id: String,
     ) -> Result<(), String> {
-        let actor = self.get_or_spawn_actor(&session_id);
-
-        let (respond_to, rx) = oneshot::channel();
-        actor
-            .sender
-            .send(SessionMessage::CancelSftpTransfer { req_id, respond_to })
-            .map_err(|_| "Failed to send SFTP cancel request to session actor".to_string())?;
-
-        rx.await
-            .map_err(|_| "Session actor dropped SFTP cancel response".to_string())?
+        // Metadata and path mutations may be awaiting I/O inside the actor. Cancellation
+        // must not queue behind those operations (or behind the transfer it must stop).
+        self.get_actor(&session_id)?.transfers.cancel(&req_id)
     }
 }

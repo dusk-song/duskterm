@@ -758,7 +758,7 @@ const scheduleInitialSessionLoad = () => {
   }
 };
 
-const { activeKey, visibleSessions, setActivePanel } = useTerminalPanels(sshStore);
+const { activeKey, visibleSessions, setActivePanel, movePanel } = useTerminalPanels(sshStore);
 const dailyWelcomeMessage = ref(getDailyWelcomeMessage());
 let dailyWelcomeTimer = null;
 const refreshDailyWelcome = () => {
@@ -1103,6 +1103,7 @@ const normalizeKeyEvent = (e) => {
 };
 
 const handleGlobalKeydown = (e) => {
+  if (e.defaultPrevented || e.isComposing) return;
   // 设置面板打开时不执行全局快捷键，避免录制快捷键时被已保存的绑定拦截
   if (isSettingsVisible.value) return;
 
@@ -1114,6 +1115,12 @@ const handleGlobalKeydown = (e) => {
   if (normalized) {
     const actionKey = comboActionMap.value.get(normalized);
     if (actionKey && keybindingActions[actionKey]) {
+      // 关闭后活动会话会立即切换，按键连发不能继续关闭下一个会话或分屏。
+      if (e.repeat && (actionKey === 'closeSession' || actionKey === 'closeSplitTerminal')) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
       const handled = keybindingActions[actionKey]();
       if (handled === false) return;
       e.preventDefault();
@@ -1369,7 +1376,7 @@ useWindowInteraction({ onResize: measureWorkspace });
               :split-trees="splitTrees" :focused-leaf="focusedLeaf" :resolve-tree="ensureTree"
               :on-split-drag="startSplitDrag" :on-set-focused="setFocused" @activate="setActivePanel"
               @close-panel="removePanelRoot" @duplicate-panel="duplicateSessionPanel"
-              @reconnect-panel="reconnectSessionPanel" />
+              @reconnect-panel="reconnectSessionPanel" @move-panel="movePanel" />
 
             <DesktopPet :settings="desktopPetSettings" :suspend="isAnyModalOpen"
               :paused="hasWorkspaceRightPanel || layoutInteracting"

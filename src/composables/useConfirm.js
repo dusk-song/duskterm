@@ -1,4 +1,4 @@
-import { ref } from 'vue';
+import { nextTick, ref } from 'vue';
 
 const state = ref({
   visible: false,
@@ -13,6 +13,12 @@ const state = ref({
   reject: null,
   zIndex: 2200,
 });
+const pending = [];
+let closing = false;
+
+function showNext() {
+  if (!closing && !state.value.visible && pending.length) state.value = pending.shift();
+}
 
 /**
  * 命令式确认弹窗 —— 替代 antd confirm
@@ -20,7 +26,7 @@ const state = ref({
  */
 export function confirm(options = {}) {
   return new Promise((resolve, reject) => {
-    state.value = {
+    pending.push({
       visible: true,
       title: options.title || '提示',
       content: options.content || '',
@@ -32,24 +38,34 @@ export function confirm(options = {}) {
       zIndex: options.zIndex ?? 2200,
       resolve,
       reject,
-    };
+    });
+    showNext();
   });
 }
 
 export function useConfirm() {
-  const onOk = () => {
-    const { resolve, onOk } = state.value;
+  const finish = (accepted) => {
+    if (!state.value.visible) return;
+    const current = state.value;
+    closing = true;
     state.value.visible = false;
-    if (onOk) onOk();
-    resolve?.();
+    try {
+      if (accepted) {
+        current.onOk?.();
+        current.resolve?.();
+      } else {
+        current.onCancel?.();
+        current.reject?.();
+      }
+    } catch (error) {
+      current.reject?.(error);
+    } finally {
+      // Let Reka release the previous modal's focus/pointer guards before the next one.
+      nextTick(() => { closing = false; showNext(); });
+    }
   };
-
-  const onCancel = () => {
-    const { reject, onCancel } = state.value;
-    state.value.visible = false;
-    if (onCancel) onCancel();
-    reject?.();
-  };
+  const onOk = () => finish(true);
+  const onCancel = () => finish(false);
 
   return { confirmState: state, onOk, onCancel };
 }

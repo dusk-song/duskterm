@@ -125,7 +125,8 @@ const taskDetail = (item) => [
 
 const statusLabel = (item) => ({
   waiting: '等待中',
-  negotiating: '协商中',
+  negotiating: '准备中',
+  retrying: '准备重试',
   uploading: item.direction === 'download' ? '下载中' : '上传中',
   transferring: item.direction === 'download' ? '下载中' : '上传中',
   finalizing: '正在完成',
@@ -158,7 +159,7 @@ const secondaryText = (item) => {
     return item.error || statusLabel(item);
   }
   if (item.status === 'waiting') return '等待传输';
-  if (item.status === 'negotiating') return '正在与远端协商';
+  if (item.status === 'negotiating') return item.direction === 'upload' ? '正在准备上传' : '正在准备下载';
 
   const parts = [formatProgressSize(item)];
   const transferMs = transferElapsed(item);

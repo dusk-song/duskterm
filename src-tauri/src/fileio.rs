@@ -12,35 +12,61 @@ pub struct LocalPathEntry {
     pub is_file: bool,
     pub is_dir: bool,
     pub size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[tauri::command]
-pub fn inspect_local_paths(paths: Vec<String>) -> Result<Vec<LocalPathEntry>, String> {
-    paths
+pub async fn inspect_local_paths(paths: Vec<String>) -> Result<Vec<LocalPathEntry>, String> {
+    // Network shares, removable media and antivirus metadata checks can block for seconds.
+    // Keep them off both the window thread and Tokio's cooperative worker threads.
+    tauri::async_runtime::spawn_blocking(move || inspect_local_paths_blocking(paths))
+        .await
+        .map_err(|error| format!("本地文件检查任务失败：{error}"))?
+}
+
+fn inspect_local_paths_blocking(paths: Vec<String>) -> Result<Vec<LocalPathEntry>, String> {
+    Ok(paths
         .into_iter()
-        .map(|raw_path| {
-            let path = PathBuf::from(&raw_path);
-            let metadata = fs::metadata(&path)
-                .map_err(|error| format!("无法读取本地路径 {}：{}", path.display(), error))?;
-            let name = path
-                .file_name()
-                .and_then(|value| value.to_str())
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| format!("无法识别本地路径名称：{}", path.display()))?
-                .to_string();
-            Ok(LocalPathEntry {
-                path: path_to_string(&path)?,
-                name,
-                is_file: metadata.is_file(),
-                is_dir: metadata.is_dir(),
-                size: if metadata.is_file() {
-                    metadata.len()
-                } else {
-                    0
-                },
-            })
+        .map(|raw_path| match inspect_local_path(&raw_path) {
+            Ok(entry) => entry,
+            Err(error) => LocalPathEntry {
+                name: Path::new(&raw_path)
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| raw_path.clone()),
+                path: raw_path,
+                is_file: false,
+                is_dir: false,
+                size: 0,
+                error: Some(error),
+            },
         })
-        .collect()
+        .collect())
+}
+
+fn inspect_local_path(raw_path: &str) -> Result<LocalPathEntry, String> {
+    let path = PathBuf::from(raw_path);
+    let metadata = fs::metadata(&path)
+        .map_err(|error| format!("无法读取本地路径 {}：{}", path.display(), error))?;
+    let name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
+        .ok_or_else(|| format!("无法识别本地路径名称：{}", path.display()))?
+        .to_string();
+    Ok(LocalPathEntry {
+        path: path_to_string(&path)?,
+        name,
+        is_file: metadata.is_file(),
+        is_dir: metadata.is_dir(),
+        size: if metadata.is_file() {
+            metadata.len()
+        } else {
+            0
+        },
+        error: None,
+    })
 }
 
 #[tauri::command]

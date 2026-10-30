@@ -113,12 +113,12 @@ pub struct TransferState {
 
 impl TransferState {
     pub fn register_cancel_token(&self, req_id: &str) -> Arc<AtomicBool> {
-        let token = Arc::new(AtomicBool::new(false));
         self.cancel_tokens
             .lock()
             .unwrap()
-            .insert(req_id.to_string(), token.clone());
-        token
+            .entry(req_id.to_string())
+            .or_insert_with(|| Arc::new(AtomicBool::new(false)))
+            .clone()
     }
 
     pub fn cleanup(&self, req_id: &str) {

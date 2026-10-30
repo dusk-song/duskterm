@@ -157,10 +157,6 @@ pub enum SessionMessage {
         req_id: String,
         respond_to: oneshot::Sender<Result<(), String>>,
     },
-    CancelSftpTransfer {
-        req_id: String,
-        respond_to: oneshot::Sender<Result<(), String>>,
-    },
     StartTunnel {
         app_handle: AppHandle,
         tunnel_state: TunnelState,
