@@ -22,7 +22,7 @@ import {
 } from '@lucide/vue';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { v4 as uuidv4 } from 'uuid';
-import { computed, h, nextTick, onMounted, onUnmounted, ref } from 'vue';
+import { computed, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useVirtualList } from '@/composables/useVirtualList';
 import { useSshStore } from '@/stores/ssh';
 import { invokeCommand } from '@/utils/ipc';
@@ -60,6 +60,9 @@ const panelWidthStyle = computed(() => {
 });
 
 const normalizedKeyword = computed(() => searchKeyword.value.trim().toLowerCase());
+// 搜索期间的展开操作不覆盖普通浏览时的分组状态。
+const searchExpandedKeys = ref([]);
+const activeExpandedKeys = computed(() => normalizedKeyword.value ? searchExpandedKeys.value : expandedKeys.value);
 const localShellButtons = computed(() => {
   if (localShellPlatform.value === 'windows') {
     return localShellProfiles.value.filter((profile) => ['powershell', 'cmd'].includes(profile.id));
@@ -256,14 +259,30 @@ const treeData = computed(() => {
   return treeNodes;
 });
 
-// Flatten treeData into visible items (respect expandedKeys)
+watch(treeData, (nodes) => {
+  const keys = [];
+  if (normalizedKeyword.value) {
+    const collectGroups = (items) => {
+      for (const node of items) {
+        if (node.isLeaf) continue;
+        keys.push(node.key);
+        if (node.children) collectGroups(node.children);
+      }
+    };
+    collectGroups(nodes);
+  }
+  searchExpandedKeys.value = keys;
+});
+
+// Flatten treeData into visible items using the current browsing/search state.
 const flatList = computed(() => {
   const result = [];
+  const expanded = new Set(activeExpandedKeys.value);
   const walk = (nodes, depth) => {
     for (const node of nodes) {
       const key = node.key;
       result.push({ ...node, _depth: depth, _isGroup: !node.isLeaf });
-      if (node.children && node.children.length > 0 && expandedKeys.value.includes(key)) {
+      if (node.children && node.children.length > 0 && expanded.has(key)) {
         walk(node.children, depth + 1);
       }
     }
@@ -274,9 +293,13 @@ const flatList = computed(() => {
 
 // Virtual scroll
 const viewportRef = ref(null);
-const { visibleItems, totalHeight, translateY, onScroll: onVirtualScroll, setViewportHeight } = useVirtualList({
+const { visibleItems, totalHeight, translateY, onScroll: onVirtualScroll, setViewportHeight, resetScroll } = useVirtualList({
   items: flatList,
   rowHeight: 34,
+});
+watch(normalizedKeyword, () => {
+  resetScroll();
+  if (viewportRef.value) viewportRef.value.scrollTop = 0;
 });
 const contextMenuNode = ref(null);
 const selectedNodeKey = ref('');
@@ -295,10 +318,10 @@ function handleTreeKeydown(event) {
     if (current.isLeaf) sshStore.connectStoredSession(current.key);
     else toggleGroup(current.key);
   } else if (event.key === 'ArrowRight' && current._isGroup) {
-    if (!expandedKeys.value.includes(current.key)) toggleGroup(current.key);
+    if (!activeExpandedKeys.value.includes(current.key)) toggleGroup(current.key);
     else index = Math.min(items.length - 1, index + 1);
   } else if (event.key === 'ArrowLeft') {
-    if (current._isGroup && expandedKeys.value.includes(current.key)) toggleGroup(current.key);
+    if (current._isGroup && activeExpandedKeys.value.includes(current.key)) toggleGroup(current.key);
     else {
       for (let parent = index - 1; parent >= 0; parent--) {
         if (items[parent]._depth < current._depth) { index = parent; break; }
@@ -556,9 +579,10 @@ const cancelRename = () => {
 };
 
 const toggleGroup = (key) => {
-  const idx = expandedKeys.value.indexOf(key);
-  if (idx > -1) expandedKeys.value.splice(idx, 1);
-  else expandedKeys.value.push(key);
+  const keys = activeExpandedKeys.value;
+  const idx = keys.indexOf(key);
+  if (idx > -1) keys.splice(idx, 1);
+  else keys.push(key);
 };
 
 const onTreeRowClick = (item) => {
@@ -631,7 +655,7 @@ const handleImportSessions = async () => {
               <div :style="{ transform: `translateY(${translateY}px)` }">
                 <div v-for="item in visibleItems" :key="item.key" class="tree-row"
                   :id="`session-tree-${item.key}`" role="treeitem" :aria-level="item._depth + 1"
-                  :aria-selected="selectedNodeKey === item.key" :aria-expanded="item._isGroup ? expandedKeys.includes(item.key) : undefined"
+                  :aria-selected="selectedNodeKey === item.key" :aria-expanded="item._isGroup ? activeExpandedKeys.includes(item.key) : undefined"
                   :class="{
                     'drag-over': dragOverGroupName === (item.data?.groupName || item.title),
                     'is-dragging': draggingGroupName === (item.data?.groupName || item.title)
@@ -643,7 +667,7 @@ const handleImportSessions = async () => {
                   @dblclick="item.isLeaf ? sshStore.connectStoredSession(item.key) : null">
 
                   <span v-if="item._isGroup" class="tree-arrow"
-                    :class="{ expanded: expandedKeys.includes(item.key) }">▶</span>
+                    :class="{ expanded: activeExpandedKeys.includes(item.key) }">▶</span>
                   <span v-else class="tree-arrow" style="visibility:hidden">▶</span>
 
                   <component :is="item.isLeaf ? getSessionIcon(item.data) : Folder"
@@ -786,7 +810,7 @@ const handleImportSessions = async () => {
   justify-content: center;
   gap: 6px;
   padding: 0 10px;
-  border: 1px solid transparent;
+  border: 1px solid var(--app-btn-border);
   border-radius: 8px;
   background: var(--app-input-bg);
   color: var(--app-text);

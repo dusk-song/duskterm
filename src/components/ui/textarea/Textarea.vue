@@ -22,7 +22,7 @@ const modelValue = useVModel(props, "modelValue", emits, {
     data-slot="textarea"
     :class="
       cn(
-        'border-input bg-[var(--app-input-bg)] focus-visible:border-[var(--app-focus-border)] focus-visible:[box-shadow:var(--app-focus-shadow)] aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 aria-invalid:border-destructive dark:aria-invalid:border-destructive/50 rounded-[8px] border px-2.5 py-2 text-sm shadow-none transition-[border-color,box-shadow] aria-invalid:ring-3 flex field-sizing-content min-h-16 w-full resize-y outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50',
+        'border-input bg-[var(--app-input-bg)] focus-visible:border-[var(--app-focus-border)] focus-visible:[box-shadow:var(--app-focus-shadow)] aria-[invalid=true]:ring-destructive/20 dark:aria-[invalid=true]:ring-destructive/40 aria-[invalid=true]:border-destructive aria-[invalid=true]:focus-visible:border-destructive aria-[invalid=true]:focus-visible:[box-shadow:inset_0_0_0_1px_hsl(var(--destructive)/0.25)] rounded-[8px] border px-2.5 py-2 text-sm shadow-none transition-[border-color,box-shadow] flex min-h-16 w-full resize-y outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50',
         props.class,
       )
     "
@@ -35,7 +35,7 @@ textarea[data-slot='textarea']::-webkit-resizer {
     linear-gradient(135deg, transparent 0 46%, var(--app-input-border) 47% 53%, transparent 54%),
     linear-gradient(135deg, transparent 0 62%, color-mix(in srgb, var(--app-text-muted) 36%, transparent) 63% 69%, transparent 70%);
   background-color: var(--app-input-bg);
-  border: 1px solid var(--app-input-border);
+  border: 0;
   border-bottom-right-radius: calc(var(--radius) - 2px);
 }
 

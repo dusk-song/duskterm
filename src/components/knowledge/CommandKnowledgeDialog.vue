@@ -90,8 +90,8 @@ const handleSubmit = () => {
 
 <template>
   <Dialog v-model:open="dialogOpen" modal>
-    <DialogContent class="command-knowledge-dialog" show-close-button>
-      <DialogHeader>
+    <DialogContent class="command-knowledge-dialog flex w-[720px] max-w-[calc(100vw-2rem)] flex-col gap-4 sm:max-w-[calc(100vw-2rem)]" show-close-button>
+      <DialogHeader class="shrink-0">
         <DialogTitle>{{ entry?.id ? '编辑命令条目' : '新增命令条目' }}</DialogTitle>
       </DialogHeader>
 
@@ -159,7 +159,7 @@ const handleSubmit = () => {
         </label>
       </form>
 
-      <DialogFooter>
+      <DialogFooter class="shrink-0 flex-row justify-end">
         <Button variant="outline" size="sm" @click="dialogOpen = false">取消</Button>
         <Button size="sm" :disabled="!form.title.trim() || !form.command.trim()" @click="handleSubmit">保存</Button>
       </DialogFooter>
@@ -168,16 +168,17 @@ const handleSubmit = () => {
 </template>
 
 <style scoped>
-.command-knowledge-dialog {
-  width: min(720px, calc(100vw - 32px));
-  max-width: min(720px, calc(100vw - 32px));
-}
-
 .knowledge-form {
   display: flex;
   flex-direction: column;
   gap: 12px;
   min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.knowledge-form > * {
+  flex-shrink: 0;
 }
 
 .knowledge-grid {
@@ -224,6 +225,8 @@ const handleSubmit = () => {
 .knowledge-favorite {
   display: inline-flex;
   align-items: center;
+  /* 容纳复选框向外扩展的点击区域，避免产生几像素的滚动溢出。 */
+  min-height: var(--app-control-height);
   gap: 8px;
   width: fit-content;
   font-size: 13px;

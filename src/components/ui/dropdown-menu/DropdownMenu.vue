@@ -75,7 +75,7 @@ onUnmounted(() => {
     </div>
     <Teleport to="body">
       <div v-if="open" ref="menuRef" :style="menuStyle" :class="cn(
-        'z-[var(--z-dropdown)] min-w-[10rem] overflow-hidden rounded-[var(--radius-md)] border border-border bg-popover p-1 text-popover-foreground shadow-md',
+        'z-[var(--z-dropdown)] min-w-[10rem] overflow-hidden rounded-[10px] border border-border bg-popover p-1 text-popover-foreground shadow-md',
         $props.class,
       )
         " role="menu">

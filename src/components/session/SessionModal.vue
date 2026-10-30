@@ -1170,15 +1170,17 @@ const groupOptions = computed(() => {
         </div>
       </div>
 
-      <DialogFooter>
+      <DialogFooter class="shrink-0 flex-row flex-wrap items-center">
         <Button variant="outline" @click="handleTestConnection" :disabled="isTestingConnection" size="sm">
           <Zap :size="14" />
           {{ isSerialProtocol ? '试开串口' : '测试连接' }}
         </Button>
-        <Button variant="outline" @click="handleCancel" size="sm">取消</Button>
-        <Button :disabled="confirmLoading" @click="handleOk" size="sm">
-          {{ sessionData ? '保存修改' : '创建会话' }}
-        </Button>
+        <div class="ml-auto flex items-center gap-2">
+          <Button variant="outline" @click="handleCancel" size="sm">取消</Button>
+          <Button :disabled="confirmLoading" @click="handleOk" size="sm">
+            {{ sessionData ? '保存修改' : '创建会话' }}
+          </Button>
+        </div>
       </DialogFooter>
     </DialogContent>
   </Dialog>

@@ -4,6 +4,8 @@ import { ChevronDown, ChevronRight, Folder, Server } from '@lucide/vue';
 import { computed, ref, watch } from 'vue';
 import { PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger } from 'reka-ui';
 
+defineOptions({ inheritAttrs: false });
+
 const props = defineProps({
   modelValue: {
     type: String,
@@ -134,10 +136,11 @@ function selectSession(sessionId) {
   <PopoverRoot v-model:open="open">
     <PopoverTrigger as-child>
       <Button
+        v-bind="$attrs"
         type="button"
         size="default"
         variant="outline"
-        class="w-full justify-between font-normal"
+        class="w-full justify-between border-input bg-[var(--app-input-bg)] font-normal"
         :disabled="disabled"
         aria-label="选择已保存的 SSH 会话"
       >
@@ -152,7 +155,7 @@ function selectSession(sessionId) {
         align="start"
         :side-offset="4"
         :collision-padding="16"
-        class="z-[var(--z-select)] max-h-[320px] w-[var(--reka-popover-trigger-width)] min-w-[280px] overflow-y-auto rounded-[10px] border border-[var(--app-border-dark)] bg-popover p-1 text-popover-foreground shadow-[var(--niri-shadow-dialog)] outline-none"
+        class="management-dialog-options z-[var(--z-select)] max-h-[320px] w-[var(--reka-popover-trigger-width)] min-w-[min(280px,calc(100vw_-_32px))] max-w-[calc(100vw_-_32px)] overflow-y-auto rounded-[10px] border border-[var(--app-border-dark)] bg-popover p-1 text-popover-foreground shadow-[var(--niri-shadow-dialog)] outline-none"
       >
         <div v-if="visibleRows.length" class="space-y-0.5">
           <button
@@ -160,7 +163,7 @@ function selectSession(sessionId) {
             :key="row.key"
             type="button"
             :class="[
-              'flex h-8 w-full items-center gap-2 rounded-md pr-2 text-left text-sm transition-colors hover:bg-accent hover:text-accent-foreground',
+              'flex w-full items-center gap-2 rounded-md pr-2 text-left transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:[box-shadow:var(--app-focus-shadow)]',
               row.type === 'session' && row.session.id === modelValue ? 'bg-accent text-accent-foreground' : '',
             ]"
             :style="{ paddingLeft: `${row.depth * 16 + 8}px` }"
@@ -184,7 +187,7 @@ function selectSession(sessionId) {
             </template>
           </button>
         </div>
-        <div v-else class="px-3 py-5 text-center text-xs text-muted-foreground">
+        <div v-else class="px-3 py-5 text-center text-sm text-muted-foreground">
           还没有已保存的 SSH 会话。
         </div>
       </PopoverContent>

@@ -47,24 +47,27 @@ watch(() => securityStore.isLocked, (locked) => {
 </script>
 
 <template>
-  <div class="lock-screen" v-if="securityStore.isLocked">
-    <div class="lock-card">
-      <div class="lock-icon-wrapper">
-        <Lock class="lock-icon" />
-      </div>
-      <h2>应用已锁定</h2>
-      <p class="subtitle">请输入密码以继续</p>
+  <!-- 与会话总览一样脱离外壳，避免直属子元素布局规则覆盖 fixed 定位和层级。 -->
+  <Teleport to="body">
+    <div class="lock-screen" v-if="securityStore.isLocked">
+      <div class="lock-card">
+        <div class="lock-icon-wrapper">
+          <Lock class="lock-icon" />
+        </div>
+        <h2>应用已锁定</h2>
+        <p class="subtitle">请输入密码以继续</p>
 
-      <form @submit.prevent="handleUnlock" class="input-group">
-        <Input ref="inputRef" v-model="password" type="password" placeholder="输入密码" size="sm" class="h-12 w-full"
-          :disabled="loading" />
-        <div v-if="error" class="error-msg">{{ error }}</div>
-        <Button :disabled="loading" :loading="loading" type="submit" class="w-full h-12">
-          {{ loading ? '验证中...' : '解锁' }}
-        </Button>
-      </form>
+        <form @submit.prevent="handleUnlock" class="input-group">
+          <Input ref="inputRef" v-model="password" type="password" placeholder="输入密码" size="sm" class="h-12 w-full"
+            :disabled="loading" />
+          <div v-if="error" class="error-msg">{{ error }}</div>
+          <Button :disabled="loading" :loading="loading" type="submit" class="w-full h-12">
+            {{ loading ? '验证中...' : '解锁' }}
+          </Button>
+        </form>
+      </div>
     </div>
-  </div>
+  </Teleport>
 </template>
 
 <style scoped>
@@ -79,6 +82,7 @@ watch(() => securityStore.isLocked, (locked) => {
   background: var(--lock-overlay-bg);
   z-index: var(--z-critical-overlay);
   padding: 16px;
+  overflow-y: auto;
 }
 
 [data-performance="reduced"] .lock-screen {
@@ -88,6 +92,8 @@ watch(() => securityStore.isLocked, (locked) => {
 .lock-card {
   width: 100%;
   max-width: 380px;
+  flex-shrink: 0;
+  margin: auto;
   padding: 32px 24px 28px;
   background: var(--mac-bg-secondary, #ffffff);
   border: 1px solid var(--mac-border, rgba(0, 0, 0, 0.08));

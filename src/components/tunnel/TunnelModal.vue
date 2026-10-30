@@ -1,9 +1,11 @@
 <script setup>
+import '@/components/ui/dialog/management-dialog.css';
 import Button from '@/components/ui/button/Button.vue';
 import Checkbox from '@/components/ui/checkbox/Checkbox.vue';
 import Dialog from '@/components/ui/dialog/Dialog.vue';
 import DialogContent from '@/components/ui/dialog/DialogContent.vue';
 import DialogFooter from '@/components/ui/dialog/DialogFooter.vue';
+import DialogDescription from '@/components/ui/dialog/DialogDescription.vue';
 import DialogHeader from '@/components/ui/dialog/DialogHeader.vue';
 import DialogTitle from '@/components/ui/dialog/DialogTitle.vue';
 import Input from '@/components/ui/input/Input.vue';
@@ -547,116 +549,54 @@ onUnmounted(() => {
 
 <template>
   <Dialog v-model:open="dialogOpen" modal>
-    <DialogContent showCloseButton draggable
-      class="flex h-[min(700px,calc(100vh-2rem))] max-h-[calc(100vh-2rem)] w-[860px] max-w-[92vw] flex-col overflow-hidden sm:max-w-[92vw]">
+    <DialogContent showCloseButton draggable class="management-dialog tunnel-dialog">
       <DialogHeader>
         <DialogTitle>隧道管理</DialogTitle>
+        <DialogDescription class="sr-only">管理 SSH 隧道配置、转发方式与运行状态</DialogDescription>
       </DialogHeader>
 
-      <div class="flex items-center justify-between gap-3 border-y border-border bg-muted/20 px-3 py-2">
-        <div
-          :class="[
-            'flex min-w-0 items-center gap-2 rounded-md border px-2 py-1 text-xs',
-            tunnels.length
-              ? 'border-emerald-500/25 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
-              : 'border-border bg-muted/70 text-muted-foreground',
-          ]"
-        >
-          <span :class="['size-2 shrink-0 rounded-full', tunnels.length ? 'bg-emerald-500' : 'bg-muted-foreground/35']" />
-          <span>{{ loadingTunnels ? '正在刷新...' : `${tunnels.length} 个隧道运行中` }}</span>
+      <div class="tunnel-toolbar">
+        <div class="tunnel-status" :class="{ 'is-running': tunnels.length > 0 }">
+          <span class="tunnel-status-dot" />
+          <span>{{ loadingTunnels ? '正在刷新...' : (tunnels.length + ' 个隧道运行中') }}</span>
         </div>
-        <div class="flex shrink-0 items-center gap-1.5">
-          <Button v-if="tunnels.length" size="sm" variant="destructive" :disabled="operationPending" @click="stopAllTunnels">
-            停止全部
-          </Button>
+        <div class="tunnel-toolbar-actions">
+          <Button v-if="tunnels.length" class="tunnel-stop-all" variant="destructive" :disabled="operationPending" @click="stopAllTunnels">停止全部</Button>
           <TooltipHint text="刷新状态">
-            <Button size="icon-sm" variant="ghost" aria-label="刷新状态"
-              :disabled="loadingTunnels" @click="fetchTunnels()">
-              <RefreshCw />
-            </Button>
+            <Button size="icon" variant="ghost" aria-label="刷新状态" :disabled="loadingTunnels" @click="fetchTunnels()"><RefreshCw /></Button>
           </TooltipHint>
-          <TooltipHint text="新建配置">
-            <Button size="icon-sm" variant="outline" aria-label="新建配置"
-              :disabled="operationPending" @click="createNewConfig">
-              <Plus />
-            </Button>
-          </TooltipHint>
-          <TooltipHint text="保存配置">
-            <Button size="icon-sm" aria-label="保存配置"
-              :disabled="!selectedSessionId || operationPending" @click="saveCurrentConfig()">
-              <SaveIcon />
-            </Button>
-          </TooltipHint>
+          <Button variant="secondary" :disabled="operationPending" @click="createNewConfig"><Plus />新建配置</Button>
+          <Button variant="secondary" :disabled="!selectedSessionId || operationPending" @click="saveCurrentConfig()"><SaveIcon />保存配置</Button>
         </div>
       </div>
 
-      <div class="flex min-h-0 flex-1 overflow-hidden">
-        <div class="flex w-[240px] shrink-0 flex-col border-r border-border bg-muted/10">
-          <div class="min-h-0 flex-1 overflow-y-auto p-2">
-            <div v-if="loadingConfigs" class="px-3 py-4 text-xs text-muted-foreground">
-              正在读取隧道配置...
-            </div>
-            <div v-else-if="tunnelConfigs.length === 0" class="px-3 py-4 text-xs text-muted-foreground">
-              还没有已保存的隧道配置。
-            </div>
-            <div v-else class="space-y-1">
-              <div
-                v-for="config in tunnelConfigs"
-                :key="config.id"
-                :class="[
-                  'group flex items-center rounded-md transition-colors',
-                  selectedConfigId === config.id ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/60',
-                ]"
-              >
-                <button
-                  type="button"
-                  class="flex min-w-0 flex-1 items-center gap-2 px-2.5 py-2 text-left disabled:cursor-not-allowed disabled:opacity-50"
-                  :disabled="operationPending"
-                  @click="hydrateFromConfig(config)"
-                >
-                  <span
-                    :class="[
-                      'size-2 shrink-0 rounded-full',
-                      isConfigRunning(config.id) ? 'bg-emerald-500' : 'bg-muted-foreground/35',
-                    ]"
-                  />
-                  <span class="truncate text-sm font-medium">{{ buildConfigLabel(config) }}</span>
+      <div class="tunnel-layout">
+        <aside class="tunnel-sidebar" aria-label="已保存配置">
+          <div class="management-caption tunnel-sidebar-label">已保存配置</div>
+          <div class="tunnel-config-list">
+            <div v-if="loadingConfigs" class="management-empty">正在读取隧道配置...</div>
+            <div v-else-if="tunnelConfigs.length === 0" class="management-empty">还没有已保存的隧道配置</div>
+            <div v-else class="tunnel-config-rows">
+              <div v-for="config in tunnelConfigs" :key="config.id" class="tunnel-config-item"
+                :class="{ 'is-selected': selectedConfigId === config.id }">
+                <button type="button" class="tunnel-config-select" :disabled="operationPending"
+                  :aria-pressed="selectedConfigId === config.id" @click="hydrateFromConfig(config)">
+                  <span class="tunnel-status-dot" :class="{ 'is-running': isConfigRunning(config.id) }" />
+                  <span class="tunnel-config-name" :title="buildConfigLabel(config)">{{ buildConfigLabel(config) }}</span>
                 </button>
-
                 <DropdownMenuRoot>
                   <DropdownMenuTrigger as-child>
-                    <Button
-                      size="icon-sm"
-                      variant="ghost"
-                      class="mr-1 text-foreground/70 hover:text-foreground"
-                      :disabled="operationPending"
-                      :aria-label="`${buildConfigLabel(config)}更多操作`"
-                      :title="`${buildConfigLabel(config)}更多操作`"
-                    >
-                      <MoreHorizontal />
-                    </Button>
+                    <Button size="icon" variant="ghost" :disabled="operationPending"
+                      :aria-label="buildConfigLabel(config) + '更多操作'"><MoreHorizontal /></Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuPortal>
-                    <DropdownMenuContent
-                      side="bottom"
-                      align="end"
-                      :side-offset="4"
-                      :collision-padding="16"
-                      class="z-[var(--z-select)] min-w-[108px] rounded-[10px] border border-[var(--app-border-dark)] bg-popover p-1 text-popover-foreground shadow-[var(--niri-shadow-dialog)] outline-none"
-                    >
-                      <DropdownMenuItem
-                        class="flex h-8 cursor-default select-none items-center gap-2 rounded-md px-2 text-sm outline-none focus:bg-accent focus:text-accent-foreground"
-                        @select="duplicateConfig(config)"
-                      >
-                        <Copy class="size-4" />
-                        复制
+                    <DropdownMenuContent side="bottom" align="end" :side-offset="4" :collision-padding="16"
+                      class="management-dialog-options z-[var(--z-select)] min-w-[108px] rounded-[10px] border border-[var(--app-border-dark)] bg-popover p-1 text-popover-foreground shadow-[var(--niri-shadow-dialog)] outline-none">
+                      <DropdownMenuItem class="flex cursor-default select-none items-center gap-2 rounded-md px-3 outline-none focus:bg-accent focus:text-accent-foreground" @select="duplicateConfig(config)">
+                        <Copy class="size-4" />复制
                       </DropdownMenuItem>
-                      <DropdownMenuItem
-                        class="flex h-8 cursor-default select-none items-center gap-2 rounded-md px-2 text-sm text-destructive outline-none focus:bg-destructive/10"
-                        @select="deleteConfig(config)"
-                      >
-                        <Trash2 class="size-4" />
-                        删除
+                      <DropdownMenuItem class="flex cursor-default select-none items-center gap-2 rounded-md px-3 text-destructive outline-none focus:bg-destructive/10" @select="deleteConfig(config)">
+                        <Trash2 class="size-4" />删除
                       </DropdownMenuItem>
                     </DropdownMenuContent>
                   </DropdownMenuPortal>
@@ -664,106 +604,76 @@ onUnmounted(() => {
               </div>
             </div>
           </div>
-        </div>
+        </aside>
 
-        <div class="min-w-0 flex-1 overflow-y-auto px-5 py-4">
-          <section>
-            <div class="mb-3 flex items-center justify-between gap-3">
-              <h3 class="text-xs font-semibold">基本配置</h3>
-              <span
-                :class="[
-                  'rounded-full px-2 py-1 text-[11px] font-medium',
-                  currentConfigTunnels.length
-                    ? 'border border-emerald-500/25 bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
-                    : 'border border-border bg-muted/70 text-muted-foreground',
-                ]"
-              >
-                {{ currentConfigTunnels.length ? `运行中${currentConfigTunnels.length > 1 ? ` ${currentConfigTunnels.length}` : ''}` : (selectedConfigId ? '已停止' : '新配置') }}
+        <div class="tunnel-form">
+          <section class="tunnel-form-section">
+            <div class="management-section-head">
+              <h3 class="management-section-title">基本配置</h3>
+              <span class="tunnel-status" :class="{ 'is-running': currentConfigTunnels.length > 0 }">
+                <span class="tunnel-status-dot" />
+                {{ currentConfigTunnels.length ? ('运行中' + (currentConfigTunnels.length > 1 ? ' ' + currentConfigTunnels.length : '')) : (selectedConfigId ? '已停止' : '新配置') }}
               </span>
             </div>
-
-            <div class="space-y-3">
-              <label class="grid grid-cols-[120px_minmax(0,1fr)] items-center gap-2">
-                <span class="text-xs text-muted-foreground">所属会话</span>
-                <TunnelSessionTreeSelect
-                  v-model="selectedSessionId"
-                  :sessions="savedSessions"
-                  :group-order="sshStore.groupOrder"
-                  :disabled="!!selectedConfigId"
-                />
-              </label>
-
-              <label class="grid grid-cols-[120px_minmax(0,1fr)] items-center gap-2">
-                <span class="text-xs text-muted-foreground">名称</span>
-                <Input v-model="draft.name" size="sm" placeholder="如：postgres-dev" />
+            <div class="tunnel-basic-fields">
+              <div class="management-field">
+                <label for="tunnel-session" class="management-label">所属会话</label>
+                <TunnelSessionTreeSelect id="tunnel-session" v-model="selectedSessionId"
+                  :sessions="savedSessions" :group-order="sshStore.groupOrder" :disabled="!!selectedConfigId" />
+              </div>
+              <label class="management-field">
+                <span class="management-label">名称</span>
+                <Input v-model="draft.name" placeholder="如：postgres-dev" />
               </label>
             </div>
           </section>
 
-          <section class="mt-5">
-            <h3 class="mb-2 text-xs font-semibold">转发类型</h3>
-            <div class="grid grid-cols-3 gap-1 rounded-md bg-muted p-1">
-              <Button
-                v-for="mode in [
-                  { value: 'local', label: '本地转发' },
-                  { value: 'remote', label: '远程转发' },
-                  { value: 'dynamic', label: '动态代理' },
-                ]"
-                :key="mode.value"
-                type="button"
-                size="sm"
-                :variant="draft.mode === mode.value ? 'outline' : 'ghost'"
-                class="w-full"
-                @click="draft.mode = mode.value"
-              >
+          <section class="tunnel-form-section">
+            <h3 id="tunnel-mode-label" class="management-section-title">转发类型</h3>
+            <div class="management-segmented" role="group" aria-labelledby="tunnel-mode-label">
+              <Button v-for="mode in [
+                { value: 'local', label: '本地转发' },
+                { value: 'remote', label: '远程转发' },
+                { value: 'dynamic', label: '动态代理' },
+              ]" :key="mode.value" type="button" variant="ghost" :aria-pressed="draft.mode === mode.value" @click="draft.mode = mode.value">
                 {{ mode.label }}
               </Button>
             </div>
           </section>
 
-          <section class="mt-5">
-            <h3 class="mb-3 text-xs font-semibold">连接配置</h3>
-            <div class="grid grid-cols-[minmax(0,1fr)_140px] gap-3">
-              <label class="block">
-                <span class="mb-1.5 block text-xs text-muted-foreground">{{ listenHostLabel }}</span>
-                <Input v-model="draft.listenHost" size="sm" placeholder="127.0.0.1" />
+          <section class="tunnel-form-section">
+            <h3 class="management-section-title">连接配置</h3>
+            <div class="tunnel-connection-fields">
+              <label class="management-field">
+                <span class="management-label">{{ listenHostLabel }}</span>
+                <Input v-model="draft.listenHost" placeholder="127.0.0.1" class="font-mono" />
               </label>
-              <label class="block">
-                <span class="mb-1.5 block text-xs text-muted-foreground">{{ listenPortLabel }}</span>
-                <Input v-model.number="draft.listenPort" type="text" inputmode="numeric" autocomplete="off" size="sm" />
+              <label class="management-field">
+                <span class="management-label">{{ listenPortLabel }}</span>
+                <Input v-model.number="draft.listenPort" type="text" inputmode="numeric" autocomplete="off" class="font-mono" />
               </label>
-
               <template v-if="requiresTarget">
-                <label class="block">
-                  <span class="mb-1.5 block text-xs text-muted-foreground">{{ targetHostLabel }}</span>
-                  <Input v-model="draft.targetHost" size="sm" placeholder="127.0.0.1" />
+                <label class="management-field">
+                  <span class="management-label">{{ targetHostLabel }}</span>
+                  <Input v-model="draft.targetHost" placeholder="127.0.0.1" class="font-mono" />
                 </label>
-                <label class="block">
-                  <span class="mb-1.5 block text-xs text-muted-foreground">目标端口</span>
-                  <Input v-model.number="draft.targetPort" type="text" inputmode="numeric" autocomplete="off" size="sm" />
+                <label class="management-field">
+                  <span class="management-label">目标端口</span>
+                  <Input v-model.number="draft.targetPort" type="text" inputmode="numeric" autocomplete="off" class="font-mono" />
                 </label>
               </template>
             </div>
           </section>
 
-          <details class="mt-5 border-t border-border pt-3">
-            <summary class="cursor-pointer text-xs font-medium text-muted-foreground">高级选项</summary>
-            <div class="mt-3 space-y-3">
-              <label class="grid grid-cols-[120px_minmax(0,1fr)] items-center gap-3">
-                <span class="text-xs text-muted-foreground">保活间隔（秒）</span>
-                <Input
-                  v-model.number="draft.serverAliveInterval"
-                  type="text"
-                  inputmode="numeric"
-                  autocomplete="off"
-                  size="sm"
-                />
+          <details class="tunnel-advanced">
+            <summary>高级选项</summary>
+            <div class="tunnel-advanced-fields">
+              <label class="management-field">
+                <span class="management-label">保活间隔（秒）</span>
+                <Input v-model.number="draft.serverAliveInterval" type="text" inputmode="numeric" autocomplete="off" class="font-mono" />
               </label>
-              <label class="flex min-h-7 items-center gap-2 text-sm">
-                <Checkbox
-                  :model-value="draft.allowPublicBind"
-                  @update:model-value="(value) => { draft.allowPublicBind = !!value; }"
-                />
+              <label class="tunnel-public-bind">
+                <Checkbox :model-value="draft.allowPublicBind" @update:model-value="(value) => { draft.allowPublicBind = !!value; }" />
                 <span>允许公网监听（高风险）</span>
               </label>
             </div>
@@ -771,21 +681,56 @@ onUnmounted(() => {
         </div>
       </div>
 
-      <DialogFooter>
-        <Button size="sm" variant="ghost" @click="closeModal">关闭</Button>
-        <Button v-if="currentTunnel" size="sm" variant="outline" @click="copyProxyAddress(currentTunnel)">复制地址</Button>
-        <Button v-if="currentTunnel?.commandPreview" size="sm" variant="outline" @click="copyCommandPreview(currentTunnel)">复制命令</Button>
-        <Button
-          v-if="currentConfigTunnels.length"
-          size="sm"
-          variant="destructive"
-          :disabled="operationPending"
-          @click="stopConfigTunnels()"
-        >
-          停止隧道
-        </Button>
-        <Button v-else size="sm" :disabled="operationPending || !selectedSessionId" @click="startCurrentTunnel">启动隧道</Button>
+      <DialogFooter class="management-footer">
+        <Button variant="ghost" @click="closeModal">关闭</Button>
+        <Button v-if="currentTunnel" variant="outline" @click="copyProxyAddress(currentTunnel)">复制地址</Button>
+        <Button v-if="currentTunnel?.commandPreview" variant="outline" @click="copyCommandPreview(currentTunnel)">复制命令</Button>
+        <Button v-if="currentConfigTunnels.length" variant="destructive" :disabled="operationPending" @click="stopConfigTunnels()">停止隧道</Button>
+        <Button v-else :disabled="operationPending || !selectedSessionId" @click="startCurrentTunnel">启动隧道</Button>
       </DialogFooter>
     </DialogContent>
   </Dialog>
 </template>
+
+<style scoped>
+.tunnel-toolbar { display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; padding-bottom: 12px; border-bottom: 1px solid var(--app-border-shadow); }
+.tunnel-status { display: inline-flex; align-items: center; gap: 8px; color: var(--app-text-secondary); font-size: var(--app-font-caption-size); }
+.tunnel-status.is-running, .tunnel-status-dot.is-running { color: var(--app-toast-success); }
+.tunnel-status-dot { width: 8px; height: 8px; flex-shrink: 0; border-radius: 50%; background: currentColor; color: inherit; }
+.tunnel-toolbar-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 8px; margin-left: auto; }
+.tunnel-layout { display: grid; min-height: 0; flex: 1; grid-template-columns: 180px minmax(0, 1fr); gap: 16px; overflow: hidden; }
+.tunnel-sidebar { display: flex; min-width: 0; min-height: 0; flex-direction: column; gap: 8px; padding-right: 16px; border-right: 1px solid var(--app-border-shadow); }
+.tunnel-sidebar-label { min-height: var(--app-control-height); display: flex; align-items: center; }
+.tunnel-config-list { min-height: 0; overflow-y: auto; }
+.tunnel-config-rows { display: flex; flex-direction: column; gap: 4px; }
+.tunnel-config-item { display: flex; align-items: center; gap: 4px; padding-right: 4px; border-radius: 8px; transition: background var(--app-motion-control); }
+.tunnel-config-item:hover { background: hsl(var(--foreground) / 0.05); }
+.tunnel-config-item.is-selected { background: hsl(var(--primary) / 0.12); box-shadow: inset 2px 0 hsl(var(--primary)); }
+.tunnel-config-select { display: flex; min-width: 0; min-height: 40px; flex: 1; align-items: center; gap: 8px; padding: 8px 10px; border: 0; border-radius: 8px; color: var(--app-text); background: transparent; text-align: left; }
+.tunnel-config-select:disabled { cursor: not-allowed; opacity: .5; }
+.tunnel-config-select:focus-visible { outline: none; box-shadow: var(--app-focus-shadow); }
+.tunnel-config-select:active { background: hsl(var(--primary) / 0.18); }
+.tunnel-config-select .tunnel-status-dot { color: var(--app-text-muted); }
+.tunnel-config-select .tunnel-status-dot.is-running { color: var(--app-toast-success); }
+.tunnel-config-name { overflow: hidden; font-size: var(--app-font-body-size); font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.tunnel-form { display: flex; min-width: 0; min-height: 0; flex-direction: column; gap: 16px; overflow-y: auto; padding-right: 4px; scrollbar-gutter: stable; }
+.tunnel-form-section { display: flex; flex-shrink: 0; flex-direction: column; gap: 10px; }
+.tunnel-basic-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.tunnel-connection-fields { display: grid; grid-template-columns: minmax(0, 1fr) 120px; gap: 12px; }
+.tunnel-advanced { flex-shrink: 0; padding-top: 12px; border-top: 1px solid var(--app-border-shadow); }
+.tunnel-advanced summary { color: var(--app-text-secondary); font-size: var(--app-font-body-size); cursor: pointer; }
+.tunnel-advanced summary:focus-visible { outline: 1px solid var(--app-focus-border); outline-offset: 3px; }
+.tunnel-advanced-fields { display: flex; flex-direction: column; gap: 12px; margin-top: 12px; }
+.tunnel-advanced-fields .management-field { max-width: 240px; }
+.tunnel-public-bind { display: flex; align-items: center; gap: 10px; font-size: var(--app-font-body-size); }
+@media (max-width: 680px) {
+  .tunnel-toolbar-actions { display: grid; width: 100%; grid-template-columns: var(--app-control-height) repeat(2, minmax(0, 1fr)); gap: 6px; }
+  .tunnel-toolbar-actions :deep([data-slot="button"]) { min-width: 0; padding-inline: 8px; }
+  .tunnel-stop-all { grid-column: 1 / -1; }
+  .tunnel-basic-fields { grid-template-columns: minmax(0, 1fr); }
+  .tunnel-layout { display: flex; flex-direction: column; overflow-y: auto; }
+  .tunnel-sidebar { max-height: 190px; flex-shrink: 0; gap: 8px; padding: 0 0 16px; border-right: 0; border-bottom: 1px solid var(--app-border-shadow); }
+  .tunnel-form { flex-shrink: 0; overflow: visible; padding-right: 0; }
+  .tunnel-connection-fields { grid-template-columns: minmax(0, 1fr) 100px; gap: 16px 12px; }
+}
+</style>

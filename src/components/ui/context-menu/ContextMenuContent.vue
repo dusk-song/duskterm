@@ -80,7 +80,7 @@ const forwarded = useForwardPropsEmits(delegatedProps, emits);
   overflow-x: hidden;
   overflow-y: auto;
   border: 1px solid var(--app-border-shadow);
-  border-radius: var(--niri-radius-md, 8px);
+  border-radius: 10px;
   background: var(--app-bg-dialog);
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.22);
   color: var(--app-text);
@@ -101,5 +101,67 @@ const forwarded = useForwardPropsEmits(delegatedProps, emits);
   .app-context-menu-content[data-state] {
     animation: none;
   }
+}
+
+.app-context-menu-item {
+  position: relative;
+  display: flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border-radius: 5px;
+  outline: none;
+  color: var(--app-text);
+  font-size: var(--app-font-caption-size, 12px);
+  line-height: 1.35;
+  cursor: default;
+  user-select: none;
+}
+
+.app-context-menu-item[data-inset] {
+  padding-left: 28px;
+}
+
+.app-context-menu-item:focus,
+.app-context-menu-item[data-highlighted],
+.app-context-menu-item[data-state="open"] {
+  background: var(--tb-entry-hover, color-mix(in srgb, var(--app-text) 8%, transparent));
+  color: var(--app-text);
+}
+
+.app-context-menu-item[data-disabled] {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.app-context-menu-item[data-variant="destructive"] {
+  color: var(--color-danger);
+}
+
+.app-context-menu-item[data-variant="destructive"]:focus {
+  background: var(--app-risk-danger-bg);
+  color: var(--color-danger);
+}
+
+.app-context-menu-item svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  pointer-events: none;
+}
+
+.app-context-menu-item[data-slot="context-menu-checkbox-item"],
+.app-context-menu-item[data-slot="context-menu-radio-item"] {
+  padding-right: 32px;
+}
+
+.app-context-menu-item:not([data-disabled]):active {
+  background: var(--app-btn-pressed);
+}
+
+.app-context-menu-item[data-variant="destructive"][data-highlighted],
+.app-context-menu-item[data-variant="destructive"]:active {
+  background: var(--app-risk-danger-bg);
 }
 </style>

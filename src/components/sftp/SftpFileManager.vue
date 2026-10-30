@@ -1896,7 +1896,6 @@ onUnmounted(() => {
     </div>
     <div class="fm-address fm-address-row">
       <div class="fm-panel-heading"><strong>文件管理</strong></div>
-      <Input v-model="currentPath" @keyup.enter="manualRefresh" aria-label="远程目录路径" size="sm" class="flex-1 font-mono" />
       <div class="fm-actions">
         <IconButton :icon="ArrowLeft" size="sm" :disabled="currentPath === '/'" aria-label="返回上级目录"
           :action="goUp" />
@@ -1931,6 +1930,7 @@ onUnmounted(() => {
         </div>
         <IconButton :icon="X" size="sm" aria-label="关闭面板" :action="handleClosePanel" />
       </div>
+      <Input v-model="currentPath" @keyup.enter="manualRefresh" aria-label="远程目录路径" size="sm" class="font-mono" />
     </div>
 
     <ContextMenu :key="props.sessionId || 'sftp-context-menu'">
@@ -2099,7 +2099,7 @@ onUnmounted(() => {
 
 <style scoped>
 .fm-table-body:focus-visible { outline: 1px solid var(--app-focus-border); outline-offset: -1px; }
-.fm-panel-heading { display: flex; flex: 1 1 100%; align-items: center; gap: 8px; min-height: 28px; }
+.fm-panel-heading { display: flex; align-items: center; align-self: start; min-height: 28px; white-space: nowrap; }
 .fm-panel-heading strong { font-size: 13px; }
 .fm-selection-status { flex-shrink: 0; padding: 6px 10px; border-top: 1px solid transparent; color: var(--app-text-muted); font-size: 12px; }
 .file-manager {
@@ -2142,31 +2142,26 @@ onUnmounted(() => {
 }
 
 .fm-address-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: 8px;
-  flex-wrap: wrap;
-  /* keep actions fixed to right */
   background: transparent;
   border-bottom: 1px solid transparent;
 }
 
-.fm-address-row :deep(.ant-input),
-.fm-address-row :deep(input),
-.fm-address-input {
-  /* allow the input to grow and match session-list top behavior */
-  flex: 1 1 100%;
-  width: auto;
-  min-width: 80px;
-  max-width: none;
-  height: 30px;
+.fm-address-row > :deep(input[data-slot="input"]) {
+  grid-column: 1 / -1;
+  width: 100%;
+  min-width: 0;
 }
 
 .fm-actions {
-  margin-left: 0;
   display: flex;
+  min-width: 0;
   gap: 4px;
   align-items: center;
+  justify-content: flex-end;
   flex-wrap: wrap;
 }
 

@@ -43,7 +43,7 @@ const forwarded = useForwardPropsEmits(delegatedProps, emits);
       data-slot="tooltip-content"
       v-bind="{ ...forwarded, ...$attrs }"
       :class="cn(
-        'app-tooltip-content data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=delayed-open]:animate-in data-[state=delayed-open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 inline-flex items-center gap-1.5 has-data-[slot=kbd]:pr-1.5 **:data-[slot=kbd]:relative **:data-[slot=kbd]:isolate **:data-[slot=kbd]:z-[1] **:data-[slot=kbd]:rounded-sm z-[var(--z-tooltip)] w-fit origin-(--reka-tooltip-content-transform-origin)',
+        'app-tooltip-content data-[state=open]:animate-in data-[state=open]:fade-in-0 data-[state=delayed-open]:animate-in data-[state=delayed-open]:fade-in-0 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 inline-flex items-center gap-1.5 has-[[data-slot=kbd]]:pr-1.5 [&_[data-slot=kbd]]:relative [&_[data-slot=kbd]]:isolate [&_[data-slot=kbd]]:z-[1] [&_[data-slot=kbd]]:rounded-sm z-[var(--z-tooltip)] w-fit origin-[var(--reka-tooltip-content-transform-origin)]',
         props.class,
       )"
     >

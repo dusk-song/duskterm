@@ -1,4 +1,6 @@
 <script setup>
+import '@/components/ui/dialog/management-dialog.css';
+import { Plus, Search, Users } from '@lucide/vue';
 import Button from '@/components/ui/button/Button.vue';
 import Checkbox from '@/components/ui/checkbox/Checkbox.vue';
 import Dialog from '@/components/ui/dialog/Dialog.vue';
@@ -329,181 +331,137 @@ watch(() => currentChannelDraft.value?.sourceMode, (mode) => {
 
 <template>
   <Dialog v-model:open="dialogOpen" modal>
-    <DialogContent showCloseButton draggable
-      class="flex h-[min(620px,calc(100vh-4rem))] max-h-[calc(100vh-4rem)] w-[1020px] max-w-[94vw] flex-col sm:max-w-[94vw]">
+    <DialogContent showCloseButton draggable class="management-dialog sync-input-dialog">
       <DialogHeader>
         <DialogTitle>同步输入频道</DialogTitle>
         <DialogDescription class="sr-only">管理临时同步输入频道、会话成员与广播规则</DialogDescription>
       </DialogHeader>
 
-      <div class="sync-dialog-layout flex min-h-0 flex-1 gap-3 overflow-hidden px-1 pb-1">
-        <div class="sync-channel-sidebar flex w-[220px] shrink-0 flex-col rounded-md border border-border bg-muted/20">
-          <div class="flex items-center justify-between border-b border-border px-3 py-2">
-            <span class="text-xs font-semibold text-foreground">频道列表</span>
-            <Button size="sm" variant="outline" @click="createNewChannel">新建频道</Button>
+      <div class="sync-dialog-layout">
+        <aside class="sync-channel-sidebar" aria-label="频道列表">
+          <div class="management-section-head">
+            <h3 class="management-section-title">频道列表</h3>
+            <Button variant="ghost" @click="createNewChannel"><Plus />新建</Button>
           </div>
-          <div class="flex-1 space-y-1 overflow-y-auto p-2">
+          <div class="sync-channel-list">
             <button v-for="channel in previewChannels" :key="channel.id" type="button"
-              class="w-full rounded-md border px-3 py-2 text-left transition-colors"
-              :class="channel.id === selectedChannelIdDraft ? 'border-primary bg-primary/10 text-foreground' : 'border-transparent bg-transparent text-muted-foreground hover:border-border hover:bg-accent/30 hover:text-foreground'"
+              class="sync-channel-item" :class="{ 'is-selected': channel.id === selectedChannelIdDraft }"
+              :aria-pressed="channel.id === selectedChannelIdDraft"
               @click="selectedChannelIdDraft = channel.id">
-              <div class="flex items-center justify-between gap-2">
-                <span class="truncate text-sm font-medium">{{ channel.name }}</span>
-                <span class="rounded-full border border-border px-2 py-0.5 text-[10px]">
-                  {{ channel.connectedCount }}
-                </span>
-              </div>
-              <div class="mt-1 text-[11px]" :class="channel.broadcastEnabled ? 'text-emerald-500' : 'text-muted-foreground'">
-                {{ channel.broadcastEnabled ? '同步中' : '暂停中' }}
-              </div>
+              <Users :size="16" class="sync-channel-icon" />
+              <span class="sync-channel-copy">
+                <span class="sync-channel-name">{{ channel.name }}</span>
+                <span class="management-caption">{{ channel.connectedCount }} 个在线成员 · {{ channel.broadcastEnabled ? '同步中' : '暂停中' }}</span>
+              </span>
             </button>
-
-            <div v-if="previewChannels.length === 0" class="px-2 py-4 text-xs text-muted-foreground">
-              还没有同步频道，先新建一个。
-            </div>
+            <div v-if="previewChannels.length === 0" class="management-empty">还没有同步频道，先新建一个</div>
           </div>
-        </div>
+        </aside>
 
-        <div class="sync-dialog-main flex min-w-0 flex-1 gap-3 overflow-hidden">
-          <div class="flex min-w-0 flex-[1.2] flex-col rounded-md border border-border bg-muted/10">
-            <div class="flex items-center justify-between border-b border-border px-3 py-2">
-              <span class="text-xs font-semibold text-foreground">会话选择</span>
-              <div class="flex flex-wrap gap-1">
-                <Button size="sm" variant="outline" @click="selectAllSessions" :disabled="!currentChannelDraft">全选</Button>
-                <Button size="sm" variant="outline" @click="selectOnlyActiveSession" :disabled="!currentChannelDraft">当前</Button>
-                <Button size="sm" variant="outline" @click="selectSameGroupAsActive" :disabled="!currentChannelDraft">同组</Button>
-                <Button size="sm" variant="outline" @click="clearCurrentChannelSessions" :disabled="!currentChannelDraft">清空</Button>
-              </div>
+        <div class="sync-dialog-main">
+          <section class="sync-session-pane" aria-label="会话选择">
+            <div class="management-section-head">
+              <h3 class="management-section-title">会话选择</h3>
+              <span class="management-caption">已选 {{ currentChannelMemberIds.length }} 项</span>
             </div>
-
-            <div class="px-3 pb-2 pt-3">
-              <Input v-model="sessionSearchText" size="sm" placeholder="搜索会话、主机、分组..." class="w-full" />
+            <div class="sync-search">
+              <Search :size="16" aria-hidden="true" />
+              <Input v-model="sessionSearchText" placeholder="搜索会话、主机、分组" aria-label="搜索会话、主机、分组" />
             </div>
-
-            <div class="min-h-0 flex-1 overflow-y-auto px-3 pb-3">
-              <div v-if="groupedSessions.length === 0" class="py-6 text-center text-sm text-muted-foreground">
-                暂无可管理的会话
-              </div>
-
-              <div v-for="[groupName, sessions] in groupedSessions" :key="groupName" class="mb-3">
-                <div class="mb-1 text-[11px] font-semibold text-muted-foreground">{{ groupName }}</div>
-                <div class="space-y-1">
-                  <button v-for="session in sessions" :key="session.id" type="button"
-                    class="flex w-full items-center gap-2 rounded-md border px-2 py-2 text-left transition-colors"
-                    :class="isSessionSelectedInCurrentChannel(session.id)
-                      ? 'border-primary bg-primary/10'
-                      : 'border-transparent hover:border-border hover:bg-accent/30'"
+            <div class="sync-batch-actions">
+              <Button variant="ghost" @click="selectAllSessions" :disabled="!currentChannelDraft">全选</Button>
+              <Button variant="ghost" @click="selectOnlyActiveSession" :disabled="!currentChannelDraft">当前</Button>
+              <Button variant="ghost" @click="selectSameGroupAsActive" :disabled="!currentChannelDraft">同组</Button>
+              <Button variant="ghost" @click="clearCurrentChannelSessions" :disabled="!currentChannelDraft">清空</Button>
+            </div>
+            <div class="sync-session-list">
+              <div v-if="groupedSessions.length === 0" class="management-empty">暂无可管理的会话</div>
+              <div v-for="[groupName, sessions] in groupedSessions" :key="groupName" class="sync-session-group">
+                <div class="management-caption sync-group-label">{{ groupName }}</div>
+                <div class="sync-session-rows">
+                  <button v-for="session in sessions" :key="session.id" type="button" role="checkbox"
+                    :aria-checked="isSessionSelectedInCurrentChannel(session.id)"
+                    class="sync-session-item" :class="{ 'is-selected': isSessionSelectedInCurrentChannel(session.id) }"
                     @click="toggleSessionMembership(session.id)">
-                    <Checkbox :model-value="isSessionSelectedInCurrentChannel(session.id)" />
-                    <div class="min-w-0 flex-1">
-                      <div class="truncate text-sm font-medium text-foreground">
-                        {{ session.name || `${session.username || 'user'}@${session.host || 'host'}` }}
-                      </div>
-                      <div class="truncate text-[11px] text-muted-foreground">
-                        {{ session.host || '无主机信息' }}
-                      </div>
-                    </div>
-                    <div class="flex shrink-0 flex-col items-end gap-1">
-                      <span class="text-[10px]"
-                        :class="session.status === 'connected' ? 'text-emerald-500' : 'text-amber-500'">
-                        {{ session.status === 'connected' ? '在线' : '离线' }}
+                    <Checkbox as="span" :model-value="isSessionSelectedInCurrentChannel(session.id)"
+                      :tabindex="-1" aria-hidden="true" class="pointer-events-none" />
+                    <span class="sync-session-copy">
+                      <span class="sync-session-name">{{ session.name || ((session.username || 'user') + '@' + (session.host || 'host')) }}</span>
+                      <span class="management-caption sync-session-host">{{ session.host || '无主机信息' }}</span>
+                    </span>
+                    <span class="sync-session-meta">
+                      <span class="sync-session-status" :class="{ 'is-online': session.status === 'connected' }">
+                        <span class="sync-status-dot" />{{ session.status === 'connected' ? '在线' : '离线' }}
                       </span>
                       <span v-if="getAssignedChannel(session.id)?.id && !isSessionSelectedInCurrentChannel(session.id)"
-                        class="max-w-[90px] truncate text-[10px] text-muted-foreground">
-                        已在 {{ getAssignedChannel(session.id)?.name }}
-                      </span>
-                    </div>
+                        class="management-caption sync-assigned-channel">已在 {{ getAssignedChannel(session.id)?.name }}</span>
+                    </span>
                   </button>
                 </div>
               </div>
             </div>
-          </div>
+          </section>
 
-          <div class="sync-rules flex w-[280px] shrink-0 flex-col rounded-md border border-border bg-muted/10">
-            <div class="flex items-center justify-between border-b border-border px-3 py-2">
-              <span class="text-xs font-semibold text-foreground">频道规则</span>
-              <Button size="sm" variant="ghost" @click="deleteCurrentChannel" :disabled="!currentChannelDraft">删除频道</Button>
+          <section class="sync-rules" aria-label="频道规则">
+            <div class="management-section-head">
+              <h3 class="management-section-title">频道规则</h3>
+              <Button variant="ghost" class="management-danger-action" @click="deleteCurrentChannel" :disabled="!currentChannelDraft">删除频道</Button>
             </div>
-
-            <div v-if="!currentChannelDraft" class="flex flex-1 items-center justify-center px-4 text-center text-sm text-muted-foreground">
-              先新建或选择一个频道，再配置会话与规则。
-            </div>
-
-            <div v-else class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 py-3">
-              <div class="space-y-1">
-                <label class="text-xs text-muted-foreground">频道名称</label>
-                <Input :model-value="currentChannelDraft.name" size="sm" class="w-full"
+            <div v-if="!currentChannelDraft" class="management-empty sync-rules-empty">先新建或选择一个频道，再配置会话与规则</div>
+            <div v-else class="sync-rules-content">
+              <div class="management-field">
+                <label for="sync-channel-name" class="management-label">频道名称</label>
+                <Input id="sync-channel-name" :model-value="currentChannelDraft.name"
                   @update:model-value="(value) => updateCurrentChannel({ name: value })" />
               </div>
-
-              <div class="space-y-2">
-                <div class="text-xs text-muted-foreground">输入来源</div>
-                <div class="flex gap-1">
-                  <button type="button"
-                    :class="['px-3 py-1 rounded text-xs font-medium transition-colors', currentChannelDraft.sourceMode === 'all' ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground hover:bg-accent']"
-                    @click="updateCurrentChannel({ sourceMode: 'all', primarySessionId: '' })">
-                    组内任意
-                  </button>
-                  <button type="button"
-                    :class="['px-3 py-1 rounded text-xs font-medium transition-colors', currentChannelDraft.sourceMode === 'primary' ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground hover:bg-accent']"
-                    @click="updateCurrentChannel({ sourceMode: 'primary', primarySessionId: currentChannelDraft.primarySessionId || currentChannelMemberIds[0] || '' })">
-                    仅主控
-                  </button>
+              <div class="management-field">
+                <div id="sync-source-label" class="management-label">输入来源</div>
+                <div class="management-segmented" role="group" aria-labelledby="sync-source-label">
+                  <button type="button" :aria-pressed="currentChannelDraft.sourceMode === 'all'"
+                    @click="updateCurrentChannel({ sourceMode: 'all', primarySessionId: '' })">组内任意</button>
+                  <button type="button" :aria-pressed="currentChannelDraft.sourceMode === 'primary'"
+                    @click="updateCurrentChannel({ sourceMode: 'primary', primarySessionId: currentChannelDraft.primarySessionId || currentChannelMemberIds[0] || '' })">仅主控</button>
                 </div>
               </div>
-
-              <div v-if="currentChannelDraft.sourceMode === 'primary'" class="space-y-1">
-                <label class="text-xs text-muted-foreground">主控会话</label>
+              <div v-if="currentChannelDraft.sourceMode === 'primary'" class="management-field">
+                <label for="sync-primary-session" class="management-label">主控会话</label>
                 <Select :model-value="currentChannelDraft.primarySessionId"
                   @update:model-value="(value) => updateCurrentChannel({ primarySessionId: value })">
-                  <SelectTrigger size="sm" class="w-full">
-                    <SelectValue placeholder="选择主控会话" />
-                  </SelectTrigger>
-                  <SelectContent position="popper" side="bottom" align="start" :side-offset="4" :collision-padding="16">
+                  <SelectTrigger id="sync-primary-session" class="w-full"><SelectValue placeholder="选择主控会话" /></SelectTrigger>
+                  <SelectContent class="management-dialog-options" position="popper" side="bottom" align="start" :side-offset="4" :collision-padding="16">
                     <SelectItem v-for="session in currentChannelPrimaryCandidates" :key="session.id" :value="session.id">
-                      {{ session.name || `${session.username || 'user'}@${session.host || 'host'}` }}
+                      {{ session.name || ((session.username || 'user') + '@' + (session.host || 'host')) }}
                     </SelectItem>
                   </SelectContent>
                 </Select>
               </div>
-
-              <div class="space-y-2">
-                <div class="text-xs text-muted-foreground">发送方式</div>
-                <div class="flex gap-1">
-                  <button type="button"
-                    :class="['px-3 py-1 rounded text-xs font-medium transition-colors', currentChannelDraft.sendMode === 'realtime' ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground hover:bg-accent']"
-                    @click="updateCurrentChannel({ sendMode: 'realtime' })">
-                    实时
-                  </button>
-                  <button type="button"
-                    :class="['px-3 py-1 rounded text-xs font-medium transition-colors', currentChannelDraft.sendMode === 'line' ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground hover:bg-accent']"
-                    @click="updateCurrentChannel({ sendMode: 'line' })">
-                    回车
-                  </button>
+              <div class="management-field">
+                <div id="sync-send-label" class="management-label">发送方式</div>
+                <div class="management-segmented" role="group" aria-labelledby="sync-send-label">
+                  <button type="button" :aria-pressed="currentChannelDraft.sendMode === 'realtime'"
+                    @click="updateCurrentChannel({ sendMode: 'realtime' })">实时</button>
+                  <button type="button" :aria-pressed="currentChannelDraft.sendMode === 'line'"
+                    @click="updateCurrentChannel({ sendMode: 'line' })">回车</button>
                 </div>
               </div>
-
-              <div class="space-y-2 rounded-md border border-border bg-background/70 p-3">
-                <div class="text-xs font-semibold text-foreground">标题栏预览</div>
-                <div class="rounded-md border border-border bg-muted/20 px-3 py-2 text-xs text-foreground">
-                  {{ syncPreviewLabel }}
-                </div>
-                <div class="grid grid-cols-2 gap-2 text-[11px] text-muted-foreground">
-                  <div class="rounded-md border border-border px-2 py-2">在线成员<br><span class="text-foreground">{{ currentChannelMemberCount }}</span></div>
-                  <div class="rounded-md border border-border px-2 py-2">广播状态<br><span
-                      :class="currentChannelBroadcastEnabled ? 'text-emerald-500' : 'text-amber-500'">{{
-                        currentChannelBroadcastEnabled ? '同步中' : '暂停中'
-                      }}</span></div>
+              <div class="sync-preview">
+                <h4 class="management-section-title">标题栏预览</h4>
+                <div class="sync-preview-label">{{ syncPreviewLabel }}</div>
+                <div class="sync-preview-status">
+                  <span class="management-caption">在线成员 <strong>{{ currentChannelMemberCount }}</strong></span>
+                  <span class="sync-session-status" :class="{ 'is-online': currentChannelBroadcastEnabled }">
+                    <span class="sync-status-dot" />{{ currentChannelBroadcastEnabled ? '同步中' : '暂停中' }}
+                  </span>
                 </div>
               </div>
             </div>
-          </div>
+          </section>
         </div>
       </div>
 
-      <DialogFooter>
+      <DialogFooter class="management-footer">
+        <Button variant="ghost" class="management-danger-action sync-clear-all" @click="clearAllChannels" :disabled="syncChannelsDraft.length === 0">清空频道</Button>
         <Button variant="ghost" @click="closeDialog">取消</Button>
-        <Button variant="destructive" @click="clearAllChannels" :disabled="syncChannelsDraft.length === 0">清空频道</Button>
         <Button @click="applySyncChannels">应用频道</Button>
       </DialogFooter>
     </DialogContent>
@@ -511,11 +469,60 @@ watch(() => currentChannelDraft.value?.sourceMode, (mode) => {
 </template>
 
 <style scoped>
+.sync-dialog-layout { display: flex; min-height: 0; flex: 1; gap: 16px; overflow: hidden; }
+.sync-channel-sidebar { display: flex; min-width: 0; flex: 0 0 210px; flex-direction: column; gap: 8px; padding-right: 16px; border-right: 1px solid var(--app-border-shadow); }
+.sync-channel-list { min-height: 0; overflow-y: auto; }
+.sync-channel-item { display: flex; width: 100%; align-items: flex-start; gap: 8px; margin-bottom: 4px; padding: 10px; border: 0; border-radius: 8px; color: var(--app-text-secondary); background: transparent; text-align: left; transition: background var(--app-motion-control); }
+.sync-channel-item:hover, .sync-session-item:hover { background: hsl(var(--foreground) / 0.05); }
+.sync-channel-item.is-selected, .sync-session-item.is-selected { color: var(--app-text); background: hsl(var(--primary) / 0.12); }
+.sync-channel-item.is-selected { box-shadow: inset 2px 0 hsl(var(--primary)); }
+.sync-channel-item:focus-visible, .sync-session-item:focus-visible { outline: none; box-shadow: var(--app-focus-shadow); }
+.sync-channel-item:active, .sync-session-item:active { background: hsl(var(--primary) / 0.18); }
+.sync-channel-icon { flex-shrink: 0; margin-top: 2px; }
+.sync-channel-copy, .sync-session-copy { display: flex; min-width: 0; flex: 1; flex-direction: column; gap: 2px; }
+.sync-channel-name { overflow: hidden; font-size: var(--app-font-body-size); font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.sync-channel-copy .management-caption { overflow-wrap: anywhere; }
+.sync-channel-list, .sync-session-list, .sync-rules-content { scrollbar-gutter: stable; }
+.sync-dialog-main { display: grid; min-width: 0; flex: 1; grid-template-columns: minmax(0, 1fr) 280px; gap: 16px; overflow: hidden; }
+.sync-session-pane { display: flex; min-width: 0; min-height: 0; flex-direction: column; gap: 8px; }
+.sync-search { position: relative; }
+.sync-search > svg { position: absolute; z-index: 1; top: 7px; left: 10px; color: var(--app-text-muted); pointer-events: none; }
+.sync-search :deep(input) { padding-left: 32px; }
+.sync-batch-actions { display: flex; flex-shrink: 0; flex-wrap: wrap; gap: 4px; }
+.sync-session-list { min-height: 0; flex: 1; overflow-y: auto; }
+.sync-session-group { margin-bottom: 16px; }
+.sync-group-label { margin-bottom: 8px; font-weight: 600; overflow-wrap: anywhere; }
+.sync-session-rows { display: flex; flex-direction: column; gap: 4px; }
+.sync-session-item { display: flex; width: 100%; min-height: 48px; align-items: center; gap: 8px; padding: 8px; border: 0; border-radius: 8px; background: transparent; text-align: left; transition: background var(--app-motion-control); }
+.sync-session-name, .sync-session-host { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sync-session-name { color: var(--app-text); font-size: var(--app-font-body-size); font-weight: 500; }
+.sync-session-meta { display: flex; max-width: 100px; flex-shrink: 0; flex-direction: column; align-items: flex-end; gap: 4px; }
+.sync-session-status { display: inline-flex; flex-shrink: 0; align-items: center; gap: 7px; color: var(--app-text-secondary); font-size: var(--app-font-caption-size); white-space: nowrap; }
+.sync-session-status.is-online { color: var(--app-toast-success); }
+.sync-status-dot { width: 7px; height: 7px; flex-shrink: 0; border-radius: 50%; background: currentColor; }
+.sync-assigned-channel { width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sync-rules { display: flex; min-width: 0; min-height: 0; flex-direction: column; gap: 8px; padding-left: 16px; border-left: 1px solid var(--app-border-shadow); }
+.sync-rules-content { display: flex; min-height: 0; flex-direction: column; gap: 16px; overflow-y: auto; padding-right: 4px; }
+.sync-rules-empty { margin: auto 0; text-align: center; }
+.sync-preview { display: flex; flex-direction: column; gap: 10px; padding-top: 12px; border-top: 1px solid var(--app-border-shadow); }
+.sync-preview-label { overflow-wrap: anywhere; }
+.sync-preview-status { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 12px; }
+.sync-preview-status strong { margin-left: 8px; color: var(--app-text); font-weight: 500; }
+.sync-clear-all { margin-right: auto; }
 @media (max-width: 900px) {
-  .sync-dialog-layout { overflow-y: auto; display: block; }
-  .sync-channel-sidebar { width: 100%; max-height: 140px; margin-bottom: 10px; }
+  .sync-dialog-main { grid-template-columns: minmax(0, 1fr); overflow-y: auto; }
+  .sync-session-pane { min-height: 260px; flex-shrink: 0; }
+  .sync-session-list { max-height: 340px; flex: none; }
+  .sync-rules { min-height: auto; flex-shrink: 0; padding: 16px 0 0; border-left: 0; border-top: 1px solid var(--app-border-shadow); }
+  .sync-rules-content { overflow: visible; padding-right: 0; }
+  .sync-rules-empty { margin: 0; }
+}
+@media (max-width: 680px) {
+  .sync-dialog-layout { display: block; overflow-y: auto; }
+  .sync-channel-sidebar { max-height: 190px; gap: 8px; margin-bottom: 16px; padding: 0 0 16px; border-right: 0; border-bottom: 1px solid var(--app-border-shadow); }
   .sync-dialog-main { display: block; overflow: visible; }
-  .sync-dialog-main > div { overflow: visible; }
-  .sync-rules { width: 100%; margin-top: 10px; }
+  .sync-session-pane { min-height: auto; }
+  .sync-session-list { max-height: 340px; }
+  .sync-rules { margin-top: 16px; }
 }
 </style>

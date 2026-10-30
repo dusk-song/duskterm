@@ -62,13 +62,13 @@ const isVertical = computed(() => props.orientation === 'vertical');
     :as-child="props.asChild" :as="props.as"
     :name="props.name" :required="props.required" :disabled="props.disabled"
     :class="cn(
-      'relative flex w-full touch-none items-center select-none disabled:opacity-50',
-      isVertical ? 'min-h-40 h-full w-auto flex-col' : '',
+      'relative flex w-full touch-none items-center select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50',
+      isVertical ? 'min-h-40 h-full w-5 flex-col' : 'min-h-5',
       props.class,
     )
   ">
     <SliderTrack data-slot="slider-track" :class="cn(
-      'bg-muted-foreground/25 rounded-full relative grow overflow-hidden',
+      'bg-muted-foreground/25 rounded-full relative overflow-hidden',
       isVertical ? 'w-1.5 h-full' : 'h-1.5 w-full',
     )">
       <SliderRange data-slot="slider-range" :class="cn(
@@ -78,6 +78,6 @@ const isVertical = computed(() => props.orientation === 'vertical');
     </SliderTrack>
 
     <SliderThumb v-for="(_, key) in modelValue" :key="key" data-slot="slider-thumb"
-      class="border-primary ring-ring/50 size-4 rounded-full border bg-white shadow-sm transition-[color,box-shadow] hover:ring-4 focus-visible:[box-shadow:var(--app-focus-shadow)] focus-visible:outline-none block shrink-0 select-none disabled:pointer-events-none disabled:opacity-50" />
+      class="border-primary ring-ring/30 size-4 rounded-full border bg-white shadow-sm transition-shadow duration-[var(--app-motion-control)] hover:ring-2 focus-visible:ring-2 focus-visible:outline-none block shrink-0 select-none data-[disabled]:pointer-events-none" />
   </SliderRoot>
 </template>

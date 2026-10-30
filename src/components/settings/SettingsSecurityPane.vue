@@ -74,7 +74,6 @@ const emit = defineEmits([
       </div>
 
       <div class="password-form">
-        <p class="text-xs text-muted-foreground">密码操作立即生效，底部“取消”不会撤销。</p>
         <template v-if="securityStore.hasPassword">
           <div class="form-item">
             <label>当前密码</label>

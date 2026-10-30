@@ -164,6 +164,7 @@ onUnmounted(() => document.removeEventListener('pointerdown', onDocumentPointerD
   flex: 0 0 auto;
   place-items: center;
   border: 0;
+  border-radius: 6px;
   color: var(--app-text-muted);
   background: transparent;
 }
@@ -171,6 +172,16 @@ onUnmounted(() => document.removeEventListener('pointerdown', onDocumentPointerD
 .editable-select-toggle:hover {
   color: var(--app-text);
   background: color-mix(in srgb, var(--app-text) 6%, transparent);
+}
+
+.editable-select-toggle:focus-visible {
+  outline: none;
+  box-shadow: var(--app-focus-shadow);
+}
+
+.editable-select-toggle:active,
+.editable-select-item:active {
+  background: var(--app-btn-pressed);
 }
 
 .editable-select-content {
@@ -213,6 +224,10 @@ onUnmounted(() => document.removeEventListener('pointerdown', onDocumentPointerD
 .editable-select-item.selected {
   color: hsl(var(--primary));
   background: hsl(var(--accent) / 0.12);
+}
+
+.editable-select-item:focus-visible {
+  box-shadow: var(--app-focus-shadow);
 }
 
 .editable-select.is-disabled {

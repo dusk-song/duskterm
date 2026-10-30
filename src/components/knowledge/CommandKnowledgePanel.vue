@@ -585,13 +585,15 @@ onUnmounted(() => {
 }
 
 .detail-badge.risk-sensitive {
-  color: #9a6a00;
-  border-color: color-mix(in srgb, #d9a520 50%, transparent);
+  color: color-mix(in srgb, var(--app-risk-warning) 70%, var(--app-text));
+  border-color: var(--app-risk-warning-border);
+  background: var(--app-risk-warning-bg);
 }
 
 .detail-badge.risk-dangerous {
-  color: #b83232;
-  border-color: color-mix(in srgb, #b83232 50%, transparent);
+  color: color-mix(in srgb, var(--app-risk-danger) 70%, var(--app-text));
+  border-color: var(--app-risk-danger-border);
+  background: var(--app-risk-danger-bg);
 }
 
 .detail-command {

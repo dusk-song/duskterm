@@ -11,7 +11,7 @@ const props = defineProps({
     data-slot="table-row"
     :class="
       cn(
-        'hover:bg-accent/50 data-[state=selected]:bg-primary/15 border-b border-border/70 transition-colors has-aria-expanded:bg-accent/50',
+        'hover:bg-accent/50 data-[state=selected]:bg-primary/15 data-[state=selected]:hover:bg-primary/15 border-b border-border/70 transition-colors has-[[aria-expanded=true]]:bg-accent/50',
         props.class,
       )
     "

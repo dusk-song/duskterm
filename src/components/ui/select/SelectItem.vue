@@ -30,7 +30,7 @@ const forwardedProps = useForwardProps(delegatedProps);
     v-bind="forwardedProps"
     :class="
       cn(
-        'focus:bg-accent focus:text-accent-foreground not-data-[variant=destructive]:focus:**:text-accent-foreground gap-2 rounded-[5px] py-1.5 pr-8 pl-2 text-sm [&_svg:not([class*=size-])]:size-4 *:[span]:last:flex *:[span]:last:items-center *:[span]:last:gap-2 relative flex w-full cursor-default items-center outline-none select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0',
+        'data-[highlighted]:bg-accent data-[highlighted]:text-accent-foreground data-[state=checked]:bg-primary/10 data-[state=checked]:text-foreground data-[state=checked]:data-[highlighted]:bg-primary/15 active:bg-primary/20 gap-2 rounded-[5px] py-1.5 pr-8 pl-2 text-sm [&_svg:not([class*=size-])]:size-4 [&>[data-slot=select-item-text]]:inline-flex [&>[data-slot=select-item-text]]:items-center [&>[data-slot=select-item-text]]:gap-2 relative flex w-full cursor-default items-center outline-none select-none data-[disabled]:pointer-events-none data-[disabled]:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0',
         props.class,
       )
     "
@@ -45,7 +45,7 @@ const forwardedProps = useForwardProps(delegatedProps);
       </SelectItemIndicator>
     </span>
 
-    <SelectItemText>
+    <SelectItemText data-slot="select-item-text">
       <slot />
     </SelectItemText>
   </SelectItem>
