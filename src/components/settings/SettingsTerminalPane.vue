@@ -81,10 +81,6 @@ const updateSessionPresentation = (presentation) => {
         </span>
       </div>
       <div class="setting-row">
-        <span class="setting-label">行号显示</span>
-        <Switch v-model="terminalThemeSettings.showLineNumbers" />
-      </div>
-      <div class="setting-row">
         <span class="setting-label">会话切换</span>
         <Select :model-value="terminalThemeSettings.sessionPresentation"
           @update:model-value="updateSessionPresentation">

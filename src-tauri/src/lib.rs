@@ -15,6 +15,8 @@ mod sftp;
 mod ssh;
 mod ssh_algorithms;
 mod storage;
+mod terminal_input;
+mod terminal_output;
 mod terminal_transfer;
 mod tunnel;
 
@@ -52,6 +54,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .manage(session::supervisor::SessionSupervisor::new())
         .manage(ssh::SshAppState::new())
+        .manage(terminal_output::TerminalOutputState::default())
         .manage(sftp::SftpAppState::new())
         .manage(tunnel::TunnelState::new())
         .setup(|app| {
@@ -108,6 +111,9 @@ pub fn run() {
             ssh::serial_stop_capture,
             ssh::serial_get_status,
             ssh::write_ssh,
+            terminal_output::attach_terminal_output,
+            terminal_output::read_terminal_output,
+            terminal_output::detach_terminal_output,
             ssh::resize_ssh,
             ssh::open_ssh_shell_channel,
             ssh::write_ssh_shell_channel,

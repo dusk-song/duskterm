@@ -130,6 +130,8 @@ pub fn build_client_config(
     profile: NegotiationProfile,
 ) -> client::Config {
     let mut client_config = client::Config::default();
+    // Interactive input must not wait for TCP small-packet coalescing.
+    client_config.nodelay = true;
     client_config.preferred = Preferred {
         kex: Cow::Borrowed(MODERN_KEX_ALGOS),
         key: Cow::Borrowed(host_key_algorithms_for(profile)),

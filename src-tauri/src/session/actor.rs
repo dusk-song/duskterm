@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::{unbounded_channel, UnboundedSender};
 
 use crate::{local_terminal, sftp, ssh, tunnel};
@@ -11,6 +13,7 @@ use super::{
 pub struct SessionActorHandle {
     pub sender: UnboundedSender<SessionMessage>,
     pub transfers: TransferState,
+    pub terminal_handles: Arc<Mutex<HashMap<String, ssh::TerminalRuntimeHandle>>>,
 }
 
 fn reap_finished_transfer_tasks(runtime_state: &mut SessionRuntimeState) {
@@ -36,6 +39,8 @@ pub fn spawn_session_actor(
     let actor_sender = sender.clone();
     let transfers = TransferState::default();
     let actor_transfers = transfers.clone();
+    let terminal_handles = Arc::new(Mutex::new(HashMap::new()));
+    let actor_terminal_handles = terminal_handles.clone();
 
     tokio::spawn(async move {
         let mut runtime_state =
@@ -87,6 +92,10 @@ pub fn spawn_session_actor(
 
                     let response = match result {
                         Ok(runtime) => {
+                            terminal_handles
+                                .lock()
+                                .unwrap()
+                                .insert(session_id.clone(), runtime.handle.clone());
                             runtime_state.ssh = Some(runtime);
                             runtime_state.local_config = local_config;
                             runtime_state.lifecycle = LifecycleState::Active;
@@ -98,14 +107,6 @@ pub fn spawn_session_actor(
                         }
                     };
                     let _ = respond_to.send(response);
-                }
-                SessionMessage::WriteTerminal { data, respond_to } => {
-                    let result = runtime_state
-                        .ssh
-                        .as_ref()
-                        .ok_or_else(|| "Session not connected".to_string())
-                        .and_then(|runtime| ssh::write_ssh_runtime(&runtime.handle, data));
-                    let _ = respond_to.send(result);
                 }
                 SessionMessage::ControlSerial {
                     request,
@@ -150,6 +151,10 @@ pub fn spawn_session_actor(
                         )
                         .await
                         .map(|runtime| {
+                            terminal_handles
+                                .lock()
+                                .unwrap()
+                                .insert(channel_id.clone(), runtime.handle.clone());
                             runtime_state.shell_channels.insert(channel_id, runtime);
                         })
                     } else if let Some(root_runtime) = runtime_state.ssh.as_ref() {
@@ -163,23 +168,15 @@ pub fn spawn_session_actor(
                         )
                         .await
                         .map(|runtime| {
+                            terminal_handles
+                                .lock()
+                                .unwrap()
+                                .insert(channel_id.clone(), runtime.handle.clone());
                             runtime_state.shell_channels.insert(channel_id, runtime);
                         })
                     } else {
                         Err("Root SSH session is not connected".to_string())
                     };
-                    let _ = respond_to.send(result);
-                }
-                SessionMessage::WriteShellChannel {
-                    channel_id,
-                    data,
-                    respond_to,
-                } => {
-                    let result = runtime_state
-                        .shell_channels
-                        .get(&channel_id)
-                        .ok_or_else(|| "Shell channel not found".to_string())
-                        .and_then(|runtime| ssh::write_ssh_runtime(&runtime.handle, data));
                     let _ = respond_to.send(result);
                 }
                 SessionMessage::ResizeShellChannel {
@@ -199,6 +196,7 @@ pub fn spawn_session_actor(
                     channel_id,
                     respond_to,
                 } => {
+                    terminal_handles.lock().unwrap().remove(&channel_id);
                     let result = if let Some(mut runtime) =
                         runtime_state.shell_channels.remove(&channel_id)
                     {
@@ -241,6 +239,7 @@ pub fn spawn_session_actor(
                     tunnel_state,
                     respond_to,
                 } => {
+                    terminal_handles.lock().unwrap().clear();
                     runtime_state.lifecycle = LifecycleState::Closed;
                     runtime_state.terminal.attached = false;
                     drain_transfer_tasks(&mut runtime_state).await;
@@ -728,10 +727,12 @@ pub fn spawn_session_actor(
                 }
             }
         }
+        terminal_handles.lock().unwrap().clear();
     });
 
     SessionActorHandle {
         sender: actor_sender,
         transfers: actor_transfers,
+        terminal_handles: actor_terminal_handles,
     }
 }

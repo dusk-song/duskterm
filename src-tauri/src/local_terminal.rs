@@ -517,7 +517,7 @@ fn run_local_terminal(
 
     let _ = app_handle.emit(&format!("ssh-connected-{session_id}"), ());
 
-    let (reader_message_tx, reader_message_rx) = mpsc::channel();
+    let (reader_message_tx, reader_message_rx) = mpsc::sync_channel(32);
     let reader_thread = thread::spawn(move || {
         let mut buffer = [0u8; 16 * 1024];
         loop {
@@ -586,11 +586,11 @@ fn run_local_terminal(
         }
 
         let mut output_batch = Vec::new();
-        loop {
+        while crate::terminal_output::can_read(&app_handle, &session_id) {
             match reader_message_rx.try_recv() {
                 Ok(ReaderMessage::Data(data)) => {
                     if let Some(ready) = append_output_chunk(&mut output_batch, data) {
-                        let _ = app_handle.emit(&format!("ssh-data-{session_id}"), ready);
+                        crate::terminal_output::emit(&app_handle, &session_id, ready);
                     }
                 }
                 Ok(ReaderMessage::Eof) => {
@@ -605,11 +605,14 @@ fn run_local_terminal(
             }
         }
         if !output_batch.is_empty() {
-            let _ = app_handle.emit(&format!("ssh-data-{session_id}"), output_batch);
+            crate::terminal_output::emit(&app_handle, &session_id, output_batch);
         }
 
         match child.try_wait() {
-            Ok(Some(status)) => break Some(status.exit_code()),
+            Ok(Some(status)) if matches!(reader_outcome, Some(ReaderMessage::Eof)) => {
+                break Some(status.exit_code())
+            }
+            Ok(Some(_)) => {}
             Ok(None) => {}
             Err(error) => {
                 terminal_error = Some(format!("无法读取本地 Shell 状态：{error}"));
@@ -642,6 +645,7 @@ fn run_local_terminal(
     drop(writer);
     drop(master);
     drop(process_tree);
+    drop(reader_message_rx);
     let _ = reader_thread.join();
 
     if let Some(error) = terminal_error {

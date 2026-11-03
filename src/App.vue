@@ -1053,9 +1053,6 @@ const keybindingActions = {
   },
   overview: () => { isOverviewVisible.value = !isOverviewVisible.value; },
   copySession: () => duplicateSessionPanel(),
-  toggleLineNumbers: () => {
-    window.dispatchEvent(new CustomEvent('terminal:toggle-line-numbers'));
-  },
   toggleFind: () => {
     window.dispatchEvent(new CustomEvent('app:terminal-find'));
   },

@@ -46,6 +46,7 @@ mod tests {
             SessionActorHandle {
                 sender,
                 transfers: transfers.clone(),
+                terminal_handles: Default::default(),
             },
         );
         tokio::time::timeout(
@@ -252,14 +253,14 @@ impl SessionSupervisor {
 
     pub async fn write_terminal(&self, session_id: String, data: String) -> Result<(), String> {
         let actor = self.get_actor(&session_id)?;
-        let (respond_to, rx) = oneshot::channel();
-        actor
-            .sender
-            .send(SessionMessage::WriteTerminal { data, respond_to })
-            .map_err(|_| "Failed to send terminal write to session actor".to_string())?;
-
-        rx.await
-            .map_err(|_| "Session actor dropped terminal write response".to_string())?
+        let handle = actor
+            .terminal_handles
+            .lock()
+            .unwrap()
+            .get(&session_id)
+            .cloned()
+            .ok_or_else(|| "Session not connected".to_string())?;
+        crate::ssh::write_ssh_runtime(&handle, data)
     }
 
     pub async fn control_serial(
@@ -332,17 +333,14 @@ impl SessionSupervisor {
         data: String,
     ) -> Result<(), String> {
         let actor = self.get_actor(&root_session_id)?;
-        let (respond_to, rx) = oneshot::channel();
-        actor
-            .sender
-            .send(SessionMessage::WriteShellChannel {
-                channel_id,
-                data,
-                respond_to,
-            })
-            .map_err(|_| "Failed to send shell channel write".to_string())?;
-        rx.await
-            .map_err(|_| "Session actor dropped shell channel write response".to_string())?
+        let handle = actor
+            .terminal_handles
+            .lock()
+            .unwrap()
+            .get(&channel_id)
+            .cloned()
+            .ok_or_else(|| "Shell channel not found".to_string())?;
+        crate::ssh::write_ssh_runtime(&handle, data)
     }
 
     pub async fn resize_shell_channel(

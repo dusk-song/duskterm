@@ -988,4 +988,9 @@ const handleImportSessions = async () => {
   border-radius: 2px;
 }
 
+.dark .match-mark {
+  background: color-mix(in srgb, hsl(var(--primary)) 65%, white);
+  color: #241a0f;
+}
+
 </style>

@@ -15,7 +15,9 @@ import { TooltipHint } from '@/components/ui/tooltip';
 import { toast } from '@/composables/useToast';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { FitAddon } from '@xterm/addon-fit';
-import { SearchAddon } from '@xterm/addon-search';
+import { describeLargeTerminalPaste } from '@/utils/terminalPaste';
+import { TerminalSearch } from '@/utils/terminalSearch';
+import { attachTerminalOutput, createTerminalOutput } from '@/utils/terminalOutput';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
 import { WebLinksAddon } from '@xterm/addon-web-links';
 import { Terminal } from '@xterm/xterm';
@@ -35,7 +37,7 @@ import { useCommandKnowledgeStore } from '@/stores/commandKnowledge';
 import { useSecurityStore } from '@/stores/security';
 import { useSshStore } from '@/stores/ssh';
 import { useTransfersStore } from '@/stores/transfers';
-import { invokeCommand, listenEvent } from '@/utils/ipc';
+import { invokeCommand, listenEvent, isTauriRuntime } from '@/utils/ipc';
 import { getPreferenceDefaults, loadPreference } from '@/utils/preferences';
 import { findMatchedCommandInPayload, matchSensitiveCommand } from '@/utils/sensitiveCommand';
 import { getSessionSyncBadgeState, SYNC_INPUT_CHANNELS_STORAGE_KEY } from '@/utils/syncInputChannels';
@@ -62,16 +64,8 @@ const props = defineProps({
 const terminalWrapperRef = ref(null);
 const terminalContainer = ref(null);
 const contextMenuOpen = ref(false);
-const lineNumberGutterRef = ref(null);
-// Line numbers: on by default, controlled globally via Settings → Terminal
-const _termSettings = loadTerminalThemeSettings();
-const lineNumbersEnabled = ref(_termSettings.showLineNumbers !== false); // default true unless explicitly false
 const reconnectingAfterDisconnect = ref(false);
 const reconnectPromptShown = ref(false);
-const lineNumberRows = ref([]);
-const lineNumberGutterWidth = ref('4ch');
-const lineNumberRowHeightPx = ref(18);
-const showLineNumberGutter = computed(() => lineNumbersEnabled.value && !isSerialSession.value);
 const sshStore = useSshStore();
 const transferStore = useTransfersStore();
 const commandHistoryStore = useCommandHistoryStore();
@@ -158,7 +152,7 @@ const openSyncSettings = () => window.dispatchEvent(new CustomEvent('app:open-sy
 const pauseSyncChannel = () => window.dispatchEvent(new CustomEvent('app:pause-sync-channel', {
   detail: { channelId: syncBadgeState.value.channelId },
 }));
-let serialWriteErrorToastAt = 0;
+let terminalWriteErrorToastAt = 0;
 const serialReceiveVisible = ref(true);
 const serialRawReceiveChunks = ref([]);
 const serialIoLogChunks = ref([]);
@@ -533,6 +527,28 @@ const openSecurityModal = (matched, data, historySnapshot = null, knowledgeUsage
   securityModalVisible.value = true;
 };
 
+// Development diagnostics contain timings and counters only, never input text.
+const terminalPerf = import.meta.env.DEV ? {
+  inputs: 0, lastInputAt: 0, inputDispatchMs: 0, inputToNextOutputMs: null,
+} : null;
+if (terminalPerf) {
+  (globalThis.__dusktermTerminalPerformance ||= new Map()).set(props.sessionId, terminalPerf);
+}
+const pendingLargePaste = ref(null);
+let processTerminalInput = null;
+const cancelLargePaste = () => { pendingLargePaste.value = null; };
+const confirmLargePaste = () => {
+  const pending = pendingLargePaste.value;
+  if (!pending || pending.info.tooLarge) return;
+  pendingLargePaste.value = null;
+  nextTick(() => processTerminalInput?.(pending.data, { pasteConfirmed: true }));
+};
+const handlePasteDialogCloseFocus = (event) => {
+  event.preventDefault();
+  nextTick(() => {
+    if (!securityModalVisible.value && !pendingLargePaste.value && !terminalDisposed) term?.focus();
+  });
+};
 async function sendData(data) {
   if (terminalTransferOwned.value) return false;
   const session = currentSession.value;
@@ -542,15 +558,17 @@ async function sendData(data) {
       ? { rootSessionId: session.workspaceSessionId || session.parentId, channelId: props.sessionId, data }
       : { sessionId: props.sessionId, data };
     try {
+      const started = performance.now();
+      if (terminalPerf) { terminalPerf.inputs++; terminalPerf.lastInputAt = started; }
       await invokeCommand(command, payload);
+      if (terminalPerf) terminalPerf.inputDispatchMs = performance.now() - started;
       return true;
     } catch (error) {
       console.error(error);
-      if (!isSerialSession.value) return false;
       const now = Date.now();
-      if (now - serialWriteErrorToastAt < 1500) return;
-      serialWriteErrorToastAt = now;
-      toast.error(`串口发送失败：${error}`);
+      if (now - terminalWriteErrorToastAt < 1500) return;
+      terminalWriteErrorToastAt = now;
+      toast.error(`${isSerialSession.value ? '串口发送失败' : '输入未发送'}：${error}`);
       return false;
     }
   }
@@ -785,31 +803,17 @@ let lastProposedRows = 0;
 let lastSentCols = 0;
 let lastSentRows = 0;
 const DRAG_FIT_MIN_INTERVAL = 30;
-const SEARCH_INPUT_DEBOUNCE_MS = 150;
-const SEARCH_OUTPUT_IDLE_MS = 300;
-const SEARCH_HIGHLIGHT_LIMIT = 200;
-const SEARCH_COUNT_SLICE_BUDGET_MS = 4;
-const SEARCH_COUNT_MAX_LINES_PER_SLICE = 512;
+const SEARCH_INPUT_DEBOUNCE_MS = 100;
+const SEARCH_REFRESH_MS = 250;
 const SEARCH_SELECTION_MAX_LENGTH = 512;
-const TERMINAL_OUTPUT_CHUNK_MAX_CHARS = 32 * 1024;
-const PHYSICAL_LINE_CHECKPOINT_STEP = 128;
-const PHYSICAL_LINE_CHECKPOINT_STEP_MEDIUM = 256;
-const PHYSICAL_LINE_CHECKPOINT_STEP_LARGE = 512;
-const PHYSICAL_LINE_CHECKPOINT_STEP_HUGE = 1024;
-const PHYSICAL_LINE_THRESHOLD_MEDIUM = 20000;
-const PHYSICAL_LINE_THRESHOLD_LARGE = 100000;
-const PHYSICAL_LINE_THRESHOLD_HUGE = 200000;
 const terminalThemeSettings = ref(loadTerminalThemeSettings());
 const CJK_MONO_FALLBACK_FONTS = '"Sarasa Mono SC", "Microsoft YaHei Mono", "SimSun", monospace';
 const TERMINAL_DEFAULT_FONT = '"Maple Mono"';
 const TERMINAL_FONT_FALLBACKS = '"Cascadia Mono", "Courier New", ' + CJK_MONO_FALLBACK_FONTS;
-let metricsDirty = false;
-let metricsRafId = null;
-let lastLineMetrics = null;
-let lastLineNumberRowsSignature = '';
 
 const focusTerminalSurface = () => {
   if (!term) return;
+  searchFocusToken++;
   requestAnimationFrame(() => {
     term?.focus();
     requestAnimationFrame(() => {
@@ -818,24 +822,11 @@ const focusTerminalSurface = () => {
   });
 };
 
-let writeFlushRafId = null;
-let pendingOutputChunks = [];
-let pendingOutputChunkIndex = 0;
-let terminalWriteInFlight = false;
-let viewportElement = null;
-let viewportScrollHandler = null;
 let termTitleDisposable = null;
 let termDataDisposable = null;
 let termResizeDisposable = null;
 let termCursorMoveDisposable = null;
-let termSelectionDisposable = null;
 let termScrollDisposable = null;
-let physicalLineCheckpoints = [{ index: -1, count: 0 }];
-let physicalLineScannedUntil = -1;
-let physicalLineTotal = 0;
-// Cached last-non-empty scan: only re-scan when buffer grows
-let _lastBufLen = -1;
-let _cachedLastNonEmpty = -1;
 
 // ── Trackpad gesture detection ──
 let gestureDeltaX = 0;
@@ -879,21 +870,12 @@ const handleTerminalWheel = (e) => {
   }
 };
 
-let physicalLineCheckpointStep = PHYSICAL_LINE_CHECKPOINT_STEP;
-
 const safeUnlisten = (unlisten) => {
   try {
     if (typeof unlisten === 'function') unlisten();
   } catch (error) {
     console.error('Terminal event cleanup failed:', error);
   }
-};
-
-// Sync line-number state from global Settings → Terminal pref
-const onTerminalThemeChanged = () => {
-  const settings = loadTerminalThemeSettings();
-  lineNumbersEnabled.value = settings.showLineNumbers === true;
-  scheduleLineMetrics();
 };
 
 const normalizeTerminalFontFamily = (configuredFontFamily) => {
@@ -924,8 +906,7 @@ const refreshTerminalSurface = (fit = true, repaint = false) => {
     if (repaint && term.rows > 0) {
       term.refresh(0, term.rows - 1);
     }
-    updateLineNumberRowHeight();
-    scheduleLineMetrics();
+
   };
 
   requestAnimationFrame(run);
@@ -994,8 +975,6 @@ const handleTerminalThemeChanged = (event) => {
     ? { ...event.detail.settings }
     : loadTerminalThemeSettings();
   applyTerminalTheme();
-  // Sync line-number state from global pref
-  onTerminalThemeChanged();
 };
 
 const handleGlobalBackgroundAvailabilityChanged = () => requestAnimationFrame(applyTerminalTheme);
@@ -1515,8 +1494,7 @@ function handleClear() {
   term.write('\x1b[2J\x1b[H');
   markSearchBufferChanged();
   term.scrollToBottom();
-  resetPhysicalLineCache();
-  scheduleLineMetrics();
+
 }
 
 function clearScrollback() {
@@ -1525,8 +1503,7 @@ function clearScrollback() {
   term.clear();
   markSearchBufferChanged();
   term.scrollToBottom();
-  resetPhysicalLineCache();
-  scheduleLineMetrics();
+
   // Send empty newline to trigger shell to redraw the prompt
   sendData('\r');
 }
@@ -1630,103 +1607,70 @@ async function saveSerialIoLog() {
   }
 }
 
-// --- Search Implementation ---
+// Search calculations and exact counts share one worker result index.
 const searchVisible = ref(false);
 const searchText = ref('');
-const searchOptions = ref({
-  matchCase: false,
-  regex: false,
-  wholeWord: false,
-  incremental: true // Search as you type
-});
+const searchOptions = ref({ matchCase: false, regex: false, wholeWord: false, incremental: true });
 const searchInput = ref(null);
+const searchBarRef = ref(null);
 const searchInputFocused = ref(false);
 const searchMatchCount = ref(0);
 const searchCurrentMatch = ref(0);
 const searchResultsPending = ref(false);
-const searchCountPending = ref(false);
-const searchExactCountReady = ref(false);
+const searchError = ref('');
 let searchInputDebounceTimer = null;
-let searchOutputIdleTimer = null;
-let searchCountTimer = null;
-let searchCountTaskToken = 0;
-let searchNavigationDirection = 0;
-let searchInitialPositionPending = false;
-let searchOutputHot = false;
-let searchResultsDisposable = null;
-let lastTerminalOutputAt = 0;
+let searchRefreshTimer = null;
+let searchUiToken = 0;
+let searchFocusToken = 0;
 let searchAddon = null;
-
 const searchDecorations = {
-  matchBackground: 'rgba(59, 130, 246, 0.20)',
-  activeMatchBackground: 'rgba(99, 102, 241, 0.30)',
-  matchBorder: 'rgba(96, 165, 250, 0.45)',
-  activeMatchBorder: 'rgba(129, 140, 248, 0.65)',
-  matchOverviewRuler: 'rgba(99, 102, 241, 0.72)',
-  activeMatchColorOverviewRuler: 'rgba(129, 140, 248, 0.82)'
+  matchBackground: '#38516c',
+  activeMatchBackground: '#65568d',
 };
-
 const hasValidSearchKeyword = () => String(searchText.value ?? '').trim().length > 0;
-
-const searchCountLabel = computed(() => {
-  if (searchResultsPending.value || searchCountPending.value) {
-    return `${searchCurrentMatch.value > 0 ? searchCurrentMatch.value : '…'}/…`;
-  }
-  const count = Math.max(0, Number(searchMatchCount.value || 0));
-  const currentValue = Number(searchCurrentMatch.value || 0);
-  const current = count > 0 ? (currentValue > 0 ? currentValue : '…') : 0;
-  return `${current}/${count}`;
-});
-
-const moveSearchCurrentMatch = (direction) => {
-  const current = Math.max(0, Number(searchCurrentMatch.value || 0));
-  const total = searchExactCountReady.value
-    ? Math.max(0, Number(searchMatchCount.value || 0))
-    : 0;
-
-  if (direction > 0) {
-    if (current <= 0) return 1;
-    return total > 0 && current >= total ? 1 : current + 1;
-  }
-  if (direction < 0) {
-    if (current > 1) return current - 1;
-    return total > 0 ? total : 0;
-  }
-  return current;
-};
-
-const cancelExactSearchCount = () => {
-  searchCountTaskToken += 1;
-  if (searchCountTimer) {
-    clearTimeout(searchCountTimer);
-    searchCountTimer = null;
-  }
-  searchCountPending.value = false;
-  searchExactCountReady.value = false;
-};
-
+const searchCountLabel = computed(() => searchError.value || (
+  searchResultsPending.value
+    ? `${searchCurrentMatch.value > 0 ? searchCurrentMatch.value : '…'}/…`
+    : `${searchCurrentMatch.value}/${searchMatchCount.value}`
+));
 const resetSearchStats = () => {
-  cancelExactSearchCount();
   searchMatchCount.value = 0;
   searchCurrentMatch.value = 0;
-  searchNavigationDirection = 0;
-  searchInitialPositionPending = false;
   searchResultsPending.value = false;
+  searchError.value = '';
 };
-
-const markSearchBufferChanged = () => {
-  lastTerminalOutputAt = performance.now();
-  if (!searchVisible.value || !hasValidSearchKeyword()) return;
-
-  cancelExactSearchCount();
+const cancelSearchInputDebounce = () => {
+  clearTimeout(searchInputDebounceTimer);
+  searchInputDebounceTimer = null;
+};
+const cancelSearchScheduling = () => {
+  cancelSearchInputDebounce();
+  clearTimeout(searchRefreshTimer);
+  searchRefreshTimer = null;
+  searchUiToken++;
+};
+const scheduleSearchRefresh = () => {
+  if (!props.active || !searchVisible.value || !hasValidSearchKeyword()) return;
   searchResultsPending.value = true;
-  if (!searchOutputHot) {
-    searchOutputHot = true;
-    searchAddon?.clearDecorations();
-  }
-  scheduleSearchIdleRefresh();
+  // Throttle rather than waiting indefinitely for a continuously printing shell.
+  if (searchRefreshTimer) return;
+  searchRefreshTimer = setTimeout(() => {
+    searchRefreshTimer = null;
+    void performSearch(0, { reveal: false });
+  }, SEARCH_REFRESH_MS);
 };
-
+const markSearchBufferChanged = () => searchAddon?.invalidate(true);
+const scheduleSearchFromInput = () => {
+  cancelSearchScheduling();
+  searchAddon?.clearDecorations();
+  resetSearchStats();
+  if (!hasValidSearchKeyword()) return;
+  searchResultsPending.value = true;
+  searchInputDebounceTimer = setTimeout(() => {
+    searchInputDebounceTimer = null;
+    void performSearch();
+  }, SEARCH_INPUT_DEBOUNCE_MS);
+};
 const normalizeSearchSelection = (selection) => {
   const text = String(selection || '')
     .replace(/\r\n?/g, '\n')
@@ -1754,619 +1698,64 @@ const seedSearchTextFromSelection = () => {
   return true;
 };
 
-const buildSearchRegex = () => {
-  if (!hasValidSearchKeyword()) return null;
-  const source = searchOptions.value.regex
-    ? searchText.value
-    : searchText.value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  const flags = searchOptions.value.matchCase ? 'g' : 'gi';
-
+let webglAddon = null;
+function releaseWebglRenderer() {
+  if (!webglAddon) return;
+  const canvases = [...(term?.element?.querySelectorAll('.xterm-screen canvas') || [])];
+  const addon = webglAddon;
+  webglAddon = null;
+  addon.dispose();
+  for (const canvas of canvases) {
+    if (!canvas.isConnected) canvas.getContext('webgl2')?.getExtension('WEBGL_lose_context')?.loseContext();
+  }
+}
+let webglLoading = false;
+let webglUnavailable = false;
+async function setTerminalRenderer(active) {
+  if (!active) { releaseWebglRenderer(); return; }
+  if (!term?.element || webglAddon || webglLoading || webglUnavailable || terminalDisposed) return;
+  webglLoading = true;
+  let addon;
   try {
-    return new RegExp(source, flags);
-  } catch {
-    return null;
-  }
-};
-
-const SEARCH_WORD_SEPARATORS = ` ~!@#$%^&*()+\`-=[]{}|\\;:"',./<>?`;
-
-const isWholeWordMatch = (text, index, length) => (
-  (index === 0 || SEARCH_WORD_SEPARATORS.includes(text[index - 1]))
-  && (index + length === text.length || SEARCH_WORD_SEPARATORS.includes(text[index + length]))
-);
-
-const countSearchMatchesInText = (text, regex, maxMatchStart = Number.POSITIVE_INFINITY) => {
-  let count = 0;
-  let offset = 0;
-
-  while (offset <= text.length) {
-    regex.lastIndex = offset;
-    const match = regex.exec(text);
-    if (!match) break;
-    if (match.index > maxMatchStart) break;
-
-    const matchLength = match[0].length;
-    if (matchLength > 0
-      && (!searchOptions.value.wholeWord || isWholeWordMatch(text, match.index, matchLength))) {
-      count += 1;
-    }
-    // SearchAddon advances one position so overlapping matches are counted as well.
-    offset = match.index + 1;
-  }
-
-  return count;
-};
-
-const readLogicalBufferLine = (buffer, startIndex, bufferLength, selectedPosition = null) => {
-  const parts = [];
-  let index = startIndex;
-  let textLength = 0;
-  let selectionOffset = null;
-
-  while (index < bufferLength) {
-    const line = buffer.getLine(index);
-    const nextLine = index + 1 < bufferLength ? buffer.getLine(index + 1) : null;
-    const wrapsToNext = Boolean(nextLine?.isWrapped);
-    let text = line?.translateToString(!wrapsToNext) || '';
-
-    if (wrapsToNext && line && nextLine) {
-      const lastCell = line.getCell(line.length - 1);
-      const firstNextCell = nextLine.getCell(0);
-      if (lastCell?.getCode() === 0 && lastCell.getWidth() === 1 && firstNextCell?.getWidth() === 2) {
-        text = text.slice(0, -1);
-      }
-    }
-
-    if (selectedPosition?.y === index && line) {
-      const selectedColumn = Math.max(0, Math.min(Number(selectedPosition.x || 0), line.length));
-      const rowPrefix = line.translateToString(false, 0, selectedColumn);
-      selectionOffset = textLength + rowPrefix.length;
-    }
-
-    parts.push(text);
-    textLength += text.length;
-    index += 1;
-    if (!wrapsToNext) break;
-  }
-
-  return { text: parts.join(''), nextIndex: index, selectionOffset };
-};
-
-function startExactSearchCount() {
-  cancelExactSearchCount();
-  const regex = buildSearchRegex();
-  const buffer = term?.buffer?.active;
-  if (!searchVisible.value || !regex || !buffer) return;
-
-  const taskToken = searchCountTaskToken;
-  const bufferLength = buffer.length;
-  const selectedPosition = searchInitialPositionPending
-    ? term?.getSelectionPosition?.()?.start || null
-    : null;
-  let lineIndex = 0;
-  let matchCount = 0;
-  let selectedMatchIndex = 0;
-  searchCountPending.value = true;
-
-  const countSlice = () => {
-    searchCountTimer = null;
-    if (taskToken !== searchCountTaskToken || !searchVisible.value) return;
-
-    const sliceStartedAt = performance.now();
-    let processedLines = 0;
-    while (lineIndex < bufferLength
-      && processedLines < SEARCH_COUNT_MAX_LINES_PER_SLICE
-      && performance.now() - sliceStartedAt < SEARCH_COUNT_SLICE_BUDGET_MS) {
-      const logicalLine = readLogicalBufferLine(buffer, lineIndex, bufferLength, selectedPosition);
-      if (logicalLine.selectionOffset !== null) {
-        selectedMatchIndex = matchCount + countSearchMatchesInText(
-          logicalLine.text,
-          regex,
-          logicalLine.selectionOffset,
-        );
-      }
-      matchCount += countSearchMatchesInText(logicalLine.text, regex);
-      processedLines += Math.max(1, logicalLine.nextIndex - lineIndex);
-      lineIndex = logicalLine.nextIndex;
-    }
-
-    if (lineIndex < bufferLength) {
-      searchCountTimer = setTimeout(countSlice, 0);
-      return;
-    }
-
-    if (taskToken !== searchCountTaskToken || !searchVisible.value) return;
-    searchMatchCount.value = matchCount;
-    searchCountPending.value = false;
-    searchExactCountReady.value = true;
-    if (matchCount === 0) searchCurrentMatch.value = 0;
-    if (searchInitialPositionPending) {
-      if (selectedMatchIndex > 0) searchCurrentMatch.value = selectedMatchIndex;
-      searchInitialPositionPending = false;
-    }
-  };
-
-  searchCountTimer = setTimeout(countSlice, 0);
+    const { WebglAddon } = await import('@xterm/addon-webgl');
+    if (!props.active || terminalDisposed || !term) return;
+    addon = new WebglAddon();
+    addon.onContextLoss(() => {
+      webglUnavailable = true;
+      addon.dispose();
+      if (webglAddon === addon) webglAddon = null;
+      term?.refresh(0, term.rows - 1);
+    });
+    term.loadAddon(addon);
+    webglAddon = addon;
+  } catch (error) {
+    webglUnavailable = true;
+    try { addon?.dispose(); } catch { /* Keep the default renderer. */ }
+    console.debug('Terminal uses DOM rendering:', error);
+  } finally { webglLoading = false; }
 }
 
-const getSearchFindOptions = (incremental = false, withDecorations = true) => ({
-  caseSensitive: searchOptions.value.matchCase,
-  regex: searchOptions.value.regex,
-  wholeWord: searchOptions.value.wholeWord,
-  incremental,
-  ...(withDecorations ? { decorations: searchDecorations } : {})
-});
-
-const isTerminalOutputHot = () => (
-  lastTerminalOutputAt > 0 && performance.now() - lastTerminalOutputAt < SEARCH_OUTPUT_IDLE_MS
-);
-
-const cancelSearchInputDebounce = () => {
-  if (!searchInputDebounceTimer) return;
-  clearTimeout(searchInputDebounceTimer);
-  searchInputDebounceTimer = null;
-};
-
-const cancelSearchIdleRefresh = () => {
-  if (!searchOutputIdleTimer) return;
-  clearTimeout(searchOutputIdleTimer);
-  searchOutputIdleTimer = null;
-};
-
-function scheduleSearchIdleRefresh() {
-  cancelSearchIdleRefresh();
-  if (!searchVisible.value || !hasValidSearchKeyword()) return;
-
-  const elapsed = performance.now() - lastTerminalOutputAt;
-  const delay = Math.max(0, SEARCH_OUTPUT_IDLE_MS - elapsed);
-  searchOutputIdleTimer = setTimeout(() => {
-    searchOutputIdleTimer = null;
-    if (isTerminalOutputHot()) {
-      scheduleSearchIdleRefresh();
-      return;
-    }
-    searchOutputHot = false;
-    performSearch({ withDecorations: true });
-  }, delay);
-}
-
-const scheduleSearchFromInput = () => {
-  cancelSearchInputDebounce();
-  cancelExactSearchCount();
-  if (!searchVisible.value || !hasValidSearchKeyword()) return;
-
-  searchAddon?.clearDecorations();
-  searchResultsPending.value = true;
-  searchMatchCount.value = 0;
-  searchCurrentMatch.value = 0;
-  searchInputDebounceTimer = setTimeout(() => {
-    searchInputDebounceTimer = null;
-    const withDecorations = !isTerminalOutputHot();
-    performSearch({ withDecorations });
-    if (!withDecorations) scheduleSearchIdleRefresh();
-  }, SEARCH_INPUT_DEBOUNCE_MS);
-};
-
-const cancelSearchScheduling = () => {
-  cancelSearchInputDebounce();
-  cancelSearchIdleRefresh();
-  cancelExactSearchCount();
-};
-
-const updateLineNumberRowHeight = () => {
-  if (!term || !viewportElement) return;
-  const rows = Math.max(1, Number(term.rows || 0));
-  const height = Number(viewportElement.clientHeight || 0);
-  if (height > 0) {
-    lineNumberRowHeightPx.value = Math.max(12, Math.floor(height / rows));
-  }
-};
-
-const attachViewportScrollListener = () => {
-  if (!term?.element) return;
-  const nextViewport = term.element.querySelector('.xterm-viewport');
-  if (nextViewport === viewportElement) return;
-
-  if (viewportElement && viewportScrollHandler) {
-    viewportElement.removeEventListener('scroll', viewportScrollHandler);
-  }
-
-  viewportElement = nextViewport;
-  viewportScrollHandler = () => {
-    syncGutterScrollTop();
-    scheduleLineMetrics();
-  };
-
-  if (viewportElement) {
-    viewportElement.addEventListener('scroll', viewportScrollHandler, { passive: true });
-    if (lineNumberGutterRef.value) {
-      lineNumberGutterRef.value.scrollTop = viewportElement.scrollTop;
-    }
-    updateLineNumberRowHeight();
-  }
-};
-
-const detachViewportScrollListener = () => {
-  if (viewportElement && viewportScrollHandler) {
-    viewportElement.removeEventListener('scroll', viewportScrollHandler);
-  }
-  viewportElement = null;
-  viewportScrollHandler = null;
-};
-
-const toggleLineNumbers = (nextValue) => {
-  const settings = loadTerminalThemeSettings();
-  const globalOn = settings.showLineNumbers === true;
-
-  // Block toggle when global setting is off (must enable via Settings first)
-  if (!globalOn) {
-    toast.info('行号功能已全局关闭，请在 首选项 → 终端 → 行号显示 中开启');
-    return;
-  }
-
-  const nextEnabled = typeof nextValue === 'boolean' ? nextValue : !lineNumbersEnabled.value;
-  if (lineNumbersEnabled.value === nextEnabled) return;
-  lineNumbersEnabled.value = nextEnabled;
-  scheduleLineMetrics();
-  toast.success(`行号显示已${nextEnabled ? '开启' : '关闭'}`);
-};
-
-const handleExternalLineNumberToggle = (event) => {
-  const detail = event?.detail;
-  if (typeof detail === 'boolean') {
-    toggleLineNumbers(detail);
-    return;
-  }
-  if (detail && typeof detail.enabled === 'boolean') {
-    toggleLineNumbers(detail.enabled);
-  }
-};
-
-const resetPhysicalLineCache = () => {
-  physicalLineCheckpoints = [{ index: -1, count: 0 }];
-  physicalLineScannedUntil = -1;
-  physicalLineTotal = 0;
-  physicalLineCheckpointStep = PHYSICAL_LINE_CHECKPOINT_STEP;
-  _lastBufLen = -1;
-  _cachedLastNonEmpty = -1;
-};
-
-const resolveCheckpointStep = (targetLength) => {
-  if (targetLength >= PHYSICAL_LINE_THRESHOLD_HUGE) return PHYSICAL_LINE_CHECKPOINT_STEP_HUGE;
-  if (targetLength >= PHYSICAL_LINE_THRESHOLD_LARGE) return PHYSICAL_LINE_CHECKPOINT_STEP_LARGE;
-  if (targetLength >= PHYSICAL_LINE_THRESHOLD_MEDIUM) return PHYSICAL_LINE_CHECKPOINT_STEP_MEDIUM;
-  return PHYSICAL_LINE_CHECKPOINT_STEP;
-};
-
-const rebuildPhysicalLineCache = (targetLength) => {
-  const buffer = term?.buffer?.active;
-  if (!buffer || targetLength <= 0) {
-    resetPhysicalLineCache();
-    return;
-  }
-
-  const step = resolveCheckpointStep(targetLength);
-  physicalLineCheckpoints = [{ index: -1, count: 0 }];
-  physicalLineCheckpointStep = step;
-  let count = 0;
-
-  for (let index = 0; index < targetLength; index += 1) {
-    const wrapped = !!buffer.getLine(index)?.isWrapped;
-    if (!wrapped) count += 1;
-    if ((index + 1) % step === 0) {
-      physicalLineCheckpoints.push({ index, count });
-    }
-  }
-
-  physicalLineScannedUntil = targetLength - 1;
-  physicalLineTotal = count;
-};
-
-const extendPhysicalLineCache = (targetLength) => {
-  const buffer = term?.buffer?.active;
-  if (!buffer || targetLength <= 0) {
-    resetPhysicalLineCache();
-    return;
-  }
-
-  if (physicalLineScannedUntil < 0) {
-    rebuildPhysicalLineCache(targetLength);
-    return;
-  }
-
-  const step = physicalLineCheckpointStep;
-
-  let count = physicalLineTotal;
-  for (let index = physicalLineScannedUntil + 1; index < targetLength; index += 1) {
-    const wrapped = !!buffer.getLine(index)?.isWrapped;
-    if (!wrapped) count += 1;
-    if ((index + 1) % step === 0) {
-      physicalLineCheckpoints.push({ index, count });
-    }
-  }
-
-  physicalLineScannedUntil = targetLength - 1;
-  physicalLineTotal = count;
-};
-
-const ensurePhysicalLineCache = (targetLength, forceRebuild = false) => {
-  if (!term) return;
-
-  const desiredStep = resolveCheckpointStep(targetLength);
-
-  if (targetLength <= 0) {
-    resetPhysicalLineCache();
-    return;
-  }
-
-  if (
-    forceRebuild ||
-    physicalLineScannedUntil >= targetLength ||
-    physicalLineScannedUntil < 0 ||
-    desiredStep !== physicalLineCheckpointStep
-  ) {
-    rebuildPhysicalLineCache(targetLength);
-    return;
-  }
-
-  if (physicalLineScannedUntil < targetLength - 1) {
-    extendPhysicalLineCache(targetLength);
-  }
-};
-
-const findCheckpointIndex = (targetVisualIndex) => {
-  let left = 0;
-  let right = physicalLineCheckpoints.length - 1;
-  let answer = 0;
-
-  while (left <= right) {
-    const middle = (left + right) >> 1;
-    const item = physicalLineCheckpoints[middle];
-    if (item.index <= targetVisualIndex) {
-      answer = middle;
-      left = middle + 1;
-    } else {
-      right = middle - 1;
-    }
-  }
-
-  return answer;
-};
-
-const getPhysicalLineAtVisualIndex = (visualIndex) => {
-  if (!term || visualIndex < 0) return 0;
-
-  ensurePhysicalLineCache(visualIndex + 1);
-  const buffer = term.buffer.active;
-  const checkpointIndex = findCheckpointIndex(visualIndex);
-  const checkpoint = physicalLineCheckpoints[checkpointIndex] || { index: -1, count: 0 };
-  let count = checkpoint.count;
-
-  for (let index = checkpoint.index + 1; index <= visualIndex; index += 1) {
-    const wrapped = !!buffer.getLine(index)?.isWrapped;
-    if (!wrapped) count += 1;
-  }
-
-  return count;
-};
-
-const collectLineMetrics = () => {
-  if (!term) return;
-  const buffer = term.buffer.active;
-  const length = Math.max(0, Number(buffer.length || 0));
-  const viewportY = Math.max(0, Number(buffer.viewportY || 0));
-  const rows = Math.max(1, Number(term.rows || 0));
-  const selection = term.getSelectionPosition?.();
-  const selectedLine = Number.isInteger(selection?.end?.y) ? selection.end.y : null;
-  const fallbackVisualLine = Math.max(0, Number(buffer.baseY || 0) + Number(buffer.cursorY || 0));
-
-  // Fast path: when line numbers are off, skip expensive buffer scan and physical-line cache
-  const needsLineNumbers = lineNumbersEnabled.value;
-
-  // Cached reverse scan — only rescan when buffer grew or was cleared.
-  // Caps scan to last 500 lines to avoid O(n) on large buffers.
-  let lastNonEmptyVisualLine = _cachedLastNonEmpty;
-  if (length !== _lastBufLen || _cachedLastNonEmpty < 0) {
-    _lastBufLen = length;
-    lastNonEmptyVisualLine = -1;
-    const scanLimit = Math.max(0, length - 500);
-    for (let index = length - 1; index >= scanLimit; index -= 1) {
-      const line = buffer.getLine(index);
-      if (!line) continue;
-      if (line.translateToString(true).length > 0) {
-        lastNonEmptyVisualLine = index;
-        break;
-      }
-    }
-    if (lastNonEmptyVisualLine < 0 && length > 0) {
-      for (let index = scanLimit - 1; index >= 0; index -= 1) {
-        const line = buffer.getLine(index);
-        if (!line) continue;
-        if (line.translateToString(true).length > 0) {
-          lastNonEmptyVisualLine = index;
-          break;
-        }
-      }
-    }
-    _cachedLastNonEmpty = lastNonEmptyVisualLine;
-  }
-
-  const effectiveLastVisualLine = Math.max(lastNonEmptyVisualLine, fallbackVisualLine);
-  const effectiveLength = Math.max(0, effectiveLastVisualLine + 1);
-  const cursorVisualLine = Math.max(0, Math.min(effectiveLength > 0 ? effectiveLength - 1 : 0, selectedLine ?? fallbackVisualLine));
-
-  // Visual-line count (each row gets a number, no isWrapped skip)
-  const totalVisualLines = effectiveLength;
-  const cursorVisualLineNum = cursorVisualLine + 1;
-
-  const visibleRows = needsLineNumbers ? [] : null;
-  const visibleStart = Math.max(0, viewportY);
-  const visibleEnd = Math.min(effectiveLength, viewportY + rows);
-
-  if (visibleRows) {
-    let runningPhysical = getPhysicalLineAtVisualIndex(visibleStart - 1);
-    for (let index = visibleStart; index < visibleEnd; index += 1) {
-      runningPhysical += 1;
-      visibleRows.push(String(runningPhysical));
-    }
-    while (visibleRows.length < rows) {
-      visibleRows.push('');
-    }
-  }
-
-  return {
-    cursorLine: cursorVisualLineNum,
-    totalLines: totalVisualLines,
-    visibleRows,
-    lineNumberDigits: String(Math.max(totalVisualLines, 1)).length
-  };
-};
-
-const dispatchLineMetrics = (metrics) => {
-  if (!metrics) return;
-  if (
-    lastLineMetrics &&
-    lastLineMetrics.cursorLine === metrics.cursorLine &&
-    lastLineMetrics.totalLines === metrics.totalLines
-  ) {
-    return;
-  }
-  lastLineMetrics = metrics;
-
-  window.dispatchEvent(
-    new CustomEvent('terminal-line-metrics', {
-      detail: {
-        sessionId: props.sessionId,
-        cursorLine: metrics.cursorLine,
-        totalLines: metrics.totalLines
-      }
-    })
-  );
-};
-
-// ── Line-number gutter ──
-const syncGutterScrollTop = () => {
-  if (lineNumbersEnabled.value && lineNumberGutterRef.value && viewportElement) {
-    lineNumberGutterRef.value.scrollTop = viewportElement.scrollTop;
-  }
-};
-
-// RAF-gated line metrics: coalesce all triggers into at most one update per frame
-const scheduleLineMetrics = () => {
-  syncGutterScrollTop();
-  if (metricsDirty) return;
-  metricsDirty = true;
-  if (metricsRafId) return;
-  metricsRafId = requestAnimationFrame(() => {
-    metricsRafId = null;
-    metricsDirty = false;
-    if (!term) return;
-    const metrics = collectLineMetrics();
-    dispatchLineMetrics(metrics);
-    if (lineNumbersEnabled.value) {
-      const nextRows = metrics?.visibleRows || [];
-      const nextWidth = `${Math.max(3, Number(metrics?.lineNumberDigits || 1) + 1)}ch`;
-      const nextSignature = `${nextWidth}|${nextRows.join('\n')}`;
-      if (nextSignature !== lastLineNumberRowsSignature) {
-        lineNumberRows.value = nextRows;
-        lineNumberGutterWidth.value = nextWidth;
-        lastLineNumberRowsSignature = nextSignature;
-      }
-      updateLineNumberRowHeight();
-    } else {
-      if (lineNumberRows.value.length > 0) {
-        lineNumberRows.value = [];
-      }
-      lastLineNumberRowsSignature = '';
-    }
-  });
-};
-
-const takePendingTerminalOutput = (maxChars) => {
-  if (pendingOutputChunkIndex >= pendingOutputChunks.length) return '';
-
-  const parts = [];
-  let length = 0;
-  while (pendingOutputChunkIndex < pendingOutputChunks.length && length < maxChars) {
-    const chunk = pendingOutputChunks[pendingOutputChunkIndex];
-    const remaining = maxChars - length;
-    if (chunk.length <= remaining) {
-      parts.push(chunk);
-      length += chunk.length;
-      pendingOutputChunkIndex += 1;
-      continue;
-    }
-
-    let splitAt = remaining;
-    const previousCode = chunk.charCodeAt(splitAt - 1);
-    const nextCode = chunk.charCodeAt(splitAt);
-    if (
-      previousCode >= 0xd800 && previousCode <= 0xdbff &&
-      nextCode >= 0xdc00 && nextCode <= 0xdfff
-    ) {
-      splitAt -= 1;
-    }
-    if (splitAt <= 0) break;
-    parts.push(chunk.slice(0, splitAt));
-    pendingOutputChunks[pendingOutputChunkIndex] = chunk.slice(splitAt);
-    length += splitAt;
-  }
-
-  if (pendingOutputChunkIndex >= pendingOutputChunks.length) {
-    pendingOutputChunks = [];
-    pendingOutputChunkIndex = 0;
-  } else if (
-    pendingOutputChunkIndex >= 256 &&
-    pendingOutputChunkIndex * 2 >= pendingOutputChunks.length
-  ) {
-    pendingOutputChunks = pendingOutputChunks.slice(pendingOutputChunkIndex);
-    pendingOutputChunkIndex = 0;
-  }
-
-  return parts.join('');
-};
-
-const hasPendingTerminalOutput = () => pendingOutputChunkIndex < pendingOutputChunks.length;
-
-const scheduleTerminalOutputFlush = () => {
-  if (writeFlushRafId || terminalWriteInFlight || !hasPendingTerminalOutput()) return;
-  writeFlushRafId = requestAnimationFrame(flushTerminalOutput);
-};
-
-const flushTerminalOutput = () => {
-  writeFlushRafId = null;
-  if (!term || terminalWriteInFlight || !hasPendingTerminalOutput()) return;
-
-  const output = takePendingTerminalOutput(TERMINAL_OUTPUT_CHUNK_MAX_CHARS);
-  if (!output) {
-    scheduleTerminalOutputFlush();
-    return;
-  }
-
-  terminalWriteInFlight = true;
-  term.write(output, () => {
-    terminalWriteInFlight = false;
-    if (!term) return;
-    markSearchBufferChanged();
-    scheduleLineMetrics();
-    scheduleTerminalOutputFlush();
-  });
-};
-
+let outputWriter = null;
+let detachBinaryOutput = null;
+let terminalDisposed = false;
 const enqueueTerminalOutput = (chunk) => {
-  if (!chunk) return;
-  if (!hasPendingTerminalOutput()) {
-    pendingOutputChunks = [];
-    pendingOutputChunkIndex = 0;
+  if (!term || terminalDisposed || !chunk) return;
+  if (!outputWriter) {
+    outputWriter = createTerminalOutput({ write: (text, done) => term.write(text, done) });
+    if (terminalPerf) terminalPerf.output = outputWriter.stats;
   }
-  pendingOutputChunks.push(chunk);
-  scheduleTerminalOutputFlush();
+  outputWriter.enqueue(chunk);
 };
 
 function focusSearchInputSoon({ selectText = false } = {}) {
+  const token = ++searchFocusToken;
+  const previousFocus = document.activeElement;
   nextTick(() => {
     requestAnimationFrame(() => {
-      searchInput.value?.focus();
+      if (token !== searchFocusToken || !searchVisible.value || !props.active) return;
+      const currentFocus = document.activeElement;
+      if (currentFocus !== previousFocus && currentFocus !== searchInput.value && currentFocus !== document.body) return;
+      searchInput.value?.focus({ preventScroll: true });
       if (selectText) searchInput.value?.select?.();
     });
   });
@@ -2392,8 +1781,8 @@ function openSearchFromMenu(event) {
 }
 
 function closeSearch() {
+  searchFocusToken++;
   cancelSearchScheduling();
-  searchOutputHot = false;
   searchInputFocused.value = false;
   searchInput.value?.blur();
   searchVisible.value = false;
@@ -2410,6 +1799,7 @@ function handleSearchInputFocus() {
 }
 
 function handleSearchInputBlur() {
+  searchFocusToken++;
   searchInputFocused.value = false;
 }
 
@@ -2432,78 +1822,34 @@ function toggleSearchOption(optionKey) {
   }
 }
 
-function performSearch({ withDecorations = !isTerminalOutputHot() } = {}) {
-  if (!searchAddon || !hasValidSearchKeyword() || !buildSearchRegex()) {
-    searchAddon?.clearDecorations();
+async function performSearch(direction = 0, { reveal = true } = {}) {
+  if (!searchAddon || !hasValidSearchKeyword()) return;
+  const token = ++searchUiToken;
+  searchResultsPending.value = true;
+  searchError.value = '';
+  try {
+    const result = await searchAddon.find(searchText.value, {
+      caseSensitive: searchOptions.value.matchCase,
+      regex: searchOptions.value.regex,
+      wholeWord: searchOptions.value.wholeWord,
+      decorations: searchDecorations,
+      reveal: () => reveal && props.active && searchVisible.value
+        && !!searchBarRef.value?.contains(document.activeElement),
+    }, direction);
+    if (token !== searchUiToken || !searchVisible.value) return;
+    if (!result) { scheduleSearchRefresh(); return; }
+    searchMatchCount.value = result.count;
+    searchCurrentMatch.value = result.current;
+    searchResultsPending.value = !!result.stale;
+    if (result.stale) scheduleSearchRefresh();
+  } catch (error) {
+    if (token !== searchUiToken) return;
     resetSearchStats();
-    return;
-  }
-
-  if (withDecorations && searchResultsPending.value) {
-    searchAddon.clearDecorations();
-  }
-  const found = searchAddon.findNext(
-    searchText.value,
-    getSearchFindOptions(searchOptions.value.incremental, withDecorations),
-    { noScroll: true }
-  );
-  if (!withDecorations) {
-    searchOutputHot = true;
-    searchResultsPending.value = true;
-    searchMatchCount.value = 0;
-    searchCurrentMatch.value = found ? 1 : 0;
-  } else {
-    startExactSearchCount();
+    searchError.value = error.message === 'invalid-regex' ? '正则无效' : error.message;
   }
 }
-
-function findNext() {
-  if (!searchAddon || !hasValidSearchKeyword() || !buildSearchRegex()) return;
-  cancelSearchInputDebounce();
-  const withDecorations = !isTerminalOutputHot();
-  if (withDecorations && searchResultsPending.value) {
-    searchAddon.clearDecorations();
-  }
-  let found = false;
-  searchInitialPositionPending = false;
-  searchNavigationDirection = 1;
-  try {
-    found = searchAddon.findNext(searchText.value, getSearchFindOptions(false, withDecorations));
-  } finally {
-    searchNavigationDirection = 0;
-  }
-  if (!withDecorations) {
-    searchResultsPending.value = true;
-    searchCurrentMatch.value = found ? moveSearchCurrentMatch(1) : 0;
-    scheduleSearchIdleRefresh();
-  } else if (!searchExactCountReady.value && !searchCountPending.value) {
-    startExactSearchCount();
-  }
-}
-
-function findPrev() {
-  if (!searchAddon || !hasValidSearchKeyword() || !buildSearchRegex()) return;
-  cancelSearchInputDebounce();
-  const withDecorations = !isTerminalOutputHot();
-  if (withDecorations && searchResultsPending.value) {
-    searchAddon.clearDecorations();
-  }
-  let found = false;
-  searchInitialPositionPending = false;
-  searchNavigationDirection = -1;
-  try {
-    found = searchAddon.findPrevious(searchText.value, getSearchFindOptions(false, withDecorations));
-  } finally {
-    searchNavigationDirection = 0;
-  }
-  if (!withDecorations) {
-    searchResultsPending.value = true;
-    searchCurrentMatch.value = found ? moveSearchCurrentMatch(-1) : 0;
-    scheduleSearchIdleRefresh();
-  } else if (!searchExactCountReady.value && !searchCountPending.value) {
-    startExactSearchCount();
-  }
-}
+function findNext() { cancelSearchInputDebounce(); void performSearch(1); }
+function findPrev() { cancelSearchInputDebounce(); void performSearch(-1); }
 
 function handleSearchKeydown(e) {
   if (e.isComposing) return;
@@ -2593,12 +1939,6 @@ function handleKeydown(e) {
 
   if (!ownsKeyboardContext) return;
 
-  if (e.ctrlKey && e.altKey && (e.key === 'l' || e.key === 'L')) {
-    e.preventDefault();
-    toggleLineNumbers();
-    return;
-  }
-
   if (e.ctrlKey && e.shiftKey && (e.key === 'c' || e.key === 'C') && terminalFocused && !searchInputActive) {
     e.preventDefault();
     e.stopPropagation();
@@ -2677,7 +2017,7 @@ function doFit(options = {}) {
           lastFittedContainerWidth = width;
           lastFittedContainerHeight = height;
           lastFitAt = now;
-          updateLineNumberRowHeight();
+
           scheduleQuickHintPositionUpdate();
           return;
         }
@@ -2689,10 +2029,8 @@ function doFit(options = {}) {
         lastProposedRows = dims.rows;
 
         fitAddon.fit();
-        resetPhysicalLineCache();
 
-        scheduleLineMetrics();
-        updateLineNumberRowHeight();
+
         scheduleQuickHintPositionUpdate();
       } catch (e) {
         console.error('Fit error:', e);
@@ -2805,6 +2143,8 @@ function handleLayoutDragging(event) {
 }
 
 watch(() => props.active, (active) => {
+  void setTerminalRenderer(active);
+  if (active) { scheduleSearchRefresh(); searchAddon?.scheduleDecorations(); }
   if (!active) {
     if (resizeTimeout) {
       clearTimeout(resizeTimeout);
@@ -2916,7 +2256,6 @@ onMounted(async () => {
     termDataDisposable = cached.termDataDisposable || null;
     termResizeDisposable = cached.termResizeDisposable || null;
     termCursorMoveDisposable = cached.termCursorMoveDisposable || null;
-    termSelectionDisposable = cached.termSelectionDisposable || null;
     termScrollDisposable = cached.termScrollDisposable || null;
     unlistenData = cached.unlistenData;
     unlistenDebug = cached.unlistenDebug;
@@ -2943,11 +2282,11 @@ onMounted(async () => {
         }
       }, 50);
     }
-    attachViewportScrollListener();
+
     applyTerminalTextRendering(config);
     applyTerminalTheme();
     term?.attachCustomKeyEventHandler?.(handleTerminalCustomKeyEvent);
-    scheduleLineMetrics();
+
   }
 
   const isCached = !!cached;
@@ -2991,7 +2330,10 @@ onMounted(async () => {
 
     fitAddon = new FitAddon();
     unicode11Addon = new Unicode11Addon();
-    searchAddon = new SearchAddon({ highlightLimit: SEARCH_HIGHLIGHT_LIMIT });
+    searchAddon = new TerminalSearch({
+      onInvalidate: scheduleSearchRefresh,
+      visible: () => props.active && searchVisible.value,
+    });
 
     term.loadAddon(fitAddon);
     term.loadAddon(unicode11Addon);
@@ -3033,11 +2375,11 @@ onMounted(async () => {
     });
 
       term.open(terminalContainer.value);
+      void setTerminalRenderer(props.active);
       applyTerminalTextRendering(config);
       focusTerminalSurface();
       applyTerminalTheme();
-      attachViewportScrollListener();
-      scheduleLineMetrics();
+
       refreshTerminalSurface(true);
 
     // Wait a tick for layout to settle before fitting
@@ -3046,7 +2388,7 @@ onMounted(async () => {
     }, 50);
 
     // Handle user input
-    termDataDisposable = term.onData((data) => {
+    processTerminalInput = (data, { pasteConfirmed = false } = {}) => {
       try {
         if (terminalTransferOwned.value) return;
         const session = sshStore.sessions.find(s => s.id === props.sessionId);
@@ -3067,7 +2409,7 @@ onMounted(async () => {
             markSearchBufferChanged();
             reconnectPromptShown.value = true;
           }
-          scheduleLineMetrics();
+
           return;
         }
 
@@ -3083,8 +2425,17 @@ onMounted(async () => {
           return;
         }
 
-        if (securityModalVisible.value) {
+        if (securityModalVisible.value || pendingLargePaste.value) {
           return;
+        }
+
+        if (!pasteConfirmed) {
+          const info = describeLargeTerminalPaste(data);
+          if (info) {
+            closeQuickHint();
+            pendingLargePaste.value = { data, info };
+            return;
+          }
         }
 
         if (quickHintVisible.value && quickHintFocused.value) {
@@ -3127,7 +2478,7 @@ onMounted(async () => {
         }
 
         const isEnter = data === '\r' || data === '\n';
-        const isPasteWithNewline = data.length > 1 && (data.includes('\r') || data.includes('\n'));
+        const isPasteWithNewline = pasteConfirmed || (data.length > 1 && (data.includes('\r') || data.includes('\n')));
         const routedBySync = isCurrentSessionSyncSource();
 
         if (routedBySync && isPasteWithNewline) {
@@ -3220,14 +2571,15 @@ onMounted(async () => {
         resetCurrentInputState();
         forwardTerminalInput(data);
       }
-    });
+    };
+    termDataDisposable = term.onData(data => processTerminalInput?.(data));
 
     // Handle resize
     termResizeDisposable = term.onResize(({ cols, rows }) => {
       if (cols < 2 || rows < 2) return; // Ignore invalid sizes
-      resetPhysicalLineCache();
+
       sendResizeIfNeeded(cols, rows);
-      scheduleLineMetrics();
+
     });
 
     termCursorMoveDisposable = term.onCursorMove(() => {
@@ -3235,28 +2587,21 @@ onMounted(async () => {
       scheduleShellCompletionSync();
     });
 
-    termSelectionDisposable = term.onSelectionChange(() => {
-      scheduleLineMetrics();
-    });
-
     termScrollDisposable = term.onScroll(() => {
-      // Immediate scroll sync for zero-lag gutter tracking
-      syncGutterScrollTop();
-      // Defer content rebuild to RAF
-      scheduleLineMetrics();
       scheduleQuickHintPositionUpdate();
     });
 
-    // Initial resize - delayed slightly to ensure container is ready
-    setTimeout(() => {
-      /* Handled by the forced resize above */
-    }, 100);
-
     // Listen for backend data
-    unlistenData = await listenEvent(`ssh-data-${props.sessionId}`, (payload) => {
+    const receiveData = (payload) => {
+      if (terminalDisposed) return;
+      if (terminalPerf?.lastInputAt) {
+        // The next output is a latency hint, not proof of a specific key echo.
+        terminalPerf.inputToNextOutputMs = performance.now() - terminalPerf.lastInputAt;
+        terminalPerf.lastInputAt = 0;
+      }
       // console.log('Terminal Data:', payload);
-      if (Array.isArray(payload)) {
-        const rawBytes = new Uint8Array(payload);
+      if (Array.isArray(payload) || payload instanceof Uint8Array) {
+        const rawBytes = payload instanceof Uint8Array ? payload : new Uint8Array(payload);
         const decoded = textDecoder.decode(rawBytes, { stream: true });
         recordSerialReceive(decoded, payload.length, rawBytes);
         if (!isSerialSession.value || serialReceiveVisible.value) {
@@ -3281,14 +2626,30 @@ onMounted(async () => {
           }
         }
       }
-    });
+    };
+    unlistenData = await listenEvent(`ssh-data-${props.sessionId}`, receiveData);
+    if ((isLocalSession.value || !config.protocol || config.protocol.toLowerCase() === 'ssh') && isTauriRuntime()) {
+      const detach = await attachTerminalOutput({
+        sessionId: props.sessionId, invoke: invokeCommand, listen: listenEvent,
+        consume: async (bytes) => {
+          receiveData(bytes);
+          await outputWriter?.idle();
+        },
+      });
+      if (terminalDisposed) {
+        void detach();
+        safeUnlisten(unlistenData);
+        return;
+      }
+      detachBinaryOutput = detach;
+    }
 
     // Debug listener
     unlistenDebug = await listenEvent(`ssh-debug-${props.sessionId}`, (msg) => {
       console.log(`[SSH-DEBUG]`, msg);
     });
 
-    // Force a resize + line-metrics refresh after short delay
+    // Force a resize after the container settles
     setTimeout(() => {
       if (fitAddon) {
         doFit({ force: true });
@@ -3300,8 +2661,7 @@ onMounted(async () => {
           sendResizeIfNeeded(80, 24);
         }
       }
-      // Force initial line-number gutter render — no events fire on a fresh terminal
-      scheduleLineMetrics();
+
     }, 200);
 
     unlistenConnected = await listenEvent(`ssh-connected-${props.sessionId}`, () => {
@@ -3325,21 +2685,30 @@ onMounted(async () => {
       }, 0);
     });
 
-    unlistenClosed = await listenEvent(`ssh-closed-${props.sessionId}`, (reason) => {
+    unlistenClosed = await listenEvent(`ssh-closed-${props.sessionId}`, async (reason) => {
       flushSerialPendingCr();
       stopSerialPeriodicSend();
       serialStatus.value = { ...serialStatus.value, rxRate: 0, txRate: 0, capturing: false, sendingFile: false };
       sshStore.setSessionStatus(props.sessionId, 'disconnected');
       reconnectPromptShown.value = false;
+      await detachBinaryOutput?.flush();
+      await outputWriter?.idle();
+      if (terminalDisposed || !term) return;
       term.write(`\r\n\x1b[31m${formatCloseReason(reason)}\x1b[0m\r\n`);
       term.write(`\x1b[33m按 Enter 键尝试${isLocalSession.value ? '重新启动' : '重连'}。\x1b[0m\r\n`);
       markSearchBufferChanged();
-      scheduleLineMetrics();
+
       scheduleSerialAutoReconnect();
     });
 
     // Listen for errors
     unlistenError = await listenEvent(`ssh-error-${props.sessionId}`, (err) => {
+      // A rejected input is not a transport close. Only ssh-closed may end an
+      // established session; startup errors still update a connecting session.
+      if (currentSession.value?.status === 'connected') {
+        toast.error(`终端提示：${err}`);
+        return;
+      }
       flushSerialPendingCr();
       stopSerialPeriodicSend();
       serialStatus.value = { ...serialStatus.value, rxRate: 0, txRate: 0, capturing: false, sendingFile: false };
@@ -3349,7 +2718,7 @@ onMounted(async () => {
       term.write('\x1b[33m按 Enter 键尝试重连。\x1b[0m\r\n');
       markSearchBufferChanged();
       toast.error(`会话错误：${err}`);
-      scheduleLineMetrics();
+
       scheduleSerialAutoReconnect();
     });
 
@@ -3407,7 +2776,6 @@ onMounted(async () => {
       termDataDisposable,
       termResizeDisposable,
       termCursorMoveDisposable,
-      termSelectionDisposable,
       termScrollDisposable,
       unlistenData,
       unlistenDebug,
@@ -3422,29 +2790,6 @@ onMounted(async () => {
     });
   }
 
-  searchResultsDisposable?.dispose?.();
-  searchResultsDisposable = searchAddon?.onDidChangeResults?.(({ resultIndex, resultCount }) => {
-    if (!searchVisible.value) return;
-    if (searchOutputHot && isTerminalOutputHot()) return;
-    const count = Math.max(0, Number(resultCount || 0));
-    if (!searchExactCountReady.value) searchMatchCount.value = count;
-    searchResultsPending.value = false;
-    if (resultIndex >= 0) {
-      searchInitialPositionPending = false;
-      searchCurrentMatch.value = resultIndex + 1;
-    } else if (count === 0) {
-      searchInitialPositionPending = false;
-      searchCurrentMatch.value = 0;
-    } else if (searchNavigationDirection !== 0) {
-      // SearchAddon 只跟踪有限数量的高亮项，超出上限后用导航方向继续维护精确位置。
-      searchCurrentMatch.value = moveSearchCurrentMatch(searchNavigationDirection);
-    } else {
-      // 首次命中位于高亮跟踪范围外时，在分片总数统计中一并解析其精确位置。
-      searchInitialPositionPending = true;
-      searchCurrentMatch.value = Math.max(0, searchCurrentMatch.value);
-    }
-  }) || null;
-
   window.addEventListener('keydown', handleKeydown);
   quickCommandHandler = handleKnowledgeCommandEvent;
   window.addEventListener('command-knowledge-insert', quickCommandHandler);
@@ -3452,7 +2797,6 @@ onMounted(async () => {
   window.addEventListener('global-background-availability-changed', handleGlobalBackgroundAvailabilityChanged);
   window.addEventListener('terminal-layout-resize', handleLayoutResize);
   window.addEventListener('terminal-layout-dragging', handleLayoutDragging);
-  window.addEventListener('terminal:toggle-line-numbers', handleExternalLineNumberToggle);
   window.addEventListener('keybindings-changed', refreshQuickHintActivateBinding);
   window.addEventListener('mousedown', handleQuickHintPointerDown, true);
   window.addEventListener('sync-input-changed', onSyncInputChanged);
@@ -3479,6 +2823,13 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  terminalDisposed = true;
+  pendingLargePaste.value = null;
+  processTerminalInput = null;
+  globalThis.__dusktermTerminalPerformance?.delete(props.sessionId);
+  releaseWebglRenderer();
+  outputWriter?.dispose();
+  if (detachBinaryOutput) void detachBinaryOutput().catch(console.error);
   stopSerialPeriodicSend();
   clearSerialAutoReconnect();
   clearSerialPendingCr();
@@ -3517,21 +2868,11 @@ onUnmounted(() => {
     dragFitTimerId = null;
   }
   cancelSearchScheduling();
-  searchResultsDisposable?.dispose?.();
-  searchResultsDisposable = null;
-  if (metricsRafId) {
-    cancelAnimationFrame(metricsRafId);
-    metricsRafId = null;
-  }
   cancelQuickHintPositionUpdate();
   lastSentCols = 0;
   lastSentRows = 0;
   lastProposedCols = 0;
   lastProposedRows = 0;
-  if (writeFlushRafId) {
-    cancelAnimationFrame(writeFlushRafId);
-    writeFlushRafId = null;
-  }
   if (termTitleDisposable) {
     termTitleDisposable.dispose();
     termTitleDisposable = null;
@@ -3548,19 +2889,10 @@ onUnmounted(() => {
     termCursorMoveDisposable.dispose();
     termCursorMoveDisposable = null;
   }
-  if (termSelectionDisposable) {
-    termSelectionDisposable.dispose();
-    termSelectionDisposable = null;
-  }
   if (termScrollDisposable) {
     termScrollDisposable.dispose();
     termScrollDisposable = null;
   }
-  pendingOutputChunks = [];
-  pendingOutputChunkIndex = 0;
-  terminalWriteInFlight = false;
-  lastLineMetrics = null;
-  lastLineNumberRowsSignature = '';
   safeUnlisten(unlistenData);
   safeUnlisten(unlistenDebug);
   safeUnlisten(unlistenConnected);
@@ -3585,11 +2917,10 @@ onUnmounted(() => {
   window.removeEventListener('global-background-availability-changed', handleGlobalBackgroundAvailabilityChanged);
   window.removeEventListener('terminal-layout-resize', handleLayoutResize);
   window.removeEventListener('terminal-layout-dragging', handleLayoutDragging);
-  window.removeEventListener('terminal:toggle-line-numbers', handleExternalLineNumberToggle);
   window.removeEventListener('keybindings-changed', refreshQuickHintActivateBinding);
   window.removeEventListener('mousedown', handleQuickHintPointerDown, true);
   window.removeEventListener('sync-input-changed', onSyncInputChanged);
-  detachViewportScrollListener();
+
   cancelQuickHintDebounce();
   cancelShellCompletionSync();
   closeQuickHint();
@@ -3604,15 +2935,6 @@ onUnmounted(() => {
   unicode11Addon = null;
   searchAddon = null;
 
-  window.dispatchEvent(
-    new CustomEvent('terminal-line-metrics', {
-      detail: {
-        sessionId: props.sessionId,
-        cursorLine: 0,
-        totalLines: 0
-      }
-    })
-  );
 });
 
 </script>
@@ -3630,14 +2952,6 @@ onUnmounted(() => {
         <div v-if="terminalTransferOwned" class="terminal-transfer-overlay">
           ZMODEM 传输中 · 终端输入已暂停
         </div>
-        <div v-if="showLineNumberGutter" ref="lineNumberGutterRef" class="line-number-gutter"
-          :style="{ width: lineNumberGutterWidth }">
-        <div v-for="(lineNo, index) in lineNumberRows" :key="`line-no-${index}-${lineNo || 'wrap'}`"
-          class="line-number-row"
-          :style="{ height: `${lineNumberRowHeightPx}px`, lineHeight: `${lineNumberRowHeightPx}px` }">
-          {{ lineNo }}
-        </div>
-      </div>
       <ContextMenu @update:open="(v) => contextMenuOpen = v">
         <ContextMenuTrigger class="terminal-container-wrap">
           <div ref="terminalContainer" class="terminal-container" @mousedown="focusTerminalSurface"
@@ -3725,7 +3039,7 @@ onUnmounted(() => {
     </div>
 
     <!-- Search Bar -->
-    <div v-show="searchVisible" class="search-bar">
+    <div v-show="searchVisible" ref="searchBarRef" class="search-bar">
       <div class="search-input-wrapper">
         <Search class="search-icon" />
         <input ref="searchInput" v-model="searchText" type="text" placeholder="查找..."
@@ -3734,7 +3048,7 @@ onUnmounted(() => {
           @keydown="handleSearchKeydown" />
       </div>
       <span class="search-count"
-        :class="{ empty: !searchResultsPending && !searchCountPending && searchMatchCount === 0 }">
+        :class="{ empty: !searchResultsPending && !searchError && searchMatchCount === 0 }">
         {{ searchCountLabel }}
       </span>
       <TooltipHint text="区分大小写" side="bottom">
@@ -3781,6 +3095,24 @@ onUnmounted(() => {
         </button>
       </TooltipHint>
     </div>
+
+    <Dialog :open="!!pendingLargePaste" @update:open="(open) => { if (!open) cancelLargePaste(); }">
+      <DialogContent class="max-w-lg" @close-auto-focus="handlePasteDialogCloseFocus">
+        <DialogHeader>
+          <DialogTitle>{{ pendingLargePaste?.info.tooLarge ? '粘贴内容过大' : '确认粘贴大量内容' }}</DialogTitle>
+        </DialogHeader>
+        <div v-if="pendingLargePaste" class="min-h-0 space-y-3 text-sm">
+          <p>将向当前终端粘贴约 {{ (pendingLargePaste.info.bytes / 1024).toFixed(1) }} KiB、{{ pendingLargePaste.info.lines }} 行内容。</p>
+          <p v-if="pendingLargePaste.info.tooLarge">单次输入上限为 4 MiB，请分批粘贴或使用文件传输。本次内容尚未发送。</p>
+          <p v-else>多行内容可能被 Shell 直接执行，请确认这不是误粘贴。</p>
+          <pre class="max-h-48 overflow-auto whitespace-pre-wrap break-all rounded-md bg-secondary p-3 font-mono text-xs">{{ pendingLargePaste.info.preview }}{{ pendingLargePaste.info.truncated ? '\n…（仅预览开头）' : '' }}</pre>
+        </div>
+        <DialogFooter>
+          <Button variant="ghost" @click="cancelLargePaste">取消</Button>
+          <Button v-if="pendingLargePaste && !pendingLargePaste.info.tooLarge" @click="confirmLargePaste">确认粘贴</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
 
     <Dialog :open="securityModalVisible" @update:open="(v) => { if (!v) handleSecurityCancel(); }">
       <DialogContent class="max-w-lg">
@@ -3889,28 +3221,6 @@ onUnmounted(() => {
   box-shadow: var(--niri-shadow-panel);
   font-size: 12px;
   pointer-events: none;
-}
-
-.line-number-gutter {
-  flex: 0 0 auto;
-  min-width: 3ch;
-  background: transparent;
-  color: var(--app-text-muted);
-  user-select: none;
-  pointer-events: none;
-  overflow: hidden;
-  text-align: right;
-  padding-right: 6px;
-  box-sizing: border-box;
-  font-size: 11px;
-  font-family: var(--terminal-font-family, var(--font-mono));
-  contain: layout style paint;
-}
-
-.line-number-row {
-  font-size: inherit;
-  font-family: inherit;
-  white-space: nowrap;
 }
 
 :deep(.terminal-container-wrap) {

@@ -379,7 +379,7 @@ impl TerminalTransferRuntime {
         }
 
         for data in self.drive_active(app_handle, channel).await? {
-            let _ = app_handle.emit(&format!("ssh-data-{}", self.context.session_id), data);
+            crate::terminal_output::emit(&app_handle, &self.context.session_id, data);
         }
         Ok(())
     }

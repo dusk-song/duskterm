@@ -139,6 +139,7 @@ struct SerialSharedState {
 #[derive(Clone)]
 pub struct TerminalRuntimeHandle {
     pub tx: Sender<Vec<u8>>,
+    input_write_lock: Arc<Mutex<()>>,
     pub window_size_tx: UnboundedSender<(u32, u32)>,
     pub close_tx: UnboundedSender<()>,
     pub shared_session: SharedSshSessionSlot,
@@ -170,6 +171,7 @@ pub(crate) fn create_terminal_runtime_channels() -> (
     (
         TerminalRuntimeHandle {
             tx,
+            input_write_lock: Arc::new(Mutex::new(())),
             window_size_tx,
             close_tx,
             shared_session,
@@ -1131,8 +1133,11 @@ fn spawn_telnet_session(
                         }
 
                         if !terminal_bytes.is_empty() {
-                            let _ = app_handle
-                                .emit(&format!("ssh-data-{}", session_id), terminal_bytes.clone());
+                            crate::terminal_output::emit(
+                                &app_handle,
+                                &session_id,
+                                terminal_bytes.clone(),
+                            );
                             last_keepalive = Instant::now();
 
                             let text = String::from_utf8_lossy(&terminal_bytes).to_lowercase();
@@ -2529,13 +2534,6 @@ async fn run_ssh_session_task(
                 if transfer_owned.load(Ordering::Acquire) {
                     continue;
                 }
-                if data.len() > 64 * 1024 {
-                    let _ = app_handle.emit(
-                        &format!("ssh-error-{}", session_id),
-                        "Input too large; dropped to protect server".to_string(),
-                    );
-                    continue;
-                }
 
                 let write_len = data.len();
                 let write_kind = connection_log::describe_payload(&data);
@@ -2562,7 +2560,8 @@ async fn run_ssh_session_task(
                     connection_log::append(&session_id, format!("channel window change failed error={}", error));
                 }
             }
-            msg = channel.wait() => {
+            _ = crate::terminal_output::wait_for_capacity(&app_handle, &session_id), if !crate::terminal_output::can_read(&app_handle, &session_id) => {},
+            msg = channel.wait(), if crate::terminal_output::can_read(&app_handle, &session_id) || transfer_owned.load(Ordering::Acquire) => {
                 match msg {
                     Some(ChannelMsg::Data { data }) => {
                         received_packets = received_packets.saturating_add(1);
@@ -2570,7 +2569,7 @@ async fn run_ssh_session_task(
                         match transfer_runtime.handle_remote(&app_handle, &channel, data.as_ref()).await {
                             Ok(chunks) => {
                                 for terminal_data in chunks {
-                                    let _ = app_handle.emit(&format!("ssh-data-{}", session_id), terminal_data);
+                                    crate::terminal_output::emit(&app_handle, &session_id, terminal_data);
                                 }
                             }
                             Err(error) => {
@@ -2582,7 +2581,7 @@ async fn run_ssh_session_task(
                         received_packets = received_packets.saturating_add(1);
                         received_bytes = received_bytes.saturating_add(data.len() as u64);
                         connection_log::append(&session_id, format!("channel extended data received type={} bytes={}", ext, data.len()));
-                        let _ = app_handle.emit(&format!("ssh-data-{}", session_id), data.to_vec());
+                        crate::terminal_output::emit(&app_handle, &session_id, data.to_vec());
                     }
                     Some(ChannelMsg::ExitStatus { exit_status }) => {
                         connection_log::append(&session_id, format!("remote exit status={}", exit_status));
@@ -2639,7 +2638,7 @@ async fn run_ssh_session_task(
                 match transfer_runtime.on_tick(&app_handle, &channel).await {
                     Ok(chunks) => {
                         for terminal_data in chunks {
-                            let _ = app_handle.emit(&format!("ssh-data-{}", session_id), terminal_data);
+                            crate::terminal_output::emit(&app_handle, &session_id, terminal_data);
                         }
                     }
                     Err(error) => {
@@ -2667,7 +2666,7 @@ async fn run_ssh_session_task(
     let terminal_tail = transfer_runtime.flush_terminal_data();
     transfer_runtime.shutdown(&app_handle).await;
     if !terminal_tail.is_empty() {
-        let _ = app_handle.emit(&format!("ssh-data-{}", session_id), terminal_tail);
+        crate::terminal_output::emit(&app_handle, &session_id, terminal_tail);
     }
 
     connection_log::append(
@@ -2719,6 +2718,7 @@ pub async fn connect_ssh_legacy(
     let channel_lifecycle = Arc::new(Mutex::new(channel_state::ChannelLifecycle::default()));
     let runtime_handle = TerminalRuntimeHandle {
         tx,
+        input_write_lock: Arc::new(Mutex::new(())),
         window_size_tx: resize_tx,
         close_tx,
         shared_session: shared_session_slot.clone(),
@@ -2823,6 +2823,7 @@ pub async fn connect_ssh_runtime(
     let channel_lifecycle = Arc::new(Mutex::new(channel_state::ChannelLifecycle::default()));
     let handle = TerminalRuntimeHandle {
         tx,
+        input_write_lock: Arc::new(Mutex::new(())),
         window_size_tx: resize_tx,
         close_tx,
         shared_session: shared_session_slot.clone(),
@@ -2989,7 +2990,6 @@ async fn run_shared_shell_channel_task(
                 if transfer_owned.load(Ordering::Acquire) {
                     continue;
                 }
-                if data.len() > 64 * 1024 { continue; }
                 let write_len = data.len();
                 let write_kind = connection_log::describe_payload(&data);
                 sent_packets = sent_packets.saturating_add(1);
@@ -3004,14 +3004,15 @@ async fn run_shared_shell_channel_task(
                 connection_log::append(&channel_id, format!("shared channel window change cols={} rows={}", cols, rows));
                 let _ = channel.window_change(cols, rows, 0, 0).await;
             }
-            msg = channel.wait() => match msg {
+            _ = crate::terminal_output::wait_for_capacity(&app_handle, &channel_id), if !crate::terminal_output::can_read(&app_handle, &channel_id) => {},
+            msg = channel.wait(), if crate::terminal_output::can_read(&app_handle, &channel_id) || transfer_owned.load(Ordering::Acquire) => match msg {
                 Some(ChannelMsg::Data { data }) => {
                     received_packets = received_packets.saturating_add(1);
                     received_bytes = received_bytes.saturating_add(data.len() as u64);
                     match transfer_runtime.handle_remote(&app_handle, &channel, data.as_ref()).await {
                         Ok(chunks) => {
                             for terminal_data in chunks {
-                                let _ = app_handle.emit(&format!("ssh-data-{}", channel_id), terminal_data);
+                                crate::terminal_output::emit(&app_handle, &channel_id, terminal_data);
                             }
                         }
                         Err(error) => {
@@ -3023,7 +3024,7 @@ async fn run_shared_shell_channel_task(
                     received_packets = received_packets.saturating_add(1);
                     received_bytes = received_bytes.saturating_add(data.len() as u64);
                     connection_log::append(&channel_id, format!("shared channel extended data type={} bytes={}", ext, data.len()));
-                    let _ = app_handle.emit(&format!("ssh-data-{}", channel_id), data.to_vec());
+                    crate::terminal_output::emit(&app_handle, &channel_id, data.to_vec());
                 }
                 Some(ChannelMsg::ExitStatus { exit_status }) => {
                     connection_log::append(&channel_id, format!("shared channel remote exit status={}", exit_status));
@@ -3059,7 +3060,7 @@ async fn run_shared_shell_channel_task(
                 match transfer_runtime.on_tick(&app_handle, &channel).await {
                     Ok(chunks) => {
                         for terminal_data in chunks {
-                            let _ = app_handle.emit(&format!("ssh-data-{}", channel_id), terminal_data);
+                            crate::terminal_output::emit(&app_handle, &channel_id, terminal_data);
                         }
                     }
                     Err(error) => {
@@ -3082,7 +3083,7 @@ async fn run_shared_shell_channel_task(
     let terminal_tail = transfer_runtime.flush_terminal_data();
     transfer_runtime.shutdown(&app_handle).await;
     if !terminal_tail.is_empty() {
-        let _ = app_handle.emit(&format!("ssh-data-{}", channel_id), terminal_tail);
+        crate::terminal_output::emit(&app_handle, &channel_id, terminal_tail);
     }
     connection_log::append(
         &channel_id,
@@ -3122,6 +3123,7 @@ pub async fn open_shared_shell_channel_runtime(
     let channel_lifecycle = Arc::new(Mutex::new(channel_state::ChannelLifecycle::default()));
     let handle = TerminalRuntimeHandle {
         tx,
+        input_write_lock: Arc::new(Mutex::new(())),
         window_size_tx: resize_tx,
         close_tx,
         shared_session: root_handle.shared_session.clone(),
@@ -3256,6 +3258,9 @@ pub fn write_ssh_runtime(handle: &TerminalRuntimeHandle, data: String) -> Result
     if handle.transfer_owned.load(Ordering::Acquire) {
         return Err("ZMODEM 传输期间终端输入已暂停".to_string());
     }
+    if handle.serial_command_tx.is_none() && data.len() > crate::terminal_input::MAX_INPUT_BYTES {
+        return Err(crate::terminal_input::INPUT_TOO_LARGE.into());
+    }
     {
         let lifecycle = handle.channel_lifecycle.lock().unwrap();
         if !lifecycle.can_write() {
@@ -3285,14 +3290,8 @@ pub fn write_ssh_runtime(handle: &TerminalRuntimeHandle, data: String) -> Result
                 std::sync::mpsc::TrySendError::Disconnected(_) => "串口写入通道已关闭".to_string(),
             });
     }
-    handle.tx.try_send(bytes).map_err(|error| match error {
-        tokio::sync::mpsc::error::TrySendError::Full(_) => {
-            "Terminal input queue is full; dropped to protect memory".to_string()
-        }
-        tokio::sync::mpsc::error::TrySendError::Closed(_) => {
-            "Terminal session input channel is closed".to_string()
-        }
-    })
+    let _batch = handle.input_write_lock.lock().unwrap();
+    crate::terminal_input::enqueue(&handle.tx, bytes)
 }
 
 pub(crate) async fn control_serial_runtime(

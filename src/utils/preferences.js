@@ -24,7 +24,6 @@ const PREFERENCE_DEFINITIONS = {
       sftpParentDirectory: 'Mouse4',
       overview: 'Ctrl+`',
       copySession: 'Ctrl+P',
-      toggleLineNumbers: 'Ctrl+Alt+L',
       toggleFind: 'Ctrl+Shift+F',
       selectTerminalSuggestion: 'Alt+ArrowDown'
     }
@@ -33,7 +32,6 @@ const PREFERENCE_DEFINITIONS = {
     storageKey: 'terminal-theme-v1',
     defaults: {
       theme: 'duskWarm',
-      showLineNumbers: false,
       rightClickBehavior: 'smart-copy',
       sessionPresentation: 'current'
     }
@@ -75,6 +73,8 @@ function loadPreference(name) {
     const raw = localStorage.getItem(meta.storageKey);
     if (!raw) return { ...meta.defaults };
     const parsed = JSON.parse(raw);
+    if (name === 'keybindings' && parsed) delete parsed.toggleLineNumbers;
+    if (name === 'terminalTheme' && parsed) delete parsed.showLineNumbers;
     if (name === 'keybindings' && parsed?.commandKnowledge === 'Ctrl+Shift+3') {
       parsed.commandKnowledge = meta.defaults.commandKnowledge;
     }

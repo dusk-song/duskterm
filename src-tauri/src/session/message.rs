@@ -19,10 +19,6 @@ pub enum SessionMessage {
         config: SshConfig,
         respond_to: oneshot::Sender<Result<String, String>>,
     },
-    WriteTerminal {
-        data: String,
-        respond_to: oneshot::Sender<Result<(), String>>,
-    },
     ControlSerial {
         request: SerialControlRequest,
         respond_to: oneshot::Sender<Result<SerialControlResponse, String>>,
@@ -37,11 +33,6 @@ pub enum SessionMessage {
         channel_id: String,
         term_type: Option<String>,
         login_script: Option<String>,
-        respond_to: oneshot::Sender<Result<(), String>>,
-    },
-    WriteShellChannel {
-        channel_id: String,
-        data: String,
         respond_to: oneshot::Sender<Result<(), String>>,
     },
     ResizeShellChannel {
