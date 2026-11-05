@@ -34,7 +34,10 @@ export function useSftpDirectory({ sessionIdRef, pathRef }) {
       items.value = Array.isArray(result) ? result : [];
       return true;
     } catch (err) {
-      if (currentRequestId === requestId) error.value = String(err);
+      if (currentRequestId !== requestId
+        || sessionIdRef.value !== requestedSessionId
+        || pathRef.value !== requestedPath) return false;
+      error.value = String(err);
       throw err;
     } finally {
       if (currentRequestId === requestId) loading.value = false;

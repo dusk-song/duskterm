@@ -342,7 +342,6 @@ function handleRowPointerDown(event, item) {
 const panelStateCache = new Map();
 const defaultDirectoryCache = new Map();
 let sessionSyncGeneration = 0;
-const initializingSessionIds = new Set();
 
 const nativeDropEnabled = computed(() => (
   props.visible
@@ -363,7 +362,7 @@ const {
 });
 
 function isCurrentSessionSync(sessionId, generation) {
-  return props.sessionId === sessionId && sessionSyncGeneration === generation;
+  return !disposed && props.sessionId === sessionId && sessionSyncGeneration === generation;
 }
 
 function scheduleColumnLayout(width) {
@@ -425,7 +424,10 @@ const markTransferTaskFailed = (task, err, fallback) => {
 };
 
 const markTransferTaskCancelled = (task) => {
-  task.status = 'cancelled';
+  transferStore.applyProgress({
+    sessionId: task.sessionId, id: task.id, status: 'cancelled',
+    current: task.current, total: task.total,
+  });
   task.error = '已取消';
   task.rate = 0;
   task.etaSeconds = null;
@@ -633,7 +635,7 @@ const cachePanelScrollState = throttle(() => {
 }, 80);
 
 function cachePanelStateForSession(sessionId) {
-  if (!sessionId) return;
+  if (!sessionId || !connected.value || initializing.value || directory.loading.value || netError.value) return;
   panelStateCache.set(sessionId, {
     path: currentPath.value,
     selected: Array.from(selection.selectedKeys.value),
@@ -684,10 +686,10 @@ async function getSftpDefaultDirectory(sessionId = props.sessionId) {
   try {
     const result = await invokeCommand('sftp_default_directory', { sessionId });
     defaultDirectory = normalizeAbsoluteSftpPath(result);
+    defaultDirectoryCache.set(sessionId, defaultDirectory);
   } catch (error) {
     console.warn('[SFTP] failed to resolve default directory, falling back to root:', error);
   }
-  defaultDirectoryCache.set(sessionId, defaultDirectory);
   return defaultDirectory;
 }
 
@@ -701,70 +703,59 @@ async function loadInitialDirectory(sessionId, generation) {
 async function initSftp(forceReconnect = false, options = {}) {
   const sessionId = options.sessionId || props.sessionId;
   const generation = options.generation ?? sessionSyncGeneration;
-  if (!sessionId) return;
+  if (!sessionId) return false;
   const session = sshStore.getSession(sessionId);
-  if (!session) return;
+  if (!session) return false;
 
-  if (initializingSessionIds.has(sessionId)) return;
-  netError.value = '';
   if (session.status !== 'connected') {
-    sshStore.markSftpDisconnected(sessionId);
     if (isCurrentSessionSync(sessionId, generation)) {
       connected.value = false;
       netError.value = session.status === 'connecting' ? '等待终端 SSH 会话建立...' : '终端会话未连接';
     }
-    return;
+    return false;
   }
 
-  if (!forceReconnect && sshStore.isSftpConnected(sessionId)) {
-    if (!isCurrentSessionSync(sessionId, generation)) return;
-    connected.value = true;
-    await restorePanelState();
-    if (isCurrentSessionSync(sessionId, generation) && !panelStateCache.get(sessionId)) {
-      await loadInitialDirectory(sessionId, generation);
-    }
-    return;
-  }
-
-  if (forceReconnect && !options.preserveTransfers) {
-    await disconnectSftpSession(sessionId);
-    if (!isCurrentSessionSync(sessionId, generation)) return;
-  }
-
-  initializingSessionIds.add(sessionId);
   initializing.value = true;
+  netError.value = '';
   try {
-    const config = session.config || {};
-    if (String(config.protocol || 'ssh').toLowerCase() !== 'ssh') {
-      throw new Error('当前会话不是 SSH 协议，SFTP 仅支持 SSH 会话');
+    // Every caller waits for the same backend initialization, including panel opens
+    // racing with the terminal's connected event or a transfer's recovery.
+    const pending = pendingSftpReconnect(sessionId);
+    if (pending) {
+      await pending;
+    } else if (forceReconnect || !sshStore.isSftpConnected(sessionId)) {
+      await reconnectSftpOnce(sessionId, async () => {
+        const config = session.config || {};
+        if (String(config.protocol || 'ssh').toLowerCase() !== 'ssh') {
+          throw new Error('当前会话不是 SSH 协议，SFTP 仅支持 SSH 会话');
+        }
+        if (forceReconnect && !options.preserveTransfers) {
+          await disconnectSftpSession(sessionId);
+        }
+        await invokeCommand('connect_sftp', {
+          sessionId,
+          config: { ...config, connect_timeout: config.connect_timeout ?? 10 }
+        });
+        sshStore.markSftpConnected(sessionId);
+        return true;
+      });
     }
-    await invokeCommand('connect_sftp', {
-      sessionId,
-      config: {
-        ...config,
-        connect_timeout: config.connect_timeout ?? 10
-      }
-    });
-    sshStore.markSftpConnected(sessionId);
-    if (!isCurrentSessionSync(sessionId, generation)) return;
-    connected.value = true;
-    await restorePanelState();
-    if (isCurrentSessionSync(sessionId, generation) && !panelStateCache.get(sessionId)) {
-      await loadInitialDirectory(sessionId, generation);
+    if (session.status !== 'connected') {
+      sshStore.markSftpDisconnected(sessionId);
+      return false;
     }
+    const ready = sshStore.isSftpConnected(sessionId);
+    if (isCurrentSessionSync(sessionId, generation)) connected.value = ready;
+    return ready;
   } catch (err) {
     sshStore.markSftpDisconnected(sessionId);
     if (isCurrentSessionSync(sessionId, generation)) {
       connected.value = false;
       netError.value = `SFTP 连接失败：${String(err)}`;
     }
+    return false;
   } finally {
-    initializingSessionIds.delete(sessionId);
     if (props.sessionId === sessionId) initializing.value = false;
-    if (props.sessionId === sessionId && sessionSyncGeneration !== generation) {
-      const latestGeneration = sessionSyncGeneration;
-      queueMicrotask(() => syncVisibleSessionState({ sessionId, generation: latestGeneration }));
-    }
   }
 }
 
@@ -809,14 +800,19 @@ async function syncVisibleSessionState(options = {}) {
     }
   }
 
-  if (!hasSftp) {
+  if (!hasSftp || pendingSftpReconnect(sessionId)) {
     await initSftp(false, { sessionId, generation });
     if (!isCurrentSessionSync(sessionId, generation)) return;
-    hasSftp = connected.value && sshStore.isSftpConnected(props.sessionId);
+    hasSftp = sshStore.isSftpConnected(sessionId);
   }
 
+  if (!isCurrentSessionSync(sessionId, generation)) return;
   connected.value = hasSftp;
-  netError.value = hasSftp ? '' : 'SFTP 未连接';
+  if (!hasSftp) {
+    if (!netError.value) netError.value = 'SFTP 未连接';
+    return;
+  }
+  netError.value = '';
 
   if (hasSftp && restore) {
     await restorePanelState();
@@ -833,10 +829,7 @@ async function ensureSftpReady() {
   const recover = async () => {
     reconnectingSftp.value = true;
     try {
-      const ready = await reconnectSftpOnce(sessionId, async () => {
-        await initSftp(true, { sessionId, preserveTransfers: true });
-        return sshStore.isSftpConnected(sessionId);
-      });
+      const ready = await initSftp(true, { sessionId, preserveTransfers: true });
       if (props.sessionId === sessionId) connected.value = ready;
       return ready;
     } finally { reconnectingSftp.value = false; }
@@ -852,8 +845,9 @@ async function ensureSftpReady() {
   }
 }
 
-async function loadDirectory() {
+async function loadDirectory({ retry = true } = {}) {
   const sessionId = props.sessionId;
+  const generation = sessionSyncGeneration;
   const path = currentPath.value;
   syncListScrollTop(0);
   try {
@@ -864,7 +858,13 @@ async function loadDirectory() {
     cachePanelState();
     return true;
   } catch (err) {
-    if (props.sessionId !== sessionId || currentPath.value !== path) return false;
+    if (!isCurrentSessionSync(sessionId, generation) || currentPath.value !== path) return false;
+    if (retry && activeSessionStatus.value === 'connected' && isRecoverableSftpError(err)) {
+      const ready = await initSftp(true, { sessionId, generation, preserveTransfers: true });
+      if (!isCurrentSessionSync(sessionId, generation) || currentPath.value !== path) return false;
+      if (!ready) return false;
+      return loadDirectory({ retry: false });
+    }
     netError.value = `文件列表加载失败：${String(err)}`;
     if (isDisconnectError(err)) {
       connected.value = false;
@@ -1109,7 +1109,7 @@ function goUp() {
 }
 
 async function retryConnection() {
-  await initSftp();
+  await syncVisibleSessionState();
 }
 
 async function manualRefresh() {
@@ -1700,6 +1700,7 @@ async function handleClosePanel() {
 watch(() => props.sessionId, async (nextSessionId, prevSessionId) => {
   focusedFileIndex.value = -1;
   const generation = ++sessionSyncGeneration;
+  initializing.value = false;
   if (prevSessionId && prevSessionId !== nextSessionId) {
     cachePanelStateForSession(prevSessionId);
   }
@@ -1767,8 +1768,8 @@ watch(activeSessionStatus, async (status, prevStatus) => {
   }
 
   if (prevStatus !== 'connected') {
-    await syncVisibleSessionState({ restore: false });
-    if (connected.value) await loadDirectory();
+    const generation = ++sessionSyncGeneration;
+    await syncVisibleSessionState({ generation });
   }
 });
 

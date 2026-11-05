@@ -4,7 +4,7 @@ import TransferProgress from './TransferProgress.vue';
 import { TooltipHint } from '@/components/ui/tooltip';
 import { toast } from '@/composables/useToast';
 import { useSshStore } from '@/stores/ssh';
-import { useTransfersStore } from '@/stores/transfers';
+import { transferCancellationKey, useTransfersStore } from '@/stores/transfers';
 import { invokeCommand } from '@/utils/ipc';
 import {
   ACTIVE_TRANSFER_STATUSES,
@@ -220,6 +220,7 @@ const cancel = async (item) => {
     if (task?.status === 'cancelling') {
       task.status = previousStatus;
       task.error = String(error || '取消传输失败');
+      toast.error({ key: transferCancellationKey(item), content: `取消传输失败：${String(error)}` });
     }
   }
 };

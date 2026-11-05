@@ -78,6 +78,7 @@ const serialPathMode = ref('auto');
 const serialPortsLoading = ref(false);
 let serialPortRequestId = 0;
 let serialPortRefreshTimer = null;
+let hydratingSession = false;
 
 const protocolOptions = [
   { key: 'ssh', label: 'SSH', desc: '标准终端连接' },
@@ -264,7 +265,7 @@ const serialPortSelectOptions = computed(() => {
 });
 
 // --- Lifecycle ---
-watch(() => props.visible, (val) => {
+watch([() => props.visible, () => props.sessionData], ([val]) => {
   clearValidationError();
   if (!val) {
     serialPortRequestId += 1;
@@ -273,15 +274,18 @@ watch(() => props.visible, (val) => {
   }
   if (val) {
     activeConfigTab.value = 'basic';
+    hydratingSession = true;
     if (props.sessionData) {
       // Edit Mode — copy all fields EXCEPT passwords (security: never pre-fill)
       const defaultState = getNewSessionState();
-      const data = JSON.parse(JSON.stringify(props.sessionData));
+      const data = Object.fromEntries(Object.entries(JSON.parse(JSON.stringify(props.sessionData)))
+        .filter(([, value]) => value !== null && value !== undefined));
       // Clear sensitive fields — user must re-enter to change
       data.password = '';
       data.passphrase = '';
       data.jump_password = '';
       data.jump_passphrase = '';
+      data.proxy_pass = '';
       Object.assign(formState, defaultState, data);
       normalizeSerialFormFields();
       activeProtocol.value = formState.protocol || 'ssh';
@@ -296,13 +300,15 @@ watch(() => props.visible, (val) => {
       serialPathMode.value = 'auto';
     }
 
+    hydratingSession = false;
     if (activeProtocol.value === 'serial') {
       loadSerialPortOptions();
     }
   }
-});
+}, { immediate: true });
 
-watch(activeProtocol, (value) => {
+watch(activeProtocol, (value, previous) => {
+  if (formState.protocol === value) return;
   formState.protocol = value;
   if (value === 'serial') {
     loadSerialPortOptions();
@@ -312,18 +318,21 @@ watch(activeProtocol, (value) => {
   } else {
     serialPortRequestId += 1;
     serialPortsLoading.value = false;
-    if (!formState.port) formState.port = value === 'telnet' ? 23 : 22;
+    if (!formState.port || (previous === 'ssh' && formState.port === 22) || (previous === 'telnet' && formState.port === 23)) {
+      formState.port = value === 'telnet' ? 23 : 22;
+    }
   }
 });
 
 watch(() => formState.serial_path, (path) => {
+  if (hydratingSession) return;
   const selected = serialPortOptions.value.find((item) => item.value === path);
   if (selected) {
     formState.serial_device_id = selected.stableId || '';
   } else if (serialPathMode.value === 'custom') {
     formState.serial_device_id = '';
   }
-});
+}, { flush: 'sync' });
 
 watch([() => props.visible, activeProtocol], ([visible, protocol]) => {
   if (serialPortRefreshTimer) {
@@ -393,7 +402,7 @@ function getNewSessionState() {
   };
 }
 
-const loadSerialPortOptions = async ({ silent = false } = {}) => {
+async function loadSerialPortOptions({ silent = false } = {}) {
   const requestId = ++serialPortRequestId;
   if (!silent) serialPortsLoading.value = true;
   try {
@@ -434,7 +443,7 @@ const loadSerialPortOptions = async ({ silent = false } = {}) => {
   } finally {
     if (!silent && requestId === serialPortRequestId) serialPortsLoading.value = false;
   }
-};
+}
 
 const normalizeOptional = (value) => {
   if (value === null || value === undefined) return null;
@@ -458,6 +467,9 @@ const buildSessionConfig = () => {
     }
     if (!(sessionConfig.jump_passphrase || '').trim()) {
       sessionConfig.jump_passphrase = props.sessionData.jump_passphrase || null;
+    }
+    if (!(sessionConfig.proxy_pass || '').trim()) {
+      sessionConfig.proxy_pass = props.sessionData.proxy_pass || null;
     }
   }
 
@@ -722,7 +734,7 @@ const groupOptions = computed(() => {
       class="flex h-[min(500px,calc(100vh-4rem))] max-h-[calc(100vh-4rem)] w-[640px] max-w-[90vw] flex-col sm:max-w-[90vw]"
       @pointer-down-outside.prevent @interact-outside.prevent>
       <DialogHeader>
-        <DialogTitle>{{ sessionData ? '编辑会话' : '新建会话' }}</DialogTitle>
+        <DialogTitle>{{ isEditMode ? '编辑会话' : '新建会话' }}</DialogTitle>
       </DialogHeader>
       <div ref="formContentRef" class="session-form-content flex-1 min-h-0 overflow-y-auto px-4 py-2" @input="clearValidationError">
         <p v-if="validationError" id="session-validation-error" role="alert" class="session-validation-error">{{ validationError.message }}</p>

@@ -1,5 +1,6 @@
 import { computed, ref } from 'vue';
 import { defineStore } from 'pinia';
+import { toast } from '../composables/useToast.js';
 
 const TELEMETRY_WINDOW_MS = 1500;
 const TELEMETRY_MIN_SAMPLE_MS = 150;
@@ -22,6 +23,16 @@ const nowMs = () => (typeof performance !== 'undefined' && typeof performance.no
   ? performance.now()
   : Date.now());
 const taskKey = (sessionId, requestId) => `${sessionId || ''}\u0000${requestId || ''}`;
+
+export const transferCancellationKey = (task) => `transfer-cancel-${taskKey(task.sessionId, task.id)}`;
+
+function notifyCancellation(task, pending = false) {
+  const action = task.direction === 'download' ? '下载' : '上传';
+  toast.info({
+    key: transferCancellationKey(task),
+    content: `${pending ? '正在取消' : '已取消'}${action}：${task.fileName || '文件'}`,
+  });
+}
 
 function updateTelemetry(task, payload) {
   const current = Number(payload.current || 0);
@@ -225,6 +236,7 @@ export const useTransfersStore = defineStore('transfers', () => {
     // A delayed progress event must not resurrect a cancelled/finished queue entry.
     if (TERMINAL_STATUSES.has(task.status) && ACTIVE_STATUSES.has(payload.status)) return false;
 
+    const wasCancelled = task.status === 'cancelled';
     const cancellationPending = task.status === 'cancelling';
     const retryPending = task.protocol === 'sftp' && task.autoRetryPending && payload.status === 'failed' && !String(payload.error || '').includes('[RECOVERY_FAILED]') && !String(payload.error || '').includes('[VERIFY_FAILED]');
     if (task.status === 'cancelled' && retryPending) return false;
@@ -246,6 +258,7 @@ export const useTransfersStore = defineStore('transfers', () => {
       task.error = String(payload.error || `${task.direction === 'download' ? '下载' : '上传'}失败`);
     } else if (payload.status === 'cancelled') {
       task.status = 'cancelled';
+      if (!wasCancelled) notifyCancellation(task);
       task.error = String(payload.error || '已取消');
       task.rate = 0;
       task.etaSeconds = null;
@@ -327,11 +340,16 @@ export const useTransfersStore = defineStore('transfers', () => {
     if (['waiting', 'retrying'].includes(task.status) && task.protocol === 'sftp') {
       task.status = 'cancelled';
       task.error = '已取消';
+      task.rate = 0;
+      task.etaSeconds = null;
+      notifyCancellation(task);
       return 'local';
     }
+    if (task.status === 'cancelling') return 'ignored';
     if (ACTIVE_STATUSES.has(task.status)) {
       task.status = 'cancelling';
       task.error = '';
+      notifyCancellation(task, true);
       return 'remote';
     }
     return 'ignored';
