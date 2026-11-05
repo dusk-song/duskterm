@@ -4,6 +4,7 @@ version = "1.2.6"
 description = "跨平台SSH/Telnet/Serial终端，基于Tauri和Rust开发，支持SFTP文件传输"
 authors = ["xiaosong <yushan00514@gmail.com>"]
 edition = "2021"
+rust-version = "1.97.1"
 license = "MIT"
 repository = "https://github.com/dusk-song/duskterm.git"
 homepage = "https://github.com/dusk-song/duskterm"
@@ -28,6 +29,12 @@ tokio = { version = "1", features = [
   "macros",
 ] }
 anyhow = "1"
+rig = { package = "rig-core", version = "=0.46.0", default-features = false, features = ["reqwest", "native-tls"] }
+rig-memory = "=0.46.0"
+rig-reqwest = { version = "=0.46.0", default-features = false, features = ["native-tls", "socks"] }
+futures = "0.3"
+url = "2"
+keyring = { version = "3.6.3", features = ["windows-native", "apple-native", "sync-secret-service", "crypto-rust"] }
 uuid = { version = "1.10.0", features = ["v4"] }
 crossbeam-channel = "0.5"
 tauri = { version = "2", features = ["protocol-asset"] }

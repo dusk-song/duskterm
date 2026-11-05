@@ -27,6 +27,7 @@ const FileManager = defineAsyncComponent(() => import('./components/sftp/FileMan
 const TransferPanel = defineAsyncComponent(() => import('./components/app-shell/TransferPanel.vue'));
 const LockScreen = defineAsyncComponent(() => import('./components/app-shell/LockScreen.vue'));
 // ResponsiveMenuBar removed — native OS menu handles all menu bar functionality
+const AiPanel = defineAsyncComponent(() => import('./components/ai/AiPanel.vue'));
 const CommandKnowledgePanel = defineAsyncComponent(() => import('./components/knowledge/CommandKnowledgePanel.vue'));
 const SessionList = defineAsyncComponent(() => import('./components/session/SessionList.vue'));
 const SessionModal = defineAsyncComponent(() => import('./components/session/SessionModal.vue'));
@@ -44,6 +45,7 @@ import { useTerminalPanels } from './composables/useTerminalPanels';
 import { useTheme } from './composables/useTheme';
 import { useWindowInteraction } from './composables/useWindowInteraction';
 import { createSessionBooleanState, resolveFocusedSessionId } from './utils/sftpPanelState';
+import { useAiStore } from './stores/ai';
 import { useTransfersStore } from './stores/transfers';
 import { useSshStore } from './stores/ssh';
 import { invokeCommand, listenEvent } from './utils/ipc';
@@ -62,6 +64,7 @@ const createOpenedMountState = (visible) => {
 
 const sshStore = useSshStore();
 const transferStore = useTransfersStore();
+const aiStore = useAiStore();
 const { theme, setTheme } = useTheme();
 
 // Native menu handling removed — CustomTitlebar handles menus directly
@@ -127,6 +130,8 @@ onApp('app:toggle-tool-sessions', () => {
 onApp('app:toggle-tool-sftp', () => {
   toggleSftpPanel();
 });
+function toggleAiPanel() { activeToolPanel.value = activeToolPanel.value === 'ai' ? null : 'ai'; }
+onApp('app:toggle-tool-ai', toggleAiPanel);
 onApp('app:toggle-tool-knowledge', () => {
   toggleCommandKnowledgePanel();
 });
@@ -225,6 +230,15 @@ const showSessionPanel = ref(false);
 const sftpPanelVisibility = createSessionBooleanState(false);
 let getActiveSftpWorkspaceId = () => '';
 const activeToolPanel = ref(null);
+const showAiPanel = computed(() => activeToolPanel.value === 'ai');
+const aiMaximized = ref(false);
+const isAiMounted = createOpenedMountState(showAiPanel);
+watch(activeToolPanel, () => { aiMaximized.value = false; });
+onApp('keydown', (event) => {
+  if (event.key === 'Escape' && aiMaximized.value && !isAnyModalOpen.value) {
+    aiMaximized.value = false; event.preventDefault(); event.stopPropagation();
+  }
+});
 const transferPanelVisible = ref(false);
 const transferPanelExpanded = ref(false);
 const toggleTransferPanelVisibility = () => {
@@ -317,6 +331,7 @@ let _measureWorkspaceRaf = null;
 const measureWorkspace = () => {
   const tracksWorkspaceWidth = (
     showSessionPanel.value
+    || showAiPanel.value
     || showCommandKnowledgePanel.value
     || showActiveSftpPanel.value
   );
@@ -334,7 +349,7 @@ const measureWorkspace = () => {
 
 const hasWorkspaceLeftPanels = computed(() => showSessionPanel.value);
 const hasWorkspaceRightPanel = computed(() => (
-  showCommandKnowledgePanel.value || showActiveSftpPanel.value
+  showAiPanel.value || showCommandKnowledgePanel.value || showActiveSftpPanel.value
 ));
 
 const workspaceContentWidth = (width = workspaceWidth.value) => {
@@ -845,14 +860,14 @@ const showActiveSftpPanel = computed(
 const isSftpMounted = createOpenedMountState(showActiveSftpPanel);
 const isKnowledgeMounted = createOpenedMountState(showCommandKnowledgePanel);
 watch(
-  [showSessionPanel, showCommandKnowledgePanel, showActiveSftpPanel],
-  ([showLeft, showKnowledge, showSftp]) => {
-    if (showLeft || showKnowledge || showSftp) nextTick(measureWorkspace);
+  [showSessionPanel, showCommandKnowledgePanel, showActiveSftpPanel, showAiPanel],
+  ([showLeft, showKnowledge, showSftp, showAi]) => {
+    if (showLeft || showKnowledge || showSftp || showAi) nextTick(measureWorkspace);
   }
 );
 getActiveSftpWorkspaceId = () => activeSftpWorkspaceId.value;
 watch(activeSftpWorkspaceId, async (sessionId) => {
-  showSftpPanel.value = sftpPanelVisibility.get(sessionId);
+  if (activeToolPanel.value === null || activeToolPanel.value === 'sftp') showSftpPanel.value = sftpPanelVisibility.get(sessionId);
   await nextTick();
   if (showSftpPanel.value) {
     measureWorkspace();
@@ -1046,6 +1061,7 @@ const keybindingActions = {
   sftpPanel: () => { toggleSftpPanel(); },
   commandKnowledge: () => { toggleCommandKnowledgePanel(); },
   transferList: () => { toggleTransferPanelVisibility(); },
+  aiPanel: () => { toggleAiPanel(); },
   sftpParentDirectory: () => {
     if (!showActiveSftpPanel.value) return false;
     window.dispatchEvent(new CustomEvent('app:sftp-go-up'));
@@ -1307,7 +1323,7 @@ useWindowInteraction({ onResize: measureWorkspace });
       <GlobalBackground :settings="mainUiSettings.background" @availability-change="backgroundAvailable = $event" />
       <CustomTitlebar :sftp-active="showActiveSftpPanel"
         :sftp-disabled="visibleSessions.length === 0 || !activeSessionSupportsSftp"
-        :knowledge-active="showCommandKnowledgePanel"
+        :knowledge-active="showCommandKnowledgePanel" :ai-active="showAiPanel" :ai-busy="!!aiStore.active"
         :session-panel-active="showSessionPanel"
         :transfer-visible="transferPanelVisible"
         :keybindings="keybindings"
@@ -1317,7 +1333,7 @@ useWindowInteraction({ onResize: measureWorkspace });
         <ToastContainer />
       </div>
       <div ref="workspaceRef" class="workspace-grid main-only"
-        :class="{ 'has-left-panels': hasWorkspaceLeftPanels, 'has-right-panel': hasWorkspaceRightPanel }"
+        :class="{ 'has-left-panels': hasWorkspaceLeftPanels, 'has-right-panel': hasWorkspaceRightPanel, 'ai-maximized': aiMaximized }"
         :style="workspaceGridStyle">
         <!-- Left: Session List (inline panel, not overlay) -->
         <div v-if="hasWorkspaceLeftPanels" class="workspace-left-stack" :style="workspaceLeftStackStyle">
@@ -1386,7 +1402,8 @@ useWindowInteraction({ onResize: measureWorkspace });
           @mousedown="startWorkspaceResize('tool', $event)" />
 
         <TiledPanel v-show="hasWorkspaceRightPanel" class="workspace-panel workspace-panel-tool" :dense="true"
-          :padded="false" :aria-label="showActiveSftpPanel ? 'SFTP 文件管理' : '命令知识库'">
+          :padded="false" :aria-label="showActiveSftpPanel ? 'SFTP 文件管理' : showAiPanel ? 'AI 助手' : '命令知识库'">
+            <AiPanel v-if="isAiMounted" v-show="showAiPanel" :maximized="aiMaximized" @maximize="aiMaximized = !aiMaximized" @close="activeToolPanel = null" />
             <FileManager v-if="isSftpMounted" v-show="showActiveSftpPanel"
               :sessionId="activeSftpWorkspaceId" :follow-session-id="focusedTerminalRuntimeId"
               :visible="showActiveSftpPanel" @close="showSftpPanel = false" />
@@ -1457,6 +1474,9 @@ useWindowInteraction({ onResize: measureWorkspace });
   padding: 16px;
 }
 
+.workspace-grid.ai-maximized { position: relative; }
+.workspace-grid.ai-maximized > .workspace-panel-tool { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; z-index: 5; }
+.workspace-grid.ai-maximized > .workspace-separator { visibility: hidden; }
 .workspace-grid {
   flex: 1;
   display: grid;

@@ -5,6 +5,7 @@ use tauri::PhysicalSize;
 
 static SHUTDOWN_STARTED: AtomicBool = AtomicBool::new(false);
 
+mod ai;
 mod background;
 mod connection_log;
 mod fileio;
@@ -25,6 +26,7 @@ async fn shutdown_app(app_handle: tauri::AppHandle) -> Result<(), String> {
     if SHUTDOWN_STARTED.swap(true, Ordering::SeqCst) {
         return Ok(());
     }
+    app_handle.state::<ai::AiState>().cancel_all();
     let supervisor = app_handle.state::<session::supervisor::SessionSupervisor>();
     let sftp_state = app_handle.state::<sftp::SftpAppState>();
     let tunnel_state = app_handle.state::<tunnel::TunnelState>();
@@ -70,6 +72,7 @@ pub fn run() {
                 storage::command_history::CommandHistoryState::in_memory()
                     .expect("Failed to initialize fallback command history database")
             });
+            app.manage(ai::AiState::new(&storage_state.app_dir.parent().unwrap_or(&storage_state.app_dir).join("ai.db")));
             app.manage(Arc::new(Mutex::new(storage_state)));
             app.manage(Arc::new(command_history_state));
 
@@ -91,6 +94,21 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             exit_app,
+            ai::ai_get_settings,
+            ai::ai_model_catalog,
+            ai::ai_save_service,
+            ai::ai_delete_service,
+            ai::ai_set_default_model,
+            ai::ai_probe,
+            ai::ai_list_conversations,
+            ai::ai_get_conversation,
+            ai::ai_create_conversation,
+            ai::ai_save_draft,
+            ai::ai_delete_conversation,
+            ai::ai_delete_message,
+            ai::ai_select_answer,
+            ai::ai_cancel,
+            ai::ai_send,
             background::import_background_image,
             background::ensure_background_image,
             background::delete_background_image,

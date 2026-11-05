@@ -21,6 +21,7 @@ const PREFERENCE_DEFINITIONS = {
       sftpPanel: 'Alt+2',
       commandKnowledge: 'Alt+3',
       transferList: 'Alt+4',
+      aiPanel: 'Alt+5',
       sftpParentDirectory: 'Mouse4',
       overview: 'Ctrl+`',
       copySession: 'Ctrl+P',

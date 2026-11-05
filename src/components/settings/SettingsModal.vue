@@ -1,21 +1,20 @@
 <script setup>
-import Button from '@/components/ui/button/Button.vue';
 import Dialog from '@/components/ui/dialog/Dialog.vue';
 import DialogContent from '@/components/ui/dialog/DialogContent.vue';
 import DialogDescription from '@/components/ui/dialog/DialogDescription.vue';
-import DialogFooter from '@/components/ui/dialog/DialogFooter.vue';
 import DialogHeader from '@/components/ui/dialog/DialogHeader.vue';
 import DialogTitle from '@/components/ui/dialog/DialogTitle.vue';
 import { confirm } from '@/composables/useConfirm';
 import { toast } from '@/composables/useToast';
 import {
   Home,
+  Sparkles,
   Keyboard,
   Lock,
   Terminal
 } from '@lucide/vue';
 import { open } from '@tauri-apps/plugin-dialog';
-import { computed, defineAsyncComponent, onBeforeUnmount, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, nextTick, onBeforeUnmount, ref, watch } from 'vue';
 import { useSecurityStore } from '@/stores/security';
 import { useCommandHistoryStore } from '@/stores/commandHistory';
 import {
@@ -32,6 +31,9 @@ import { getPreferenceDefaults, loadPreference, savePreference } from '@/utils/p
 import { loadTerminalThemeSettings, saveTerminalThemeSettings } from '@/utils/terminalTheme';
 
 // Lazy-loaded sub-panes — only the visible tab's code is loaded, reducing first-open lag
+const SettingsAiPane = defineAsyncComponent(() => import('./SettingsAiPane.vue'));
+const aiPane = ref(null);
+const aiPaneMounted = ref(false);
 const SettingsKeybindingsPane = defineAsyncComponent(() => import('./SettingsKeybindingsPane.vue'));
 const SettingsMainUiPane = defineAsyncComponent(() => import('./SettingsMainUiPane.vue'));
 const SettingsSecurityPane = defineAsyncComponent(() => import('./SettingsSecurityPane.vue'));
@@ -51,11 +53,13 @@ const dialogOpen = computed({
 const securityStore = useSecurityStore();
 const commandHistoryStore = useCommandHistoryStore();
 const activeKey = ref('security');
+watch(activeKey, (key) => { if (key === 'ai') aiPaneMounted.value = true; });
 
 const settingsTabs = [
   { key: 'security', label: '安全锁', icon: Lock },
   { key: 'main-ui', label: '应用', icon: Home },
   { key: 'terminal', label: '终端', icon: Terminal },
+  { key: 'ai', label: 'AI 模型', icon: Sparkles },
   { key: 'keybindings', label: '快捷键', icon: Keyboard },
 ];
 const terminalThemeSettings = ref(loadTerminalThemeSettings());
@@ -65,9 +69,14 @@ let persistedBackgroundIds = new Set();
 const temporaryBackgroundIds = new Set();
 const pendingBackgroundCleanupIds = new Set();
 const backgroundImporting = ref(false);
-const saving = ref(false);
-const saveError = ref('');
-let backgroundPreviewFrame = null;
+const closing = ref(false);
+const preferencesReady = ref(false);
+let persistedMainUi = JSON.stringify(mainUiSettings.value);
+let persistedTerminal = JSON.stringify(terminalThemeSettings.value);
+let persistedHistory = JSON.stringify(commandHistorySettings.value);
+let persistedBindings = JSON.stringify(keybindingsSnapshot());
+let preferenceEffects = Promise.resolve();
+function keybindingsSnapshot() { return { ...getPreferenceDefaults('keybindings'), ...loadPreference('keybindings') }; }
 
 const getBackgroundResourceIds = (settings) => {
   const background = normalizeMainUiSettings(settings).background;
@@ -106,22 +115,7 @@ const handleBackgroundImported = (resourceId) => {
 const selectedDesktopPetNodeId = ref('');
 
 const dispatchMainUiSettingsPreview = () => {
-  if (backgroundPreviewFrame) cancelAnimationFrame(backgroundPreviewFrame);
-  backgroundPreviewFrame = requestAnimationFrame(() => {
-    backgroundPreviewFrame = null;
-    window.dispatchEvent(new CustomEvent('main-ui-settings-changed', {
-      detail: {
-        preview: true,
-        settings: normalizeMainUiSettings(mainUiSettings.value)
-      }
-    }));
-  });
-};
-
-const cancelMainUiSettingsPreview = () => {
-  if (!backgroundPreviewFrame) return;
-  cancelAnimationFrame(backgroundPreviewFrame);
-  backgroundPreviewFrame = null;
+  if (preferencesReady.value && !backgroundImporting.value) persistMainUi();
 };
 
 const defaultKeybindings = getPreferenceDefaults('keybindings');
@@ -137,6 +131,7 @@ const keybindingItems = [
   { key: 'sftpPanel', label: '文件管理', placeholder: 'Alt+2' },
   { key: 'commandKnowledge', label: '命令知识库', placeholder: 'Alt+3' },
   { key: 'transferList', label: '传输列表', placeholder: 'Alt+4' },
+  { key: 'aiPanel', label: 'AI 助手', placeholder: 'Alt+5' },
   { key: 'sftpParentDirectory', label: 'SFTP 返回上一级', placeholder: 'Mouse4' },
   { key: 'overview', label: '总览模式', placeholder: 'Ctrl+`' },
   { key: 'copySession', label: '复制当前会话', placeholder: 'Ctrl+P' },
@@ -195,139 +190,132 @@ const lockPassword = ref('');
 const lockPasswordConfirm = ref('');
 const currentLockPassword = ref('');
 
-// Sync when opening
-watch(() => props.visible, (val) => {
-  if (val) {
-    saveError.value = '';
-    // Reset password fields
-    lockPassword.value = '';
-    lockPasswordConfirm.value = '';
-    currentLockPassword.value = '';
-    try {
-      keybindings.value = { ...defaultKeybindings, ...loadPreference('keybindings') };
-    } catch (e) {
-      keybindings.value = { ...defaultKeybindings };
-    }
-    terminalThemeSettings.value = loadTerminalThemeSettings();
-    commandHistorySettings.value = loadPreference('commandHistory');
-    mainUiSettings.value = loadMainUiSettings();
-    persistedBackgroundIds = getBackgroundResourceIds(mainUiSettings.value);
-    temporaryBackgroundIds.forEach((resourceId) => pendingBackgroundCleanupIds.add(resourceId));
-    temporaryBackgroundIds.clear();
-    ensureSelectedDesktopPetNode();
-  } else {
-    bindingActionKey.value = '';
-  }
-});
+// Settings are loaded as a batch; initialization must never trigger saves.
+let preferenceOpenRevision = 0;
+watch(() => props.visible, async (visible) => {
+  const revision = ++preferenceOpenRevision;
+  preferencesReady.value = false;
+  if (!visible) { bindingActionKey.value = ''; return; }
+  await nextTick();
+  if (!props.visible || revision !== preferenceOpenRevision) return;
+  aiPaneMounted.value = activeKey.value === 'ai';
+  lockPassword.value = ''; lockPasswordConfirm.value = ''; currentLockPassword.value = '';
+  keybindings.value = keybindingsSnapshot();
+  terminalThemeSettings.value = loadTerminalThemeSettings();
+  commandHistorySettings.value = loadPreference('commandHistory');
+  mainUiSettings.value = loadMainUiSettings();
+  persistedMainUi = JSON.stringify(mainUiSettings.value);
+  persistedTerminal = JSON.stringify(terminalThemeSettings.value);
+  persistedHistory = JSON.stringify(commandHistorySettings.value);
+  persistedBindings = JSON.stringify(keybindings.value);
+  persistedBackgroundIds = getBackgroundResourceIds(mainUiSettings.value);
+  ensureSelectedDesktopPetNode();
+  await nextTick();
+  if (props.visible && revision === preferenceOpenRevision) preferencesReady.value = true;
+}, { immediate: true });
 
-const handleSave = async () => {
-  if (saving.value || backgroundImporting.value) return;
-  saving.value = true;
-  saveError.value = '';
-  try {
-    await saveSettings();
-  } finally {
-    saving.value = false;
-  }
-};
-
-const saveSettings = async () => {
+function enqueuePreferenceEffect(action) {
+  preferenceEffects = preferenceEffects.then(action).catch(error => toast.error(String(error)));
+  return preferenceEffects;
+}
+async function cleanupUnusedBackgrounds() {
   if (backgroundImporting.value) return;
-  cancelMainUiSettingsPreview();
-  if (keybindingConflictEntries.value.length > 0) {
-    const conflictText = keybindingConflictEntries.value
-      .map((entry) => `${entry.labels.join('、')}（${entry.combo}）`)
-      .join('；');
-    activeKey.value = 'keybindings';
-    toast.error(`快捷键存在冲突：${conflictText}`);
+  await waitForBackgroundRelease();
+  // Re-read the latest successful references after the wait: a later setting
+  // may have selected the resource again while this job was queued.
+  const keep = getBackgroundResourceIds(loadMainUiSettings());
+  const candidates = [...pendingBackgroundCleanupIds].filter(id => !keep.has(id) && !temporaryBackgroundIds.has(id));
+  const failed = new Set(await deleteBackgroundResources(candidates));
+  candidates.forEach(id => { if (!failed.has(id)) pendingBackgroundCleanupIds.delete(id); });
+}
+function persistMainUi() {
+  if (!preferencesReady.value || !props.visible || backgroundImporting.value) return;
+  const snapshot = normalizeMainUiSettings(mainUiSettings.value);
+  const serialized = JSON.stringify(snapshot);
+  if (serialized === persistedMainUi) return;
+  const previous = JSON.parse(persistedMainUi);
+  try { saveMainUiSettings(snapshot); }
+  catch {
+    mainUiSettings.value = previous;
+    toast.error('应用设置保存失败，已恢复上次保存的值');
     return;
   }
-
-  try {
-    savePreference('keybindings', keybindings.value);
-    window.dispatchEvent(new CustomEvent('keybindings-changed'));
-  } catch (e) {
-    saveError.value += '快捷键保存失败。';
-  }
-  try {
-    saveTerminalThemeSettings(terminalThemeSettings.value);
-    window.dispatchEvent(new CustomEvent('terminal-theme-changed'));
-  } catch (e) {
-    saveError.value += '终端样式保存失败。';
-  }
-  let mainUiSaved = false;
-  try {
-    saveMainUiSettings(mainUiSettings.value);
-    window.dispatchEvent(new CustomEvent('main-ui-settings-changed'));
-    mainUiSaved = true;
-  } catch (e) {
-    saveError.value += '主界面设置保存失败。';
-  }
-  try {
-    savePreference('commandHistory', commandHistorySettings.value);
-    commandHistoryStore.setEnabled(commandHistorySettings.value.enabled);
-  } catch (e) {
-    saveError.value += '命令历史设置保存失败。';
-  }
-  if (!mainUiSaved) return;
-  const normalizedRecentSessions = normalizeMainUiSettings(mainUiSettings.value).recentSessions;
-  if (normalizedRecentSessions.enabled) {
-    try {
-      await invokeCommand('trim_recent_sessions', { limit: normalizedRecentSessions.limit });
-    } catch (e) {
-      saveError.value += '最近会话数量应用失败。';
+  persistedMainUi = serialized;
+  const nextIds = getBackgroundResourceIds(snapshot);
+  persistedBackgroundIds.forEach(id => { if (!nextIds.has(id)) pendingBackgroundCleanupIds.add(id); });
+  nextIds.forEach(id => temporaryBackgroundIds.delete(id));
+  persistedBackgroundIds = nextIds;
+  window.dispatchEvent(new CustomEvent('main-ui-settings-changed'));
+  enqueuePreferenceEffect(async () => {
+    if (snapshot.recentSessions.enabled && (!previous.recentSessions.enabled || previous.recentSessions.limit !== snapshot.recentSessions.limit)) {
+      try { await invokeCommand('trim_recent_sessions', { limit: snapshot.recentSessions.limit }); }
+      catch { toast.error('会话数量已保存，但历史清理失败，重新调整可重试'); }
     }
+    await cleanupUnusedBackgrounds();
+  });
+}
+function persistTerminal() {
+  if (!preferencesReady.value || !props.visible) return;
+  const serialized = JSON.stringify(terminalThemeSettings.value);
+  if (serialized === persistedTerminal) return;
+  try { saveTerminalThemeSettings(terminalThemeSettings.value); }
+  catch { terminalThemeSettings.value = JSON.parse(persistedTerminal); toast.error('终端设置保存失败，已恢复上次保存的值'); return; }
+  persistedTerminal = serialized;
+  window.dispatchEvent(new CustomEvent('terminal-theme-changed'));
+}
+function persistCommandHistory() {
+  if (!preferencesReady.value || !props.visible) return;
+  const serialized = JSON.stringify(commandHistorySettings.value);
+  if (serialized === persistedHistory) return;
+  try { savePreference('commandHistory', commandHistorySettings.value); }
+  catch { commandHistorySettings.value = JSON.parse(persistedHistory); toast.error('命令历史设置保存失败，已恢复上次保存的值'); return; }
+  persistedHistory = serialized;
+  commandHistoryStore.setEnabled(commandHistorySettings.value.enabled);
+}
+function commitBinding(action, combo) {
+  keybindings.value[action] = combo;
+  if (keybindingConflictEntries.value.length) {
+    const conflict = keybindingConflictEntries.value.map(e => `${e.labels.join('、')}（${e.combo}）`).join('；');
+    keybindings.value = JSON.parse(persistedBindings);
+    toast.error(`快捷键存在冲突：${conflict}`);
+    return;
   }
-  const currentBackgroundIds = getBackgroundResourceIds(mainUiSettings.value);
-  await waitForBackgroundRelease();
-  const cleanupCandidates = [
-    ...temporaryBackgroundIds,
-    ...persistedBackgroundIds,
-    ...pendingBackgroundCleanupIds,
-  ].filter((resourceId) => !currentBackgroundIds.has(resourceId));
-  const failedCleanupIds = await deleteBackgroundResources(cleanupCandidates);
-  pendingBackgroundCleanupIds.clear();
-  failedCleanupIds.forEach((resourceId) => pendingBackgroundCleanupIds.add(resourceId));
-  temporaryBackgroundIds.clear();
-  persistedBackgroundIds = currentBackgroundIds;
-  if (saveError.value) return;
-  emit('update:visible', false);
-  if (failedCleanupIds.length) toast.error('部分旧背景文件暂时无法清理，将在下次启动时重试');
-  toast.success('设置已保存');
-};
+  try { savePreference('keybindings', keybindings.value); }
+  catch { keybindings.value = JSON.parse(persistedBindings); toast.error('快捷键保存失败'); return; }
+  persistedBindings = JSON.stringify(keybindings.value);
+  window.dispatchEvent(new CustomEvent('keybindings-changed'));
+}
+watch(mainUiSettings, persistMainUi, { deep: true, flush: 'post' });
+watch(terminalThemeSettings, persistTerminal, { deep: true, flush: 'post' });
+watch(commandHistorySettings, persistCommandHistory, { deep: true, flush: 'post' });
+watch(backgroundImporting, importing => { if (!importing) { persistMainUi(); enqueuePreferenceEffect(cleanupUnusedBackgrounds); } });
 
 const handleCancel = async () => {
-  if (backgroundImporting.value || saving.value) return;
-  cancelMainUiSettingsPreview();
-  const cleanupCandidates = [...temporaryBackgroundIds, ...pendingBackgroundCleanupIds];
-  window.dispatchEvent(new CustomEvent('main-ui-settings-changed'));
-  await waitForBackgroundRelease();
-  const failedCleanupIds = await deleteBackgroundResources(cleanupCandidates);
-  pendingBackgroundCleanupIds.clear();
-  failedCleanupIds.forEach((resourceId) => pendingBackgroundCleanupIds.add(resourceId));
-  temporaryBackgroundIds.clear();
-  window.dispatchEvent(new CustomEvent('terminal-theme-changed'));
-  emit('update:visible', false);
-  if (failedCleanupIds.length) toast.error('部分临时背景文件暂时无法清理，将在下次启动时重试');
+  if (closing.value || backgroundImporting.value || aiPane.value?.isBusy()) return;
+  await nextTick();
+  if (aiPane.value?.isDirty()) {
+    try { await confirm({ title: '放弃未保存的服务配置？', content: '当前 AI 服务未保存的修改将丢弃。' }); } catch { return; }
+  }
+  closing.value = true;
+  try {
+    persistMainUi(); persistTerminal(); persistCommandHistory();
+    aiPaneMounted.value = false;
+    temporaryBackgroundIds.forEach(id => pendingBackgroundCleanupIds.add(id));
+    temporaryBackgroundIds.clear();
+    await enqueuePreferenceEffect(cleanupUnusedBackgrounds);
+    if (pendingBackgroundCleanupIds.size) toast.error('部分旧背景文件暂时无法清理，将在下次启动时重试');
+    emit('update:visible', false);
+  } finally { closing.value = false; }
 };
 
 onBeforeUnmount(() => {
-  cancelMainUiSettingsPreview();
-  const cleanupCandidates = [...temporaryBackgroundIds, ...pendingBackgroundCleanupIds];
+  preferencesReady.value = false;
+  temporaryBackgroundIds.forEach(id => pendingBackgroundCleanupIds.add(id));
   temporaryBackgroundIds.clear();
-  if (!cleanupCandidates.length) return;
-  window.dispatchEvent(new CustomEvent('main-ui-settings-changed'));
-  void (async () => {
-    await waitForBackgroundRelease();
-    await deleteBackgroundResources(cleanupCandidates);
-  })();
+  void enqueuePreferenceEffect(cleanupUnusedBackgrounds);
 });
 
-const previewTerminalTheme = (settings) => {
-  window.dispatchEvent(new CustomEvent('terminal-theme-changed', {
-    detail: { settings }
-  }));
-};
+const previewTerminalTheme = () => { persistTerminal(); };
 
 const clearCommandHistory = () => {
   confirm({
@@ -499,7 +487,7 @@ const onKeybindingInputKeydown = (actionKey, e) => {
   bindingActionKey.value = actionKey;
 
   if (e.key === 'Backspace' || e.key === 'Delete') {
-    keybindings.value[actionKey] = '';
+    commitBinding(actionKey, '');
     return;
   }
 
@@ -510,7 +498,7 @@ const onKeybindingInputKeydown = (actionKey, e) => {
 
   const combo = normalizeBindingKeyEvent(e);
   if (!combo) return;
-  keybindings.value[actionKey] = combo;
+  commitBinding(actionKey, combo);
 };
 
 const onKeybindingInputMousedown = (actionKey, e) => {
@@ -519,7 +507,7 @@ const onKeybindingInputMousedown = (actionKey, e) => {
   e.preventDefault();
   e.stopPropagation();
   bindingActionKey.value = actionKey;
-  keybindings.value[actionKey] = combo;
+  commitBinding(actionKey, combo);
 };
 
 // --- Security Lock Logic ---
@@ -563,7 +551,7 @@ async function verifyAndChange() {
         <DialogDescription class="sr-only">配置应用的安全、外观、终端、快捷键等设置</DialogDescription>
       </DialogHeader>
 
-      <div class="flex-1 min-h-0 flex overflow-hidden" :inert="saving || undefined">
+      <div class="flex-1 min-h-0 flex overflow-hidden" :inert="closing || undefined">
         <div class="config-tab-sidebar flex flex-col gap-0.5 w-34 shrink-0 pr-2">
           <button v-for="tab in settingsTabs" :key="tab.key" type="button" :disabled="backgroundImporting"
             :class="['flex items-center gap-2 px-2 py-1.5 rounded text-sm text-left outline-none transition-[background,color,box-shadow]', 'focus-visible:[box-shadow:var(--app-focus-shadow)] disabled:pointer-events-none disabled:opacity-45', activeKey === tab.key ? 'bg-primary/15 text-primary font-semibold' : 'text-muted-foreground hover:bg-[var(--app-btn-hover)] hover:text-foreground active:bg-[var(--app-btn-pressed)]']"
@@ -574,6 +562,7 @@ async function verifyAndChange() {
         </div>
 
         <div class="tab-content flex-1 min-h-0 overflow-auto px-4 py-2">
+          <div v-if="aiPaneMounted" v-show="activeKey === 'ai'"><SettingsAiPane ref="aiPane" /></div>
           <SettingsSecurityPane v-if="activeKey === 'security'" :security-store="securityStore"
             :current-lock-password="currentLockPassword" :lock-password="lockPassword"
             :lock-password-confirm="lockPasswordConfirm" :set-app-password="setAppPassword"
@@ -607,11 +596,7 @@ async function verifyAndChange() {
         </div>
       </div>
 
-      <DialogFooter>
-        <p v-if="saveError" role="alert" class="mr-auto text-xs text-destructive">{{ saveError }}已保存的项目保留，可重试。</p>
-        <Button variant="outline" size="sm" :disabled="backgroundImporting || saving" @click="handleCancel">取消</Button>
-        <Button size="sm" :disabled="backgroundImporting || saving" @click="handleSave">{{ saving ? '保存中…' : '保存' }}</Button>
-      </DialogFooter>
+
     </DialogContent>
   </Dialog>
 

@@ -1,5 +1,5 @@
 <script setup>
-import { Copy, FolderOpen, Minus, Moon, Square, Sun, X } from '@lucide/vue';
+import { Copy, FolderOpen, Sparkles, Minus, Moon, Square, Sun, X } from '@lucide/vue';
 import { nextTick, onMounted, onUnmounted, ref } from 'vue';
 import { executeMenuAction } from '@/composables/useMenu';
 import { useTheme } from '@/composables/useTheme';
@@ -15,6 +15,8 @@ const props = defineProps({
   sftpActive: Boolean,
   sftpDisabled: Boolean,
   knowledgeActive: Boolean,
+  aiActive: Boolean,
+  aiBusy: Boolean,
   sessionPanelActive: Boolean,
   transferVisible: Boolean,
   keybindings: {
@@ -39,6 +41,7 @@ const menus = [
   { key: 'view', label: '视图', items: [
     { key: 'view_tool_sessions', label: '会话列表', bindingKey: 'sessionList' },
     { key: 'view_tool_sftp', label: '文件管理', bindingKey: 'sftpPanel' },
+    { key: 'view_tool_ai', label: 'AI 助手', bindingKey: 'aiPanel' },
     { key: 'view_tool_knowledge', label: '命令知识库', bindingKey: 'commandKnowledge' },
     { key: 'view_transfer_list', label: '传输列表', bindingKey: 'transferList' },
   ] },
@@ -78,6 +81,7 @@ const itemChecked = (key) => ({
   view_tool_sessions: props.sessionPanelActive,
   view_tool_sftp: props.sftpActive,
   view_tool_knowledge: props.knowledgeActive,
+  view_tool_ai: props.aiActive,
   view_transfer_list: props.transferVisible,
 }[key] === true);
 const itemDisabled = (key) => key === 'view_tool_sftp' && props.sftpDisabled;
@@ -194,6 +198,7 @@ onUnmounted(() => {
     </div>
     <div ref="titlebarRightRef" class="titlebar-right">
       <DuskDock class="utility-dock" interactive>
+        <IconButton :icon="Sparkles" size="sm" tone="primary" :active="props.aiActive" :aria-label="`${props.aiBusy ? 'AI 助手（正在生成）' : 'AI 助手'}${props.keybindings.aiPanel ? ` (${props.keybindings.aiPanel})` : ''}`" :class="{ 'ai-generating': props.aiBusy }" :action="() => executeMenuAction('view_tool_ai')" />
         <TransferDock :expanded="props.transferVisible"
           @toggle="emit('toggle-transfer')" />
         <IconButton :icon="FolderOpen" size="sm" tone="primary" :active="props.sftpActive"
@@ -240,6 +245,7 @@ onUnmounted(() => {
   overflow: hidden;
 }
 /* Keep focus inside the shared frame so clipping the edge highlights does not hide it. */
+.utility-dock :deep(.ai-generating) { box-shadow: inset 0 -2px 0 var(--color-primary); }
 .utility-dock :deep(.icon-button:focus-visible) { box-shadow: inset 0 0 0 1px var(--app-focus-border); }
 .tb-menu-item:focus-visible { outline: 1px solid var(--app-focus-border); outline-offset: -1px; }
 .tb-menu-item:active:not(:disabled) { background: var(--app-btn-pressed); }

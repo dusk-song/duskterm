@@ -141,6 +141,12 @@ export default defineConfig(async () => ({
     },
   },
 
+  // Pre-bundle the lazy AI renderer and its code-block entry before the panel
+  // opens, avoiding a new optimization pass during its first dynamic import.
+  optimizeDeps: {
+    include: ['markstream-vue', 'stream-diffs/markstream'],
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors

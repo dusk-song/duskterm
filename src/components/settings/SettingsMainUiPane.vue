@@ -1,6 +1,7 @@
 ﻿<script setup>
 import Button from '@/components/ui/button/Button.vue';
 import Input from '@/components/ui/input/Input.vue';
+import PreferenceNumberInput from './PreferenceNumberInput.vue';
 import Select from '@/components/ui/select/Select.vue';
 import SelectContent from '@/components/ui/select/SelectContent.vue';
 import SelectItem from '@/components/ui/select/SelectItem.vue';
@@ -435,7 +436,7 @@ onBeforeUnmount(() => {
       </div>
       <div class="setting-row">
         <div class="setting-label">保留数量</div>
-        <Input v-model="mainUiSettings.recentSessions.limit" inputmode="numeric" class="recent-session-limit"
+        <PreferenceNumberInput v-model="mainUiSettings.recentSessions.limit" :min="1" :max="100" integer label="保留会话数量" class="recent-session-limit"
           :disabled="!mainUiSettings.recentSessions.enabled" />
         <span class="setting-value">最多 100</span>
       </div>
@@ -666,28 +667,28 @@ onBeforeUnmount(() => {
                 <div class="form-item">
                   <label>停留时长</label>
                   <div class="form-item-control">
-                    <Input v-model="selectedDesktopPetNode.durationMs" :min="200" :max="60000" :step="100" size="sm"
+                    <PreferenceNumberInput v-model="selectedDesktopPetNode.durationMs" label="停留时长" integer :min="200" :max="60000" :step="100" size="sm"
                       class="w-full" />
                   </div>
                 </div>
                 <div class="form-item">
                   <label>尺寸</label>
                   <div class="form-item-control">
-                    <Input v-model="selectedDesktopPetNode.scale" :min="0.4" :max="2.4" :step="0.1" size="sm"
+                    <PreferenceNumberInput v-model="selectedDesktopPetNode.scale" label="尺寸" :min="0.4" :max="2.4" :step="0.1" size="sm"
                       class="w-full" />
                   </div>
                 </div>
                 <div class="form-item">
                   <label>X 偏移</label>
                   <div class="form-item-control">
-                    <Input v-model="selectedDesktopPetNode.offsetX" :min="-120" :max="120" :step="2" size="sm"
+                    <PreferenceNumberInput v-model="selectedDesktopPetNode.offsetX" label="X 偏移" integer :min="-120" :max="120" :step="2" size="sm"
                       class="w-full" />
                   </div>
                 </div>
                 <div class="form-item">
                   <label>Y 偏移</label>
                   <div class="form-item-control">
-                    <Input v-model="selectedDesktopPetNode.offsetY" :min="-120" :max="120" :step="2" size="sm"
+                    <PreferenceNumberInput v-model="selectedDesktopPetNode.offsetY" label="Y 偏移" integer :min="-120" :max="120" :step="2" size="sm"
                       class="w-full" />
                   </div>
                 </div>
