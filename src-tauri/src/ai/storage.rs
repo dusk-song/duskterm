@@ -22,7 +22,7 @@ impl Database {
         let version: i64 = connection
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .map_err(db_error)?;
-        if version > 2 {
+        if version > 3 {
             return Err("AI 数据库版本高于当前程序支持的版本".into());
         }
         if version == 0 {
@@ -32,11 +32,31 @@ impl Database {
                 CREATE INDEX conversations_recent ON conversations(updated_at DESC);
                 PRAGMA user_version=1; COMMIT;").map_err(db_error)?;
         }
+        if version > 0 && version < 3 && path != Path::new(":memory:") {
+            // VACUUM INTO includes committed WAL contents. A file copy of ai.db
+            // alone is not a consistent rollback snapshot while WAL is in use.
+            let backup = path.with_extension(format!("pre-v3-{}.db", id()));
+            connection
+                .execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])
+                .map_err(|_| "AI 数据库升级前备份失败，请检查磁盘空间和目录权限")?;
+        }
+        if version < 3 {
+            // Additive migration: retain the original conversation JSON. Seed old
+            // in-progress answers atomically, so a crash during migration is safe.
+            connection.execute_batch("BEGIN;
+                CREATE TABLE generation_checkpoints (
+                    conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
+                    message_id TEXT NOT NULL, data TEXT NOT NULL);
+                INSERT INTO generation_checkpoints
+                    SELECT id,json_extract(data,'$.messages[#-1].id'),json_extract(data,'$.messages[#-1]')
+                    FROM conversations WHERE json_extract(data,'$.messages[#-1].status')='streaming';
+                PRAGMA user_version=3; COMMIT;").map_err(db_error)?;
+        }
         let db = Self { connection };
-        // A terminated desktop process cannot leave an answer marked as complete.
+        // Only unfinished generations need decoding and recovery at startup.
         let ids: Vec<String> = db
             .connection
-            .prepare("SELECT id FROM conversations")
+            .prepare("SELECT conversation_id FROM generation_checkpoints")
             .map_err(db_error)?
             .query_map([], |r| r.get(0))
             .map_err(db_error)?
@@ -119,6 +139,25 @@ impl Database {
             )
             .map_err(|_| "对话不存在或无法读取")?;
         let mut c: Conversation = serde_json::from_str(&data).map_err(|_| "AI 对话数据损坏")?;
+        let checkpoint: Option<String> = self
+            .connection
+            .query_row(
+                "SELECT data FROM generation_checkpoints WHERE conversation_id=?1",
+                [id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        if let Some(data) = checkpoint {
+            let message: Message = serde_json::from_str(&data).map_err(|_| "AI 生成检查点损坏")?;
+            if let Some(last) = c
+                .messages
+                .last_mut()
+                .filter(|m| m.id == message.id && m.status == "streaming")
+            {
+                *last = message;
+            }
+        }
         c.draft = draft;
         c.ensure_usage_stats();
         Ok(c)
@@ -128,10 +167,38 @@ impl Database {
         stored.draft.clear();
         let data = serde_json::to_string(&stored).map_err(|_| "无法编码 AI 对话")?;
         // Draft updates never get overwritten by a stream checkpoint.
-        self.connection.execute("INSERT INTO conversations(id,title,updated_at,data,draft) VALUES(?1,?2,?3,?4,?5)
+        let transaction = self.connection.unchecked_transaction().map_err(db_error)?;
+        transaction.execute("INSERT INTO conversations(id,title,updated_at,data,draft) VALUES(?1,?2,?3,?4,?5)
             ON CONFLICT(id) DO UPDATE SET title=excluded.title,updated_at=excluded.updated_at,data=excluded.data",
             params![c.id,c.title,c.updated_at as i64,data,c.draft]).map_err(db_error)?;
+        if let Some(message) = c.messages.last().filter(|m| m.status == "streaming") {
+            let data = serde_json::to_string(message).map_err(|_| "无法编码生成检查点")?;
+            transaction.execute("INSERT INTO generation_checkpoints VALUES(?1,?2,?3)
+                ON CONFLICT(conversation_id) DO UPDATE SET message_id=excluded.message_id,data=excluded.data",
+                params![c.id,message.id,data]).map_err(db_error)?;
+        } else {
+            transaction
+                .execute(
+                    "DELETE FROM generation_checkpoints WHERE conversation_id=?1",
+                    [&c.id],
+                )
+                .map_err(db_error)?;
+        }
+        transaction.commit().map_err(db_error)?;
         Ok(())
+    }
+    pub fn checkpoint(&self, id: &str, message: &Message) -> Result<(), String> {
+        let data = serde_json::to_string(message).map_err(|_| "无法编码生成检查点")?;
+        self.connection.execute("UPDATE generation_checkpoints SET data=?1 WHERE conversation_id=?2 AND message_id=?3",
+            params![data,id,message.id]).map_err(db_error)?;
+        Ok(())
+    }
+    pub fn draft_text(&self, id: &str) -> Result<String, String> {
+        self.connection
+            .query_row("SELECT draft FROM conversations WHERE id=?1", [id], |r| {
+                r.get(0)
+            })
+            .map_err(db_error)
     }
     pub fn draft(&self, id: &str, text: &str) -> Result<(), String> {
         if text.len() > 256_000 {

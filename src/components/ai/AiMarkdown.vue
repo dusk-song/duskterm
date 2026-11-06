@@ -19,7 +19,8 @@ disableMermaid(); disableKatex(); disableD2(); disableInfographic();
 </script>
 
 <script setup>
-import { computed } from 'vue';
+import { computed, onMounted } from 'vue';
+import { initializeAiHighlight } from '@/utils/aiHighlight';
 import MarkdownRender from 'markstream-vue';
 import 'markstream-vue/index.css';
 import { openUrl } from '@tauri-apps/plugin-opener';
@@ -28,6 +29,7 @@ import { toast } from '@/composables/useToast';
 
 const props = defineProps({ content: { type: String, default: '' }, streaming: Boolean, dark: { type: Boolean, default: undefined } });
 const emit = defineEmits(['copy-code']);
+onMounted(initializeAiHighlight);
 const { isDark } = useTheme();
 const darkMode = computed(() => props.dark ?? isDark.value);
 const codeProps = {
@@ -40,7 +42,7 @@ const codeProps = {
     catch (error) { toast.error('复制失败，请手动选择文本'); throw error; }
   },
 };
-const codeOptions = { fontSize: 12, lineHeight: 20, maxHeight: 480, overflow: 'scroll', disableLineNumbers: true };
+const codeOptions = { fontSize: 12, lineHeight: 20, maxHeight: 480, overflow: 'scroll', disableLineNumbers: true, preferredHighlighter: 'shiki-js' };
 async function openLink(event) {
   const link = event.target.closest('a');
   if (!link) return;
@@ -56,8 +58,10 @@ async function openLink(event) {
   <div class="ai-markdown" @click="openLink">
     <MarkdownRender :content="content" :final="!streaming" mode="chat" custom-id="duskterm-ai"
       html-policy="escape" :is-dark="darkMode" :show-tooltips="false" :typewriter="false"
-      :smooth-streaming="false" :batch-rendering="false" :node-virtual="false"
-      :defer-nodes-until-visible="false" :code-block-props="codeProps" :code-block-options="codeOptions" />
+      :smooth-streaming="streaming ? 'auto' : false" :batch-rendering="true" node-virtual="auto"
+      :initial-render-batch-size="16" :render-batch-size="32" :render-batch-budget-ms="6"
+      :max-live-nodes="160" :live-node-buffer="30" :parse-coalesce-ms="32"
+      :defer-nodes-until-visible="true" :viewport-priority="true" :code-block-stream="true" :code-block-props="codeProps" :code-block-options="codeOptions" />
   </div>
 </template>
 

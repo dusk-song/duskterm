@@ -1,5 +1,6 @@
 mod call_log;
 mod compatibility;
+mod config;
 mod provider;
 mod runtime;
 mod storage;
@@ -12,7 +13,9 @@ use types::*;
 
 #[derive(Clone)]
 pub struct AiState {
-    db: Arc<Mutex<Result<storage::Database, String>>>,
+    db: Arc<Mutex<Option<Result<storage::Database, String>>>>,
+    db_path: Arc<std::path::PathBuf>,
+    io_gate: Arc<tokio::sync::Semaphore>,
     active: Arc<Mutex<Option<Active>>>,
     call_log: Arc<call_log::CallLog>,
 }
@@ -25,7 +28,9 @@ struct Active {
 impl AiState {
     pub fn new(path: &std::path::Path) -> Self {
         Self {
-            db: Arc::new(Mutex::new(storage::Database::open(path))),
+            db: Arc::new(Mutex::new(None)),
+            db_path: Arc::new(path.to_path_buf()),
+            io_gate: Arc::new(tokio::sync::Semaphore::new(1)),
             active: Arc::new(Mutex::new(None)),
             call_log: Arc::new(call_log::CallLog::new(path)),
         }
@@ -34,11 +39,36 @@ impl AiState {
         &self,
         f: impl FnOnce(&storage::Database) -> Result<T, String>,
     ) -> Result<T, String> {
-        let db = self.db.lock().map_err(|_| "AI 数据库状态不可用")?;
-        match &*db {
+        let mut db = self.db.lock().map_err(|_| "AI 数据库状态不可用")?;
+        match db.get_or_insert_with(|| storage::Database::open(&self.db_path)) {
             Ok(db) => f(db),
             Err(error) => Err(error.clone()),
         }
+    }
+    // Keep the permit inside the worker: cancellation may drop its awaiting future,
+    // but a later final save must still follow the unfinished checkpoint.
+    async fn blocking<T: Send + 'static>(
+        &self,
+        f: impl FnOnce(&AiState) -> Result<T, String> + Send + 'static,
+    ) -> Result<T, String> {
+        let permit = self
+            .io_gate
+            .clone()
+            .acquire_owned()
+            .await
+            .map_err(|_| "AI 存储执行器不可用")?;
+        let state = self.clone();
+        tauri::async_runtime::spawn_blocking(move || {
+            let _permit = permit;
+            f(&state)
+        })
+        .await
+        .map_err(|_| "AI 存储任务中断")?
+    }
+    async fn save_conversation(&self, c: &Conversation) -> Result<(), String> {
+        let c = c.clone();
+        self.blocking(move |state| state.with_db(|db| db.save(&c)))
+            .await
     }
     fn start_call(&self, kind: &str, service: &Service, model: Option<&ModelConfig>) -> CallRecord {
         let parameters = model.map_or_else(
@@ -111,7 +141,10 @@ fn enabled_model(settings: &Settings, id: &str) -> Result<(Service, ModelConfig)
 
 #[tauri::command]
 pub async fn ai_get_settings(state: State<'_, AiState>) -> Result<Settings, String> {
-    state.with_db(|db| db.settings())
+    let state = state.inner().clone();
+    state
+        .blocking(move |state| state.with_db(|db| db.settings()))
+        .await
 }
 
 #[derive(serde::Deserialize)]
@@ -287,15 +320,20 @@ pub async fn ai_set_default_model(
     state: State<'_, AiState>,
     model_id: Option<String>,
 ) -> Result<Settings, String> {
-    state.with_db(|db| {
-        let mut settings = db.settings()?;
-        if let Some(id) = &model_id {
-            enabled_model(&settings, id)?;
-        }
-        settings.default_model_id = model_id;
-        db.save_settings(&settings)?;
-        Ok(settings)
-    })
+    let state = state.inner().clone();
+    state
+        .blocking(move |state| {
+            state.with_db(|db| {
+                let mut settings = db.settings()?;
+                if let Some(id) = &model_id {
+                    enabled_model(&settings, id)?;
+                }
+                settings.default_model_id = model_id;
+                db.save_settings(&settings)?;
+                Ok(settings)
+            })
+        })
+        .await
 }
 
 fn probe_service(
@@ -367,7 +405,9 @@ pub async fn ai_probe(
     kind: String,
     model_id: Option<String>,
 ) -> Result<serde_json::Value, String> {
-    let settings = state.with_db(|db| db.settings())?;
+    let settings = state
+        .blocking(|state| state.with_db(|db| db.settings()))
+        .await?;
     let service = probe_service(
         &settings,
         service_id.as_deref(),
@@ -445,31 +485,42 @@ pub async fn ai_probe(
 pub async fn ai_list_conversations(
     state: State<'_, AiState>,
 ) -> Result<Vec<ConversationInfo>, String> {
-    state.with_db(|db| db.list())
+    let state = state.inner().clone();
+    state
+        .blocking(move |state| state.with_db(|db| db.list()))
+        .await
 }
 #[tauri::command]
 pub async fn ai_get_conversation(
     state: State<'_, AiState>,
     id: String,
 ) -> Result<Conversation, String> {
-    state.with_db(|db| db.get(&id))
+    let state = state.inner().clone();
+    state
+        .blocking(move |state| state.with_db(|db| db.get(&id)))
+        .await
 }
 #[tauri::command]
 pub async fn ai_create_conversation(state: State<'_, AiState>) -> Result<Conversation, String> {
-    let c = Conversation {
-        id: id(),
-        title: "新对话".into(),
-        updated_at: now(),
-        revision: 0,
-        model_id: None,
-        last_service_id: None,
-        messages: vec![],
-        summary: None,
-        draft: String::new(),
-        usage_stats: Some(UsageStats::default()),
-    };
-    state.with_db(|db| db.save(&c))?;
-    Ok(c)
+    let state = state.inner().clone();
+    state
+        .blocking(move |state| {
+            let c = Conversation {
+                id: id(),
+                title: "新对话".into(),
+                updated_at: now(),
+                revision: 0,
+                model_id: None,
+                last_service_id: None,
+                messages: vec![],
+                summary: None,
+                draft: String::new(),
+                usage_stats: Some(UsageStats::default()),
+            };
+            state.with_db(|db| db.save(&c))?;
+            Ok(c)
+        })
+        .await
 }
 #[tauri::command]
 pub async fn ai_save_draft(
@@ -477,12 +528,20 @@ pub async fn ai_save_draft(
     id: String,
     text: String,
 ) -> Result<(), String> {
-    state.with_db(|db| db.draft(&id, &text))
+    let state = state.inner().clone();
+    state
+        .blocking(move |state| state.with_db(|db| db.draft(&id, &text)))
+        .await
 }
 #[tauri::command]
 pub async fn ai_delete_conversation(state: State<'_, AiState>, id: String) -> Result<(), String> {
-    let _idle = state.idle_for(&id)?;
-    state.with_db(|db| db.delete(&id))
+    let state = state.inner().clone();
+    state
+        .blocking(move |state| {
+            let _idle = state.idle_for(&id)?;
+            state.with_db(|db| db.delete(&id))
+        })
+        .await
 }
 
 #[tauri::command]
@@ -491,31 +550,36 @@ pub async fn ai_delete_message(
     conversation_id: String,
     message_id: String,
 ) -> Result<Conversation, String> {
-    let _idle = state.idle_for(&conversation_id)?;
-    state.with_db(|db| {
-        let mut c = db.get(&conversation_id)?;
-        let target = c
-            .messages
-            .iter()
-            .find(|m| m.id == message_id)
-            .ok_or("消息不存在")?;
-        let is_user = target.role == "user";
-        c.messages.retain(|m| {
-            m.id != message_id && !(is_user && m.reply_to.as_ref() == Some(&message_id))
-        });
-        c.summary = None;
-        if is_user {
-            c.title = c
-                .messages
-                .iter()
-                .find(|m| m.role == "user")
-                .map_or_else(|| "新对话".into(), |m| m.content.chars().take(32).collect());
-        }
-        c.revision += 1;
-        c.updated_at = now();
-        db.save(&c)?;
-        Ok(c)
-    })
+    let state = state.inner().clone();
+    state
+        .blocking(move |state| {
+            let _idle = state.idle_for(&conversation_id)?;
+            state.with_db(|db| {
+                let mut c = db.get(&conversation_id)?;
+                let target = c
+                    .messages
+                    .iter()
+                    .find(|m| m.id == message_id)
+                    .ok_or("消息不存在")?;
+                let is_user = target.role == "user";
+                c.messages.retain(|m| {
+                    m.id != message_id && !(is_user && m.reply_to.as_ref() == Some(&message_id))
+                });
+                c.summary = None;
+                if is_user {
+                    c.title = c
+                        .messages
+                        .iter()
+                        .find(|m| m.role == "user")
+                        .map_or_else(|| "新对话".into(), |m| m.content.chars().take(32).collect());
+                }
+                c.revision += 1;
+                c.updated_at = now();
+                db.save(&c)?;
+                Ok(c)
+            })
+        })
+        .await
 }
 
 #[tauri::command]
@@ -524,25 +588,32 @@ pub async fn ai_select_answer(
     conversation_id: String,
     message_id: String,
 ) -> Result<Conversation, String> {
-    let _idle = state.idle_for(&conversation_id)?;
-    state.with_db(|db| {
-        let mut c = db.get(&conversation_id)?;
-        let target = c
-            .messages
-            .iter()
-            .find(|m| m.id == message_id && m.role == "assistant" && m.status == "completed")
-            .ok_or("只能选择完整回答")?;
-        let reply_to = target.reply_to.clone();
-        for m in &mut c.messages {
-            if m.role == "assistant" && m.reply_to == reply_to {
-                m.active = m.id == message_id;
-            }
-        }
-        c.summary = None;
-        c.revision += 1;
-        db.save(&c)?;
-        Ok(c)
-    })
+    let state = state.inner().clone();
+    state
+        .blocking(move |state| {
+            let _idle = state.idle_for(&conversation_id)?;
+            state.with_db(|db| {
+                let mut c = db.get(&conversation_id)?;
+                let target = c
+                    .messages
+                    .iter()
+                    .find(|m| {
+                        m.id == message_id && m.role == "assistant" && m.status == "completed"
+                    })
+                    .ok_or("只能选择完整回答")?;
+                let reply_to = target.reply_to.clone();
+                for m in &mut c.messages {
+                    if m.role == "assistant" && m.reply_to == reply_to {
+                        m.active = m.id == message_id;
+                    }
+                }
+                c.summary = None;
+                c.revision += 1;
+                db.save(&c)?;
+                Ok(c)
+            })
+        })
+        .await
 }
 
 #[tauri::command]

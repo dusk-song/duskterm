@@ -41,7 +41,7 @@ const menus = [
   { key: 'view', label: '视图', items: [
     { key: 'view_tool_sessions', label: '会话列表', bindingKey: 'sessionList' },
     { key: 'view_tool_sftp', label: '文件管理', bindingKey: 'sftpPanel' },
-    { key: 'view_tool_ai', label: 'AI 助手', bindingKey: 'aiPanel' },
+    { key: 'view_tool_ai', label: '智能助手', bindingKey: 'aiPanel' },
     { key: 'view_tool_knowledge', label: '命令知识库', bindingKey: 'commandKnowledge' },
     { key: 'view_transfer_list', label: '传输列表', bindingKey: 'transferList' },
   ] },
@@ -198,7 +198,7 @@ onUnmounted(() => {
     </div>
     <div ref="titlebarRightRef" class="titlebar-right">
       <DuskDock class="utility-dock" interactive>
-        <IconButton :icon="Sparkles" size="sm" tone="primary" :active="props.aiActive" :aria-label="`${props.aiBusy ? 'AI 助手（正在生成）' : 'AI 助手'}${props.keybindings.aiPanel ? ` (${props.keybindings.aiPanel})` : ''}`" :class="{ 'ai-generating': props.aiBusy }" :action="() => executeMenuAction('view_tool_ai')" />
+        <IconButton :icon="Sparkles" size="sm" tone="primary" :active="props.aiActive" :aria-label="`${props.aiBusy ? '智能助手（正在生成）' : '智能助手'}${props.keybindings.aiPanel ? ` (${props.keybindings.aiPanel})` : ''}`" :class="{ 'ai-generating': props.aiBusy }" :action="() => executeMenuAction('view_tool_ai')" />
         <TransferDock :expanded="props.transferVisible"
           @toggle="emit('toggle-transfer')" />
         <IconButton :icon="FolderOpen" size="sm" tone="primary" :active="props.sftpActive"

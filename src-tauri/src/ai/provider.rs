@@ -1,5 +1,5 @@
 use super::{
-    compatibility,
+    compatibility, config,
     types::{Capabilities, ListedModel, ModelConfig, Protocol, Service, Usage},
 };
 use rig::providers::{anthropic::AnthropicConfig, openai::OpenAIConfig};
@@ -69,6 +69,8 @@ pub fn validate(service: &mut Service) -> Result<(), String> {
     }
     let snapshot = service.clone();
     for model in &mut service.models {
+        model.model_id = model.model_id.trim().to_string();
+        model.name = model.name.trim().to_string();
         if !["default", "enabled", "disabled"].contains(&model.thinking_mode.as_str())
             || !["", "deepseek", "openai", "qwen"].contains(&model.thinking_format.as_str())
         {
@@ -125,8 +127,6 @@ pub fn validate(service: &mut Service) -> Result<(), String> {
             return Err("思考预算须小于最大输出 Token".into());
         }
 
-        model.model_id = model.model_id.trim().to_string();
-        model.name = model.name.trim().to_string();
         if uuid::Uuid::parse_str(&model.id).is_err()
             || !ids.insert(model.id.clone())
             || !names.insert(model.model_id.clone())
@@ -143,22 +143,17 @@ pub fn validate(service: &mut Service) -> Result<(), String> {
         if !(128..=4_000_000).contains(&model.max_output_tokens) {
             return Err("输出预算须为 128–4000000 Token".into());
         }
-        if let Some(limit) = model
-            .max_output_limit
-            .or_else(|| spec.and_then(|s| s.max_output_tokens.map(u64::from)))
-        {
-            if model.max_output_tokens > limit {
-                return Err(format!(
-                    "模型 {} 的最大输出超过已知上限 {limit} Token，请调整",
-                    model.name
-                ));
+        for (value, minimum, label) in [
+            (model.context_window, 4096, "上下文窗口"),
+            (model.reported_context_window, 4096, "服务上下文窗口"),
+            (model.reported_max_input_tokens, 128, "服务输入上限"),
+            (model.max_output_limit, 128, "服务输出上限"),
+        ] {
+            if value.is_some_and(|v| !(minimum..=4_000_000).contains(&v)) {
+                return Err(format!("{label}超出有效范围"));
             }
         }
-        if let Some(window) = model.context_window {
-            if !(4096..=4000000).contains(&window) || model.max_output_tokens + 1024 >= window {
-                return Err("上下文窗口须为 4096–4000000，且大于输出预算加安全余量".into());
-            }
-        }
+        config::input_budget(&snapshot, model, model.max_output_tokens)?;
         compatibility::configure(CompletionRequest::new("validate"), model, &snapshot)?;
     }
     Ok(())
@@ -205,6 +200,7 @@ pub fn model(
     model: &ModelConfig,
     key: &str,
 ) -> Result<DynModel<Completion>, String> {
+    config::input_budget(service, model, model.max_output_tokens)?;
     let transport = http(service)?;
     Ok(match service.protocol {
         Protocol::OpenaiChat => OpenAIConfig::with_key(
@@ -343,6 +339,10 @@ fn listed_model(row: &serde_json::Value) -> Option<ListedModel> {
             .or_else(|| row.get("display_name"))
             .and_then(|v| v.as_str())
             .map(str::to_string),
+        max_input_tokens: row
+            .get("max_input_tokens")
+            .and_then(|v| v.as_u64())
+            .filter(|v| (128..=4_000_000).contains(v)),
         context_window: row
             .get("context_length")
             .or_else(|| row.get("context_window"))

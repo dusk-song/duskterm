@@ -59,7 +59,7 @@ const settingsTabs = [
   { key: 'security', label: '安全锁', icon: Lock },
   { key: 'main-ui', label: '应用', icon: Home },
   { key: 'terminal', label: '终端', icon: Terminal },
-  { key: 'ai', label: 'AI 模型', icon: Sparkles },
+  { key: 'ai', label: '模型服务', icon: Sparkles },
   { key: 'keybindings', label: '快捷键', icon: Keyboard },
 ];
 const terminalThemeSettings = ref(loadTerminalThemeSettings());
@@ -131,7 +131,7 @@ const keybindingItems = [
   { key: 'sftpPanel', label: '文件管理', placeholder: 'Alt+2' },
   { key: 'commandKnowledge', label: '命令知识库', placeholder: 'Alt+3' },
   { key: 'transferList', label: '传输列表', placeholder: 'Alt+4' },
-  { key: 'aiPanel', label: 'AI 助手', placeholder: 'Alt+5' },
+  { key: 'aiPanel', label: '智能助手', placeholder: 'Alt+5' },
   { key: 'sftpParentDirectory', label: 'SFTP 返回上一级', placeholder: 'Mouse4' },
   { key: 'overview', label: '总览模式', placeholder: 'Ctrl+`' },
   { key: 'copySession', label: '复制当前会话', placeholder: 'Ctrl+P' },

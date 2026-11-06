@@ -17,7 +17,7 @@ export function createService(template = serviceTemplates[0]) {
 
 export function createModel(modelId = '') {
   return { id: crypto.randomUUID(), modelId, name: modelId, enabled: true,
-    contextWindow: null, maxOutputTokens: 262144, thinkingMode: 'default', thinkingFormat: '',
+    contextWindow: null, reportedContextWindow: null, reportedMaxInputTokens: null, maxOutputTokens: 262144, thinkingMode: 'default', thinkingFormat: '',
     adapterOverride: null, reasoningEffort: null, reasoningBudget: null, thinkingOnParams: null, thinkingOffParams: null,
     capabilities: { text: 'unknown', image: 'unknown', thinking: 'unknown' },
     reportedCapabilities: { text: 'unknown', image: 'unknown', thinking: 'unknown' }, maxOutputLimit: null };
@@ -74,7 +74,8 @@ export function capability(model, key, preset = null) {
 export function addDiscoveredModel(entry) {
   const model = createModel(entry.id);
   model.name = entry.name || entry.id;
-  model.contextWindow = entry.contextWindow || null;
+  model.reportedContextWindow = entry.contextWindow || null;
+  model.reportedMaxInputTokens = entry.maxInputTokens || null;
   model.maxOutputLimit = entry.maxOutputLimit || null;
   model.reportedCapabilities = { ...model.reportedCapabilities, ...entry.capabilities };
   return model;

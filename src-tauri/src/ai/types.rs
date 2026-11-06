@@ -15,6 +15,10 @@ pub struct ModelConfig {
     pub name: String,
     pub enabled: bool,
     pub context_window: Option<u64>,
+    #[serde(default)]
+    pub reported_context_window: Option<u64>,
+    #[serde(default)]
+    pub reported_max_input_tokens: Option<u64>,
     pub max_output_tokens: u64,
     #[serde(default = "default_thinking_mode")]
     pub thinking_mode: String,
@@ -61,6 +65,7 @@ pub struct ListedModel {
     pub id: String,
     pub name: Option<String>,
     pub context_window: Option<u64>,
+    pub max_input_tokens: Option<u64>,
     pub max_output_limit: Option<u64>,
     pub capabilities: Capabilities,
 }

@@ -1402,8 +1402,8 @@ useWindowInteraction({ onResize: measureWorkspace });
           @mousedown="startWorkspaceResize('tool', $event)" />
 
         <TiledPanel v-show="hasWorkspaceRightPanel" class="workspace-panel workspace-panel-tool" :dense="true"
-          :padded="false" :aria-label="showActiveSftpPanel ? 'SFTP 文件管理' : showAiPanel ? 'AI 助手' : '命令知识库'">
-            <AiPanel v-if="isAiMounted" v-show="showAiPanel" :maximized="aiMaximized" @maximize="aiMaximized = !aiMaximized" @close="activeToolPanel = null" />
+          :padded="false" :aria-label="showActiveSftpPanel ? 'SFTP 文件管理' : showAiPanel ? '智能助手' : '命令知识库'">
+            <AiPanel v-if="isAiMounted" v-show="showAiPanel" :visible="showAiPanel" :maximized="aiMaximized" @maximize="aiMaximized = !aiMaximized" @close="activeToolPanel = null" />
             <FileManager v-if="isSftpMounted" v-show="showActiveSftpPanel"
               :sessionId="activeSftpWorkspaceId" :follow-session-id="focusedTerminalRuntimeId"
               :visible="showActiveSftpPanel" @close="showSftpPanel = false" />

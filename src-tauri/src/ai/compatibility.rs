@@ -196,6 +196,10 @@ pub fn configure(
             request = request.reasoning(reasoning);
         }
     }
+    if let Some(spec) = model_spec(profile, &model.model_id) {
+        spec.validate(&request.options)
+            .map_err(|_| "所选思考强度、预算或开关不受该模型支持，请调整配置")?;
+    }
     Ok(request.additional_params(parameters(model, service)))
 }
 
