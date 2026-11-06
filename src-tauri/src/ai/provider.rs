@@ -94,7 +94,7 @@ pub fn validate(service: &mut Service) -> Result<(), String> {
             return Err("思考强度无效".into());
         }
         for caps in [&model.capabilities, &model.reported_capabilities] {
-            if [&caps.text, &caps.image, &caps.thinking]
+            if [&caps.text, &caps.image, &caps.thinking, &caps.tools]
                 .iter()
                 .any(|v| !["unknown", "supported", "unsupported"].contains(&v.as_str()))
             {
@@ -332,6 +332,19 @@ fn listed_model(row: &serde_json::Value) -> Option<ListedModel> {
     {
         capabilities.thinking = "supported".into();
     }
+    if let Some(flag) = row
+        .pointer("/capabilities/tool_calling")
+        .or_else(|| row.pointer("/capabilities/tools"))
+        .and_then(|v| v.as_bool())
+    {
+        capabilities.tools = if flag { "supported" } else { "unsupported" }.into();
+    } else if row
+        .get("supported_parameters")
+        .and_then(|v| v.as_array())
+        .is_some_and(|values| values.iter().any(|v| v == "tools"))
+    {
+        capabilities.tools = "supported".into();
+    }
     Some(ListedModel {
         id,
         name: row
@@ -435,6 +448,10 @@ pub fn error(error: rig::ProviderError) -> String {
         return "STALLED: 模型服务长时间未返回数据，请重试或调整连接超时".into();
     }
     let report = error.report();
+    report_error(&report)
+}
+
+pub(super) fn report_error(report: &rig::error::ErrorReport) -> String {
     let code = report.code.as_deref().unwrap_or("").to_lowercase();
     let (tag, message) =
         if report.is_context_overflow() || code.contains("context") || code.contains("token_limit")

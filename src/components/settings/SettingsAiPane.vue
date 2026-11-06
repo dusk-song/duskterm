@@ -70,8 +70,8 @@ function edit(service) {
   form.value = clone(service);
   form.value.adapter ||= form.value.protocol === 'anthropic_messages' ? 'anthropic' : 'generic';
   form.value.models = form.value.models.map(m => ({ ...createModel(m.modelId), ...m,
-    capabilities: { text: 'unknown', image: 'unknown', thinking: 'unknown', ...m.capabilities },
-    reportedCapabilities: { text: 'unknown', image: 'unknown', thinking: 'unknown', ...m.reportedCapabilities },
+    capabilities: { text: 'unknown', image: 'unknown', thinking: 'unknown', tools: 'unknown', ...m.capabilities },
+    reportedCapabilities: { text: 'unknown', image: 'unknown', thinking: 'unknown', tools: 'unknown', ...m.reportedCapabilities },
     thinkingOnParams: m.thinkingOnParams ? JSON.stringify(m.thinkingOnParams, null, 2) : '',
     thinkingOffParams: m.thinkingOffParams ? JSON.stringify(m.thinkingOffParams, null, 2) : '',
   }));
@@ -162,7 +162,7 @@ function setEnabled(model, enabled) {
   markDirty();
 }
 function clearModelMetadata(model) {
-  model.reportedCapabilities = { text: 'unknown', image: 'unknown', thinking: 'unknown' };
+  model.reportedCapabilities = { text: 'unknown', image: 'unknown', thinking: 'unknown', tools: 'unknown' };
   model.maxOutputLimit = null;
   model.contextWindow = null;
   model.reportedContextWindow = null;
@@ -177,7 +177,7 @@ async function back() {
 }
 function clearReportedMetadata() {
   form.value.models.forEach(m => {
-    m.reportedCapabilities = { text: 'unknown', image: 'unknown', thinking: 'unknown' };
+    m.reportedCapabilities = { text: 'unknown', image: 'unknown', thinking: 'unknown', tools: 'unknown' };
     m.reportedContextWindow = null; m.reportedMaxInputTokens = null; m.maxOutputLimit = null;
   });
 }
@@ -186,10 +186,10 @@ function changeProtocol() {
   form.value.adapter = form.value.protocol === 'anthropic_messages' ? 'anthropic' : 'generic';
   form.value.models.forEach(m => { m.adapterOverride = null; m.thinkingFormat = ''; }); markDirty();
 }
-function changeModelAdapter(model, value) { model.reportedCapabilities = { text: 'unknown', image: 'unknown', thinking: 'unknown' }; model.reportedContextWindow = null; model.reportedMaxInputTokens = null; model.maxOutputLimit = null; model.adapterOverride = value || null; model.thinkingFormat = ''; model.reasoningEffort = null; markDirty(); }
+function changeModelAdapter(model, value) { model.reportedCapabilities = { text: 'unknown', image: 'unknown', thinking: 'unknown', tools: 'unknown' }; model.reportedContextWindow = null; model.reportedMaxInputTokens = null; model.maxOutputLimit = null; model.adapterOverride = value || null; model.thinkingFormat = ''; model.reasoningEffort = null; markDirty(); }
 function changeServiceAdapter() { clearReportedMetadata(); form.value.models.forEach(m => { if (!m.adapterOverride) { m.thinkingFormat = ''; m.reasoningEffort = null; } }); markDirty(); }
 function capabilityLabels(model) {
-  return [['text','文本'],['image','图片'],['thinking','思考']].map(([key,label]) => ({ key, label, ...capability(model,key,catalog.value[model.id]?.capabilities) }));
+  return [['text','文本'],['image','图片'],['thinking','思考'],['tools','工具']].map(([key,label]) => ({ key, label, ...capability(model,key,catalog.value[model.id]?.capabilities) }));
 }
 onMounted(() => run('load', () => store.loadSettings()));
 defineExpose({ save, isDirty: () => dirty.value, isBusy: () => !!busy.value });
@@ -228,7 +228,7 @@ defineExpose({ save, isDirty: () => dirty.value, isBusy: () => !!busy.value });
             <div v-if="model.thinkingMode === 'enabled' && budgetFor(model)" class="setting-row"><span class="setting-label">思考预算</span><Input v-model="model.reasoningBudget" size="sm" inputmode="numeric" :placeholder="String(budgetFor(model))" aria-label="思考预算" /></div>
             <details class="advanced-section model-advanced"><summary><ChevronRight :size="13" />模型能力与兼容设置</summary>
               <div class="setting-row"><span class="setting-label">接口适配</span><SettingsSelect :model-value="model.adapterOverride || (form.protocol === 'openai_chat' && model.thinkingFormat ? effectiveAdapter(form, model) : null)" :options="modelProfiles(model)" aria-label="模型接口适配覆盖" @update:model-value="value => changeModelAdapter(model, value)" /></div>
-              <div v-for="[key, label] in [['text','文本'],['image','图片'],['thinking','思考']]" :key="key" class="setting-row"><span class="setting-label">{{ label }}能力</span><SettingsSelect v-model="model.capabilities[key]" :options="capabilityOptions" :aria-label="`${label}能力`" @update:model-value="markDirty" /></div>
+              <div v-for="[key, label] in [['text','文本'],['image','图片'],['thinking','思考'],['tools','工具']]" :key="key" class="setting-row"><span class="setting-label">{{ label }}能力</span><SettingsSelect v-model="model.capabilities[key]" :options="capabilityOptions" :aria-label="`${label}能力`" @update:model-value="markDirty" /></div>
               <div v-if="model.thinkingMode === 'enabled' && !effortsFor(model).length && profileFor(model)?.effort?.length" class="setting-row"><span class="setting-label">思考强度</span><SettingsSelect v-model="model.reasoningEffort" :options="advancedEffortOptions(model)" aria-label="自定义模型思考强度" @update:model-value="markDirty" /></div>
               <template v-if="effectiveAdapter(form, model) === 'custom'"><label class="json-label">开启思考参数<textarea v-model="model.thinkingOnParams" rows="3" spellcheck="false" placeholder='{"thinking":{"type":"enabled"}}' /></label><label class="json-label">关闭思考参数<textarea v-model="model.thinkingOffParams" rows="3" spellcheck="false" placeholder='{"thinking":{"type":"disabled"}}' /></label></template>
             </details>

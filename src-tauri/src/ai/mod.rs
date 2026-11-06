@@ -1,9 +1,13 @@
 mod call_log;
 mod compatibility;
 mod config;
+mod diagnosis;
+mod exec_access;
 mod provider;
+mod read_access;
 mod runtime;
 mod storage;
+mod tools;
 mod types;
 
 use std::sync::{Arc, Mutex};
@@ -18,6 +22,10 @@ pub struct AiState {
     io_gate: Arc<tokio::sync::Semaphore>,
     active: Arc<Mutex<Option<Active>>>,
     call_log: Arc<call_log::CallLog>,
+    read_grants: read_access::Grants,
+    read_epoch: Arc<std::sync::atomic::AtomicU64>,
+    exec_grants: exec_access::Grants,
+    approvals: exec_access::Approvals,
 }
 struct Active {
     request_id: String,
@@ -33,6 +41,10 @@ impl AiState {
             io_gate: Arc::new(tokio::sync::Semaphore::new(1)),
             active: Arc::new(Mutex::new(None)),
             call_log: Arc::new(call_log::CallLog::new(path)),
+            read_grants: Default::default(),
+            read_epoch: Default::default(),
+            exec_grants: Default::default(),
+            approvals: Default::default(),
         }
     }
     fn with_db<T>(
@@ -109,6 +121,17 @@ impl AiState {
     }
 
     pub fn cancel_all(&self) {
+        self.read_epoch
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let Ok(mut grants) = self.exec_grants.lock() {
+            grants.clear();
+        }
+        if let Ok(mut approvals) = self.approvals.lock() {
+            approvals.clear();
+        }
+        if let Ok(mut grants) = self.read_grants.lock() {
+            grants.clear();
+        }
         if let Ok(active) = self.active.lock() {
             if let Some(active) = &*active {
                 let _ = active.cancel.send(true);
@@ -164,7 +187,7 @@ pub fn ai_model_catalog(models: Vec<CatalogQuery>) -> Result<serde_json::Value, 
     for query in models {
         if let Some(spec) = compatibility::model_spec(&query.adapter, &query.model_id) {
             let state = |flag| if flag { "supported" } else { "unsupported" };
-            result.insert(query.id,serde_json::json!({"capabilities":{"text":state(spec.input.text),"image":state(spec.input.image),"thinking":state(spec.reasoning.supported())},
+            result.insert(query.id,serde_json::json!({"capabilities":{"text":state(spec.input.text),"image":state(spec.input.image),"thinking":state(spec.reasoning.supported()),"tools":state(spec.tools)},
                 "efforts":spec.reasoning.levels().unwrap_or_default().iter().map(|e|e.as_str()).collect::<Vec<_>>(),
                 "budgetMin":spec.reasoning.budget().map(|b|*b.start()),"budgetMax":spec.reasoning.budget().map(|b|*b.end()),
                 "canDisable":spec.reasoning.can_disable(),"maxInputTokens":spec.input_limit(),"contextWindow":spec.context_window,"maxOutputTokens":spec.max_output_tokens}));
@@ -630,8 +653,74 @@ pub async fn ai_cancel(state: State<'_, AiState>, request_id: String) -> Result<
 #[tauri::command]
 pub async fn ai_send(
     state: State<'_, AiState>,
+    app: tauri::AppHandle,
     request: SendRequest,
     channel: Channel<AiEvent>,
 ) -> Result<Conversation, String> {
-    runtime::send(state.inner().clone(), request, channel).await
+    diagnosis::send(state.inner().clone(), app, request, channel).await
+}
+
+#[tauri::command]
+pub async fn ai_prepare_read_scope(
+    state: State<'_, AiState>,
+    app: tauri::AppHandle,
+    target: String,
+    path: String,
+    model_id: String,
+) -> Result<read_access::PreparedRead, String> {
+    read_access::prepare(state.inner(), app, target, path, model_id).await
+}
+
+#[tauri::command]
+pub fn ai_revoke_read_scope(state: State<'_, AiState>, token: String) -> Result<(), String> {
+    state
+        .read_grants
+        .lock()
+        .map_err(|_| "读取授权状态不可用")?
+        .remove(&token);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn ai_suspend(state: State<'_, AiState>) {
+    state.cancel_all();
+}
+
+#[tauri::command]
+pub async fn ai_prepare_exec_scope(
+    state: State<'_, AiState>,
+    app: tauri::AppHandle,
+    target: String,
+    model_id: String,
+) -> Result<exec_access::PreparedExec, String> {
+    exec_access::prepare(state.inner(), app, target, model_id).await
+}
+
+#[tauri::command]
+pub fn ai_revoke_exec_scope(state: State<'_, AiState>, token: String) -> Result<(), String> {
+    state
+        .exec_grants
+        .lock()
+        .map_err(|_| "命令提议授权状态不可用")?
+        .remove(&token);
+    Ok(())
+}
+
+#[tauri::command]
+pub fn ai_respond_tool_approval(
+    state: State<'_, AiState>,
+    request_id: String,
+    message_id: String,
+    call_id: String,
+    approval_id: String,
+    approved: bool,
+) -> Result<(), String> {
+    exec_access::decide(
+        state.inner(),
+        &request_id,
+        &message_id,
+        &call_id,
+        &approval_id,
+        approved,
+    )
 }

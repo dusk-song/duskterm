@@ -22,7 +22,7 @@ impl Database {
         let version: i64 = connection
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .map_err(db_error)?;
-        if version > 3 {
+        if version > 6 {
             return Err("AI 数据库版本高于当前程序支持的版本".into());
         }
         if version == 0 {
@@ -32,10 +32,10 @@ impl Database {
                 CREATE INDEX conversations_recent ON conversations(updated_at DESC);
                 PRAGMA user_version=1; COMMIT;").map_err(db_error)?;
         }
-        if version > 0 && version < 3 && path != Path::new(":memory:") {
+        if version > 0 && version < 6 && path != Path::new(":memory:") {
             // VACUUM INTO includes committed WAL contents. A file copy of ai.db
             // alone is not a consistent rollback snapshot while WAL is in use.
-            let backup = path.with_extension(format!("pre-v3-{}.db", id()));
+            let backup = path.with_extension(format!("pre-v6-{}.db", id()));
             connection
                 .execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])
                 .map_err(|_| "AI 数据库升级前备份失败，请检查磁盘空间和目录权限")?;
@@ -52,6 +52,12 @@ impl Database {
                     FROM conversations WHERE json_extract(data,'$.messages[#-1].status')='streaming';
                 PRAGMA user_version=3; COMMIT;").map_err(db_error)?;
         }
+        if version < 6 {
+            // Older executables must not erase approvals and uncertain outcomes.
+            connection
+                .pragma_update(None, "user_version", 6)
+                .map_err(db_error)?;
+        }
         let db = Self { connection };
         // Only unfinished generations need decoding and recovery at startup.
         let ids: Vec<String> = db
@@ -67,7 +73,20 @@ impl Database {
             let mut changed = false;
             for m in &mut c.messages {
                 if m.status == "streaming" {
+                    m.tool_history.clear();
+                    for tool in &mut m.tools {
+                        super::types::interrupt_tool(tool, "应用退出导致操作中断");
+                        if tool.execution.is_none() && tool.status == "stopped" {
+                            tool.status = "interrupted".into();
+                        }
+                    }
                     m.status = "interrupted".into();
+                    if let Some(task) = &mut m.task {
+                        task.status = "interrupted".into();
+                        if m.tools.iter().any(|tool| tool.status == "unknown") {
+                            task.evidence_status = "unknown_remote_state".into();
+                        }
+                    }
                     m.error = Some("上次生成因应用退出而中断".into());
                     changed = true;
                 }

@@ -46,6 +46,7 @@ import { useTheme } from './composables/useTheme';
 import { useWindowInteraction } from './composables/useWindowInteraction';
 import { createSessionBooleanState, resolveFocusedSessionId } from './utils/sftpPanelState';
 import { useAiStore } from './stores/ai';
+import { useSecurityStore } from './stores/security';
 import { useTransfersStore } from './stores/transfers';
 import { useSshStore } from './stores/ssh';
 import { invokeCommand, listenEvent } from './utils/ipc';
@@ -65,6 +66,10 @@ const createOpenedMountState = (visible) => {
 const sshStore = useSshStore();
 const transferStore = useTransfersStore();
 const aiStore = useAiStore();
+const securityStore = useSecurityStore();
+watch(() => securityStore.isLocked, locked => {
+  if (locked) void aiStore.suspend().catch(error => { aiStore.error = String(error); });
+}, { flush: 'sync' });
 const { theme, setTheme } = useTheme();
 
 // Native menu handling removed — CustomTitlebar handles menus directly
@@ -132,6 +137,7 @@ onApp('app:toggle-tool-sftp', () => {
 });
 function toggleAiPanel() { activeToolPanel.value = activeToolPanel.value === 'ai' ? null : 'ai'; }
 onApp('app:toggle-tool-ai', toggleAiPanel);
+onApp('app:open-tool-ai', () => { activeToolPanel.value = 'ai'; });
 onApp('app:toggle-tool-knowledge', () => {
   toggleCommandKnowledgePanel();
 });
@@ -1403,7 +1409,7 @@ useWindowInteraction({ onResize: measureWorkspace });
 
         <TiledPanel v-show="hasWorkspaceRightPanel" class="workspace-panel workspace-panel-tool" :dense="true"
           :padded="false" :aria-label="showActiveSftpPanel ? 'SFTP 文件管理' : showAiPanel ? '智能助手' : '命令知识库'">
-            <AiPanel v-if="isAiMounted" v-show="showAiPanel" :visible="showAiPanel" :maximized="aiMaximized" @maximize="aiMaximized = !aiMaximized" @close="activeToolPanel = null" />
+            <AiPanel v-if="isAiMounted" v-show="showAiPanel" :visible="showAiPanel" :terminal-session-id="focusedTerminalRuntimeId" :maximized="aiMaximized" @maximize="aiMaximized = !aiMaximized" @close="activeToolPanel = null" />
             <FileManager v-if="isSftpMounted" v-show="showActiveSftpPanel"
               :sessionId="activeSftpWorkspaceId" :follow-session-id="focusedTerminalRuntimeId"
               :visible="showActiveSftpPanel" @close="showSftpPanel = false" />

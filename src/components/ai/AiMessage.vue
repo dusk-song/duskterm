@@ -6,12 +6,20 @@ import IconButton from '@/components/common/IconButton.vue';
 import { formatTokens } from '@/utils/ai';
 import { toast } from '@/composables/useToast';
 import AiMarkdown from './AiMarkdown.vue';
+import AiToolSteps from './AiToolSteps.vue';
+import AiDiagnosticTask from './AiDiagnosticTask.vue';
 
-const props = defineProps({ message: Object, canRegenerate: Boolean, busy: Boolean });
+const props = defineProps({ message: Object, canRegenerate: Boolean, busy: Boolean, requestId: String });
 // The first body chunk ends the thinking phase; streaming continues for the answer.
 const isThinking = computed(() => props.message.status === 'streaming'
-  && !!props.message.reasoning && !props.message.content);
+  && !!props.message.reasoning && (props.message.phase ? props.message.phase === 'reasoning' : !props.message.content));
 const thinkingOpen = ref(false);
+const activity = computed(() => {
+  const tools=props.message.tools || [];
+  if (tools.some(tool=>tool.status==='waiting_approval')) return '等待你确认命令…';
+  if (tools.some(tool=>tool.name==='execute_ssh_command' && ['approved','running'].includes(tool.status))) return '正在处理命令…';
+  return '正在生成…';
+});
 const reasoningContent = ref(null);
 const followReasoning = ref(true);
 let reasoningFrame = null;
@@ -30,7 +38,7 @@ watch([() => props.message.id, isThinking], ([, thinking]) => {
 }, { immediate: true });
 watch([() => props.message.reasoning, thinkingOpen], scrollReasoning, { flush: 'post' });
 onBeforeUnmount(() => { if (reasoningFrame !== null) cancelAnimationFrame(reasoningFrame); });
-defineEmits(['regenerate', 'select']);
+defineEmits(['regenerate', 'select', 'analyze']);
 async function copy(text) {
   try { await navigator.clipboard.writeText(text); toast.success('已复制'); }
   catch { toast.error('复制失败，请手动选择文本'); }
@@ -40,14 +48,18 @@ async function copy(text) {
 <template>
   <article class="ai-message" :class="[message.role, { alternative: !message.active && message.role === 'assistant' }]">
     <div class="bubble">
+      <AiDiagnosticTask v-if="message.task" :task="message.task" :tools="message.tools" :model-label="message.actualModelId || message.modelId" :service-name="message.serviceName" :busy="busy" @analyze="$emit('analyze')" />
       <span v-if="message.role === 'assistant' && !message.active && message.status === 'completed'" class="version">历史版本</span>
       <details v-if="message.reasoning" class="thinking" :open="thinkingOpen">
         <summary @click.prevent="thinkingOpen = !thinkingOpen"><span v-if="isThinking" class="thinking-indicator" aria-hidden="true" />{{ isThinking ? '思考中…' : '思考过程' }}</summary>
         <pre ref="reasoningContent" @scroll="followReasoning = $event.target.scrollHeight - $event.target.scrollTop - $event.target.clientHeight < 24">{{ message.reasoning }}</pre>
       </details>
       <div v-if="message.role === 'user'" class="user-content">{{ message.content }}</div>
-      <AiMarkdown v-else :content="message.content" :streaming="message.status === 'streaming'" />
-      <p v-if="message.status === 'streaming' && !isThinking" role="status" class="muted">正在生成…</p>
+      <template v-else>
+        <AiToolSteps :tools="message.tools || []" :request-id="requestId" :message-id="message.id" />
+        <AiMarkdown :content="message.content" :streaming="message.status === 'streaming'" />
+      </template>
+      <p v-if="message.status === 'streaming' && !isThinking" role="status" class="muted">{{ activity }}</p>
       <p v-if="['stopped', 'interrupted', 'failed'].includes(message.status)" class="message-error">{{ message.error || '回答未完成，不参与后续上下文' }}</p>
     </div>
     <div class="actions">

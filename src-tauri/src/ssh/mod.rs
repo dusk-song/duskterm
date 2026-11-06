@@ -75,6 +75,7 @@ impl SshAppState {
 }
 
 pub type SharedSshSession = Arc<AsyncMutex<client::Handle<ClientHandler>>>;
+pub(crate) mod exec;
 pub type SharedSshSessionSlot = Arc<Mutex<Option<SharedSshSession>>>;
 type SharedChannelLifecycle = Arc<Mutex<channel_state::ChannelLifecycle>>;
 const SSH_INPUT_QUEUE_CAPACITY: usize = 256;
@@ -150,6 +151,12 @@ pub struct TerminalRuntimeHandle {
     input_line_ending: Option<String>,
     serial_command_tx: Option<SyncSender<SerialCommand>>,
     serial_file_send_active: Option<Arc<AtomicBool>>,
+}
+
+impl TerminalRuntimeHandle {
+    pub(crate) fn is_live(&self) -> bool {
+        self.channel_lifecycle.lock().is_ok_and(|state| state.can_write())
+    }
 }
 
 pub type SessionIoReceiver = Receiver<Vec<u8>>;

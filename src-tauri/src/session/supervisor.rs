@@ -139,6 +139,28 @@ impl SessionSupervisor {
             .ok_or_else(|| "Session runtime not found".to_string())
     }
 
+    // Queries reuse the authenticated root connection; never create or reconnect one.
+    pub(crate) fn ai_ssh_session(
+        &self,
+        session_id: &str,
+    ) -> Result<crate::ssh::SharedSshSessionSlot, String> {
+        let actor = self.get_actor(session_id)?;
+        let handles = actor.terminal_handles.lock().map_err(|_| "终端状态不可用")?;
+        let handle = handles
+            .get(session_id)
+            .filter(|handle| handle.is_live())
+            .ok_or("SSH 终端已关闭")?;
+        if handle
+            .shared_session
+            .lock()
+            .map_err(|_| "SSH 状态不可用")?
+            .is_none()
+        {
+            return Err("当前会话不是已连接的 SSH 会话".into());
+        }
+        Ok(handle.shared_session.clone())
+    }
+
     fn get_or_spawn_actor(&self, session_id: &str) -> SessionActorHandle {
         let pending_ssh_hostkey = self.ssh_hostkey_decision(session_id);
         let pending_sftp_hostkey = self.sftp_hostkey_decision(session_id);

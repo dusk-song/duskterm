@@ -1642,6 +1642,17 @@ async fn open_raw_sftp_subsystem_for_shared_session(
     configure_raw_transfer_session(raw).await
 }
 
+pub(crate) async fn open_ai_query_session(
+    slot: &crate::ssh::SharedSshSessionSlot,
+) -> Result<(RawSftpSession, u32), String> {
+    let session = open_raw_sftp_subsystem_for_shared_session(slot).await?;
+    let read_limit = session.max_read_len.unwrap_or(16_384).min(16_384);
+    let packet_limit = session
+        .max_packet_len
+        .map_or(read_limit, |limit| limit.saturating_sub(64));
+    Ok((session.raw, read_limit.min(packet_limit).max(1) as u32))
+}
+
 async fn configure_raw_transfer_session(
     mut raw: RawSftpSession,
 ) -> Result<RawTransferSftpSession, String> {

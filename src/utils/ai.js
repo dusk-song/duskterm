@@ -19,8 +19,8 @@ export function createModel(modelId = '') {
   return { id: crypto.randomUUID(), modelId, name: modelId, enabled: true,
     contextWindow: null, reportedContextWindow: null, reportedMaxInputTokens: null, maxOutputTokens: 262144, thinkingMode: 'default', thinkingFormat: '',
     adapterOverride: null, reasoningEffort: null, reasoningBudget: null, thinkingOnParams: null, thinkingOffParams: null,
-    capabilities: { text: 'unknown', image: 'unknown', thinking: 'unknown' },
-    reportedCapabilities: { text: 'unknown', image: 'unknown', thinking: 'unknown' }, maxOutputLimit: null };
+    capabilities: { text: 'unknown', image: 'unknown', thinking: 'unknown', tools: 'unknown' },
+    reportedCapabilities: { text: 'unknown', image: 'unknown', thinking: 'unknown', tools: 'unknown' }, maxOutputLimit: null };
 }
 
 export function modelOptions(settings, query = '') {

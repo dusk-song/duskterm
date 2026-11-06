@@ -48,6 +48,7 @@ pub struct Capabilities {
     pub text: String,
     pub image: String,
     pub thinking: String,
+    pub tools: String,
 }
 impl Default for Capabilities {
     fn default() -> Self {
@@ -55,6 +56,7 @@ impl Default for Capabilities {
             text: "unknown".into(),
             image: "unknown".into(),
             thinking: "unknown".into(),
+            tools: "unknown".into(),
         }
     }
 }
@@ -161,6 +163,62 @@ pub struct Message {
     pub usage: Usage,
     pub elapsed_ms: u64,
     pub error: Option<String>,
+    #[serde(default)]
+    pub tools: Vec<ToolRecord>,
+    // Canonical Rig call/result pairs, retained only for completed answers.
+    #[serde(default)]
+    pub tool_history: Vec<rig::message::Message>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub task: Option<super::diagnosis::Task>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolRecord {
+    pub call_id: String,
+    pub name: String,
+    pub arguments: serde_json::Value,
+    pub target: String,
+    pub root: String,
+    pub status: String,
+    pub started_at: u64,
+    pub elapsed_ms: u64,
+    pub result: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_expires_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub execution: Option<Execution>,
+}
+
+pub(crate) use crate::ssh::exec::Execution;
+
+pub(super) fn interrupt_tool(tool: &mut ToolRecord, reason: &str) {
+    if !["running", "waiting_approval", "approved"].contains(&tool.status.as_str()) {
+        return;
+    }
+    tool.approval_id = None;
+    tool.approval_expires_at = None;
+    tool.elapsed_ms = now().saturating_sub(tool.started_at);
+    if let Some(execution) = &mut tool.execution {
+        if ["dispatching", "running"].contains(&execution.outcome.as_str()) {
+            execution.outcome = "unknown".into();
+            execution.end_reason = "interrupted".into();
+            execution.output_complete = false;
+            tool.status = "unknown".into();
+            tool.result = Some(format!(
+                "{reason}；已请求关闭执行通道，无法确认远端进程是否结束，请先核实状态，不自动重试"
+            ));
+        } else {
+            tool.status = "interrupted".into();
+            execution.outcome = "not_started".into();
+            tool.result = Some(format!("{reason}；命令未派发，原确认已失效"));
+        }
+    } else {
+        tool.status = "stopped".into();
+        tool.result = Some(format!("{reason}；未获取可用查询结果"));
+    }
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -233,6 +291,14 @@ pub struct SendRequest {
     pub content: String,
     pub regenerate_id: Option<String>,
     pub confirmed_service_id: String,
+    #[serde(default)]
+    pub read_grant: Option<String>,
+    #[serde(default)]
+    pub exec_grant: Option<String>,
+    #[serde(default)]
+    pub diagnosis_target: Option<super::diagnosis::Target>,
+    #[serde(default)]
+    pub analyze_message_id: Option<String>,
 }
 
 #[derive(Clone, Serialize)]
@@ -245,6 +311,8 @@ pub struct AiEvent {
     pub kind: String,
     pub text: Option<String>,
     pub conversation: Option<Conversation>,
+    pub tool: Option<ToolRecord>,
+    pub task: Option<super::diagnosis::Task>,
 }
 
 pub fn now() -> u64 {
@@ -273,6 +341,9 @@ pub fn new_message(role: &str, content: String) -> Message {
         usage: Usage::default(),
         elapsed_ms: 0,
         error: None,
+        tools: Vec::new(),
+        tool_history: Vec::new(),
+        task: None,
     }
 }
 

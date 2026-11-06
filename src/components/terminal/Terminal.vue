@@ -16,6 +16,10 @@ import { toast } from '@/composables/useToast';
 import { open, save } from '@tauri-apps/plugin-dialog';
 import { FitAddon } from '@xterm/addon-fit';
 import { describeLargeTerminalPaste } from '@/utils/terminalPaste';
+import { buildTerminalContext, supportsTerminalTextContext } from '@/utils/aiContext';
+import { captureTerminalSnapshot } from '@/utils/terminalContextSnapshot';
+import { registerTerminalContextReader } from '@/utils/terminalContextReaders';
+import { useAiStore } from '@/stores/ai';
 import { TerminalSearch } from '@/utils/terminalSearch';
 import { attachTerminalOutput, createTerminalOutput } from '@/utils/terminalOutput';
 import { Unicode11Addon } from '@xterm/addon-unicode11';
@@ -64,6 +68,14 @@ const props = defineProps({
 const terminalWrapperRef = ref(null);
 const terminalContainer = ref(null);
 const contextMenuOpen = ref(false);
+const hasAiSelection = ref(false);
+const aiImporting = ref(false);
+let aiCaptureController;
+let unregisterContextReader;
+let aiMenuSelected = false;
+function handleContextMenuCloseFocus(event) {
+  if (aiMenuSelected) { event.preventDefault(); aiMenuSelected = false; }
+}
 const reconnectingAfterDisconnect = ref(false);
 const reconnectPromptShown = ref(false);
 const sshStore = useSshStore();
@@ -197,6 +209,52 @@ const currentSession = computed(() => sshStore.sessions.find(s => s.id === props
 const sessionName = computed(() => currentSession.value?.name || 'Unknown');
 const isSerialSession = computed(() => String(currentSession.value?.config?.protocol || '').toLowerCase() === 'serial');
 const isLocalSession = computed(() => String(currentSession.value?.config?.protocol || '').toLowerCase() === 'local');
+const canShareContext = computed(() => !!currentSession.value && supportsTerminalTextContext(currentSession.value.config?.protocol));
+function updateContextMenu(open) {
+  contextMenuOpen.value = open;
+  hasAiSelection.value = !!term?.hasSelection();
+}
+function terminalContextSource() {
+  const source = currentSession.value;
+  return { id: props.sessionId, name: source?.name, protocol: source?.config?.protocol,
+    shell: source?.config?.local_shell_name || source?.config?.local_profile };
+}
+async function importTerminalContext(prepare) {
+  if (!canShareContext.value || aiImporting.value || securityStore.isLocked) return;
+  const origin = document.activeElement;
+  const source = terminalContextSource();
+  const targetTerm = term;
+  const controller = new AbortController();
+  aiCaptureController = controller;
+  aiImporting.value = true;
+  try {
+    const ai = useAiStore();
+    window.dispatchEvent(new CustomEvent('app:open-tool-ai'));
+    await ai.importTerminalText(async () => {
+      // Yield once before a bounded atomic read so Cancel/navigation can run.
+      await new Promise(resolve => setTimeout(resolve, 0));
+      if (controller.signal.aborted || targetTerm !== term) throw new DOMException('带入已取消', 'AbortError');
+      return prepare(targetTerm, source);
+    }, origin, controller.signal);
+    toast.success('已带入输入框，可编辑后发送');
+  } catch (error) { if (error && error.name !== 'AbortError') toast.error(String(error.message || error)); }
+  finally { aiImporting.value = false; aiCaptureController = null; }
+}
+function bringSelectionToAi() {
+  try {
+    const context = buildTerminalContext(term?.getSelection(), terminalContextSource());
+    return importTerminalContext(() => context);
+  } catch (error) { toast.error(String(error.message || error)); }
+}
+function bringOutputToAi(mode, lines = 200) {
+  return importTerminalContext((terminal, source) => {
+    const snapshot = captureTerminalSnapshot(terminal, { mode, lines });
+    return buildTerminalContext(snapshot.text, source, snapshot.capturedAt, snapshot.range);
+  });
+}
+watch(() => [props.active, props.sessionId, currentSession.value?.status, currentSession.value?.config?.protocol, securityStore.isLocked], () => {
+  aiCaptureController?.abort();
+});
 const serialLocalEchoEnabled = computed(() => currentSession.value?.config?.serial_local_echo === true);
 const serialReceiveLineEnding = computed(() => String(
   currentSession.value?.config?.serial_receive_line_ending || 'none'
@@ -2164,7 +2222,12 @@ watch(() => props.active, (active) => {
 
 // --- Context Menu ---
 const handleMenuSelect = async (key) => {
+  if (key.startsWith('ai-')) aiMenuSelected = true;
   switch (key) {
+    case 'ai-text': await bringSelectionToAi(); break;
+    case 'ai-visible': await bringOutputToAi('visible'); break;
+    case 'ai-recent': await bringOutputToAi('recent'); break;
+    case 'ai-recent-500': await bringOutputToAi('recent', 500); break;
     case 'copy': await handleCopy(); break;
     case 'paste': await handlePaste(); break;
     case 'select-all': handleSelectAll(); break;
@@ -2177,7 +2240,7 @@ const handleMenuSelect = async (key) => {
     case 'serial-save-log': await saveSerialIoLog(); break;
   }
   // Re-focus terminal after menu closes (except find which opens search bar)
-  if (key !== 'find') {
+  if (key !== 'find' && !key.startsWith('ai-')) {
     requestAnimationFrame(() => { term?.focus(); });
   }
 };
@@ -2790,6 +2853,18 @@ onMounted(async () => {
     });
   }
 
+  unregisterContextReader = registerTerminalContextReader(props.sessionId, async ({ mode, lines, signal }) => {
+    const targetTerm = term;
+    const source = terminalContextSource();
+    const status = currentSession.value?.status;
+    await new Promise(resolve => setTimeout(resolve, 0));
+    if (signal?.aborted) throw new DOMException('带入已取消', 'AbortError');
+    if (terminalDisposed || !props.active || targetTerm !== term || status !== currentSession.value?.status
+      || !canShareContext.value || securityStore.isLocked) throw new Error('活动终端已变化，请重新采集');
+    if (mode === 'selection') return buildTerminalContext(targetTerm.getSelection(), source);
+    const snapshot = captureTerminalSnapshot(targetTerm, { mode, lines });
+    return buildTerminalContext(snapshot.text, source, snapshot.capturedAt, snapshot.range);
+  });
   window.addEventListener('keydown', handleKeydown);
   quickCommandHandler = handleKnowledgeCommandEvent;
   window.addEventListener('command-knowledge-insert', quickCommandHandler);
@@ -2823,6 +2898,8 @@ onMounted(async () => {
 });
 
 onUnmounted(() => {
+  aiCaptureController?.abort();
+  unregisterContextReader?.();
   terminalDisposed = true;
   pendingLargePaste.value = null;
   processTerminalInput = null;
@@ -2952,12 +3029,18 @@ onUnmounted(() => {
         <div v-if="terminalTransferOwned" class="terminal-transfer-overlay">
           ZMODEM 传输中 · 终端输入已暂停
         </div>
-      <ContextMenu @update:open="(v) => contextMenuOpen = v">
+      <ContextMenu @update:open="updateContextMenu">
         <ContextMenuTrigger class="terminal-container-wrap">
           <div ref="terminalContainer" class="terminal-container" @mousedown="focusTerminalSurface"
             @contextmenu.capture="handleTerminalContextMenu"></div>
         </ContextMenuTrigger>
-        <ContextMenuContent>
+        <ContextMenuContent @close-auto-focus="handleContextMenuCloseFocus">
+          <ContextMenuItem v-if="canShareContext" :disabled="!hasAiSelection || aiImporting" @select="handleMenuSelect('ai-text')">选区带入智能助手</ContextMenuItem>
+          <template v-if="canShareContext">
+            <ContextMenuItem :disabled="aiImporting" @select="handleMenuSelect('ai-visible')">带入当前可见区域</ContextMenuItem>
+            <ContextMenuItem :disabled="aiImporting" @select="handleMenuSelect('ai-recent')">带入最近 200 行</ContextMenuItem>
+            <ContextMenuItem :disabled="aiImporting" @select="handleMenuSelect('ai-recent-500')">带入最近 500 行</ContextMenuItem>
+          </template>
           <ContextMenuItem @select="handleMenuSelect('copy')">复制</ContextMenuItem>
           <ContextMenuItem @select="handleMenuSelect('paste')">粘贴</ContextMenuItem>
           <ContextMenuItem @select="handleMenuSelect('select-all')">全选</ContextMenuItem>
