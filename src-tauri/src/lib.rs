@@ -109,6 +109,7 @@ pub fn run() {
             ai::ai_select_answer,
             ai::ai_cancel,
             ai::ai_send,
+            ai::ai_list_skills,
             ai::ai_prepare_read_scope,
             ai::ai_prepare_exec_scope,
             ai::ai_revoke_exec_scope,

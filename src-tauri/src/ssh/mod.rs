@@ -144,6 +144,8 @@ pub struct TerminalRuntimeHandle {
     pub window_size_tx: UnboundedSender<(u32, u32)>,
     pub close_tx: UnboundedSender<()>,
     pub shared_session: SharedSshSessionSlot,
+    pub(crate) local_cmd_directory: Option<std::path::PathBuf>,
+    pub(crate) ssh_diagnostic_identity: Option<String>,
     pub(crate) transfer_control_tx: Option<UnboundedSender<TerminalTransferControl>>,
     pub(crate) transfer_owned: Arc<AtomicBool>,
     channel_lifecycle: SharedChannelLifecycle,
@@ -182,6 +184,8 @@ pub(crate) fn create_terminal_runtime_channels() -> (
             window_size_tx,
             close_tx,
             shared_session,
+            local_cmd_directory: None,
+            ssh_diagnostic_identity: None,
             transfer_control_tx: None,
             transfer_owned: Arc::new(AtomicBool::new(false)),
             channel_lifecycle,
@@ -2042,6 +2046,15 @@ fn extract_jump_host(config: &SshConfig) -> Option<JumpHostConfig> {
     })
 }
 
+fn diagnostic_identity(config: &SshConfig) -> String {
+    use sha2::{Digest, Sha256};
+    let jump = sanitize_optional(config.jump_host.clone())
+        .zip(sanitize_optional(config.jump_username.clone()))
+        .map(|(host, user)| (host, config.jump_port.unwrap_or(22), user));
+    let endpoint = serde_json::json!([config.host, config.port, config.username, jump]);
+    format!("{:x}", Sha256::digest(endpoint.to_string()))
+}
+
 async fn connect_handle<H, A>(
     config: Arc<client::Config>,
     addrs: A,
@@ -2729,6 +2742,8 @@ pub async fn connect_ssh_legacy(
         window_size_tx: resize_tx,
         close_tx,
         shared_session: shared_session_slot.clone(),
+        local_cmd_directory: None,
+        ssh_diagnostic_identity: supports_terminal_transfer.then(|| diagnostic_identity(&config)),
         transfer_control_tx: supports_terminal_transfer.then_some(transfer_control_tx),
         transfer_owned: transfer_owned.clone(),
         channel_lifecycle: channel_lifecycle.clone(),
@@ -2834,6 +2849,8 @@ pub async fn connect_ssh_runtime(
         window_size_tx: resize_tx,
         close_tx,
         shared_session: shared_session_slot.clone(),
+        local_cmd_directory: None,
+        ssh_diagnostic_identity: supports_terminal_transfer.then(|| diagnostic_identity(&config)),
         transfer_control_tx: supports_terminal_transfer.then_some(transfer_control_tx),
         transfer_owned: transfer_owned.clone(),
         channel_lifecycle: channel_lifecycle.clone(),
@@ -3134,6 +3151,8 @@ pub async fn open_shared_shell_channel_runtime(
         window_size_tx: resize_tx,
         close_tx,
         shared_session: root_handle.shared_session.clone(),
+        local_cmd_directory: None,
+        ssh_diagnostic_identity: None,
         transfer_control_tx: Some(transfer_control_tx),
         transfer_owned: transfer_owned.clone(),
         channel_lifecycle: channel_lifecycle.clone(),

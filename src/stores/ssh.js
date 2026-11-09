@@ -125,6 +125,7 @@ export const useSshStore = defineStore('ssh', () => {
     if (!session) return;
     session.status = status;
     if (status !== 'connected') {
+      if (session.cmdCwd) session.cmdCwd = '';
       markSftpDisconnected(id);
     }
   }
@@ -410,7 +411,7 @@ export const useSshStore = defineStore('ssh', () => {
     }
 
     try {
-      session.status = 'connecting';
+      setSessionStatus(sessionId, 'connecting');
       if (session.isSplitChild && session.workspaceSessionId) {
         const root = getSession(session.workspaceSessionId);
         await invokeCommand('close_ssh_shell_channel', {

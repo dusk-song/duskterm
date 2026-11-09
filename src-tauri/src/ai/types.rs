@@ -170,6 +170,8 @@ pub struct Message {
     pub tool_history: Vec<rig::message::Message>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub task: Option<super::diagnosis::Task>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deployment: Option<super::deployment::Preview>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -207,9 +209,14 @@ pub(super) fn interrupt_tool(tool: &mut ToolRecord, reason: &str) {
             execution.end_reason = "interrupted".into();
             execution.output_complete = false;
             tool.status = "unknown".into();
-            tool.result = Some(format!(
-                "{reason}；已请求关闭执行通道，无法确认远端进程是否结束，请先核实状态，不自动重试"
-            ));
+            let local = tool.name == super::tools::CMD_COMMAND
+                || tool.arguments.pointer("/skill/targetKind").and_then(serde_json::Value::as_str) == Some("cmd");
+            let outcome = if local {
+                "本地命令结果未知，请先核实状态，不自动重试"
+            } else {
+                "已请求关闭执行通道，无法确认远端进程是否结束，请先核实状态，不自动重试"
+            };
+            tool.result = Some(format!("{reason}；{outcome}"));
         } else {
             tool.status = "interrupted".into();
             execution.outcome = "not_started".into();
@@ -296,9 +303,17 @@ pub struct SendRequest {
     #[serde(default)]
     pub exec_grant: Option<String>,
     #[serde(default)]
-    pub diagnosis_target: Option<super::diagnosis::Target>,
+    pub diagnosis_target: Option<super::diagnosis::RequestTarget>,
+    #[serde(default)]
+    pub continue_diagnosis: Option<super::diagnosis::ContinueDiagnosis>,
+    #[serde(default)]
+    pub cmd_directory: Option<String>,
     #[serde(default)]
     pub analyze_message_id: Option<String>,
+    #[serde(default)]
+    pub deployment_target: Option<super::diagnosis::Target>,
+    #[serde(default)]
+    pub skill: Option<super::skill::Selection>,
 }
 
 #[derive(Clone, Serialize)]
@@ -344,6 +359,7 @@ pub fn new_message(role: &str, content: String) -> Message {
         tools: Vec::new(),
         tool_history: Vec::new(),
         task: None,
+        deployment: None,
     }
 }
 

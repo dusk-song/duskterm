@@ -132,7 +132,7 @@ pub(super) async fn prepare(
         serde_json::to_string(&(service, model)).map_err(|_| "无法校验模型配置".into())
     })).await?;
     let path = normalize(path.trim())?;
-    let slot = app.state::<SessionSupervisor>().ai_ssh_session(&target)?;
+    let (slot, _) = app.state::<SessionSupervisor>().ai_ssh_session(&target)?;
     let (raw, max_read_len, root, directory) =
         tokio::time::timeout(Duration::from_secs(10), async {
             let (raw, max_read_len) = crate::sftp::open_ai_query_session(&slot)
@@ -150,7 +150,7 @@ pub(super) async fn prepare(
         .map_err(|_| "检查远程范围超时")??;
     let live_target = target.clone();
     let live = Arc::new(move || {
-        let current = app
+        let (current, _) = app
             .state::<SessionSupervisor>()
             .ai_ssh_session(&live_target)?;
         if !Arc::ptr_eq(&current, &slot) {

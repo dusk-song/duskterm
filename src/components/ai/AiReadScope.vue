@@ -15,9 +15,11 @@ const emit = defineEmits(['change', 'focus', 'diagnose']);
 const security = useSecurityStore();
 const open = ref(false), path = ref(''), prepared = ref(null), enabled = ref(null), checking = ref(false), error = ref('');
 const allowRead = ref(true), allowExec = ref(false);
-const target = computed(() => props.session?.workspaceSessionId || props.session?.id || '');
+const isSsh = computed(() => ['', 'ssh'].includes(props.session?.config?.protocol || ''));
+const isCmd = computed(() => props.session?.config?.protocol === 'local' && props.session.config.local_profile === 'cmd');
+const target = computed(() => (isCmd.value ? props.session?.id : props.session?.workspaceSessionId || props.session?.id) || '');
 const available = computed(() => !security.isLocked && !!target.value && props.session?.status === 'connected'
-  && ['', 'ssh'].includes(props.session?.config?.protocol || '') && !!props.modelId);
+  && (isSsh.value || isCmd.value) && !!props.modelId);
 let revision = 0, timer, disposed = false;
 function revoke(scope) {
   if (scope?.token) void aiInvoke('ai_revoke_read_scope', { token: scope.token }).catch(() => {});
@@ -34,7 +36,7 @@ watch(path, () => { revision++; revoke(prepared.value); prepared.value = null; e
 watch([allowRead, allowExec], () => { revision++; revoke(prepared.value); prepared.value = null; error.value = ''; });
 watch(open, value => { if (!value) { revision++; revoke(prepared.value); prepared.value = null; } });
 async function check() {
-  if (!available.value || checking.value || (!allowRead.value && !allowExec.value) || (allowRead.value && !path.value.trim())) return;
+  if (!available.value || !isSsh.value || checking.value || (!allowRead.value && !allowExec.value) || (allowRead.value && !path.value.trim())) return;
   const current = ++revision;
   checking.value = true; error.value = '';
   revoke(prepared.value); prepared.value = null;
@@ -60,9 +62,25 @@ function enable() {
   emit('change', enabled.value); open.value = false;
   clearTimeout(timer); timer = setTimeout(clear, Math.max(0, enabled.value.expiresAt - Date.now()));
 }
-function beginDiagnosis() {
+function beginDiagnosis(terminalTask = false) {
   if (!available.value || props.busy) return;
-  clear(); emit('diagnose', { id: target.value, label: String(props.session?.name || target.value).slice(0, 80) });
+  clear();
+  emit('diagnose', {
+    id: target.value,
+    label: String(props.session?.name || target.value).slice(0, 80),
+    ...(isCmd.value ? { kind: 'cmd' } : {}),
+    ...(terminalTask ? { terminalTask: true } : {}),
+  });
+  open.value = false;
+}
+function beginDeployment() {
+  if (!available.value || !isSsh.value || props.busy) return;
+  clear();
+  emit('diagnose', {
+    id: target.value,
+    label: String(props.session?.name || target.value).slice(0, 80),
+    kind: 'deployment',
+  });
   open.value = false;
 }
 function consume() {
@@ -78,19 +96,23 @@ onBeforeUnmount(() => { disposed = true; clear(); });
 
 <template>
   <IconButton :icon="Wrench" size="sm" :active="!!enabled || !!diagnosisTarget" :disabled="busy || !available"
-    :aria-label="enabled ? '修改本次 SSH 工具' : '启用 SSH 工具'" tooltip-side="top" :action="() => { error = ''; open = true; }" />
+    :aria-label="isCmd ? '启用本地 CMD 诊断' : enabled ? '修改本次 SSH 工具' : '启用 SSH 工具'" tooltip-side="top" :action="() => { error = ''; open = true; }" />
   <Dialog v-model:open="open">
     <DialogContent @close-auto-focus="event => { if (enabled || diagnosisTarget) { event.preventDefault(); emit('focus'); } }">
       <DialogHeader>
-        <DialogTitle>本次 SSH 工具</DialogTitle>
-        <DialogDescription>当前目标：{{ session?.name || target }}。工具结果会发送到「{{ serviceName || '当前模型服务' }}」。</DialogDescription>
+        <DialogTitle>{{ isCmd ? '本地 CMD 工具' : '本次 SSH 工具' }}</DialogTitle>
+        <DialogDescription>当前目标：{{ session?.name || target }}。{{ isCmd ? '终端上报目录和有界结果预览' : '工具结果' }}会发送到「{{ serviceName || '当前模型服务' }}」。</DialogDescription>
       </DialogHeader>
       <div class="diagnosis-entry">
-        <p>直接描述排障目标，助手按证据分步提出检查命令，无需先勾选工具。每条实际命令仍需确认。</p>
-        <Button :disabled="busy || !available" @click="beginDiagnosis">进入 SSH 诊断</Button>
-        <Button v-if="diagnosisTarget" variant="ghost" @click="emit('diagnose', null); open = false">退出诊断模式</Button>
+        <p v-if="isCmd">直接描述排障目标。助手按证据提出本机 CMD 检查命令，逐条确认后在独立进程执行。</p>
+        <p v-else>直接描述排障目标，助手按证据分步提出检查命令，无需先勾选工具。每条实际命令仍需确认。</p>
+        <Button :disabled="busy || !available" @click="beginDiagnosis()">{{ isCmd ? '进入本地 CMD 诊断' : '进入 SSH 诊断' }}</Button>
+        <p>终端任务可自动查看和切换任务目录。模型提出的 Shell 命令经确认后执行，输出会交回模型继续处理。</p>
+        <Button variant="outline" :disabled="busy || !available" @click="beginDiagnosis(true)">开始终端任务</Button>
+        <Button v-if="isSsh" variant="outline" :disabled="busy || !available" @click="beginDeployment">生成 SSH 部署计划</Button>
+        <Button v-if="diagnosisTarget" variant="ghost" @click="emit('diagnose', null); open = false">退出当前模式</Button>
       </div>
-      <details class="manual-tools">
+      <details v-if="isSsh" class="manual-tools">
         <summary>手动工具设置</summary>
       <div class="scope-fields">
         <p>目标：{{ session?.name || target }}</p>
@@ -101,7 +123,7 @@ onBeforeUnmount(() => { disposed = true; clear(); });
         </template>
         <div class="scope-option"><Checkbox id="ai-allow-exec" v-model="allowExec" /><Label for="ai-allow-exec">允许助手提出一条命令</Label></div>
         <p v-if="allowExec" class="muted">执行前审阅完整命令并逐条确认。使用远端 /bin/sh，非交互、30 秒超时；命令可以改变服务器，文件读取范围不限制命令作用。</p>
-        <p class="muted">文件查询最多 8 次、64 KiB；不跟随符号链接。PowerShell / CMD 暂可带入终端输出。</p>
+        <p class="muted">文件查询最多 8 次、64 KiB；不跟随符号链接。</p>
         <p v-if="prepared" class="resolved" role="status">{{ prepared.token ? `实际${prepared.kind === 'directory' ? '目录' : '文件'}：${prepared.root}` : '命令提议已就绪' }}<span v-if="prepared.execToken && prepared.token"> · 命令需逐条确认</span></p>
         <p v-if="error" class="scope-error" role="alert">{{ error }}</p>
       </div>

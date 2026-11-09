@@ -209,7 +209,9 @@ export const useAiStore = defineStore('ai', {
           if (this.active.cancelRequested) return;
           const conversation = await aiInvoke('ai_send', { request: { conversationId, requestId,
             modelId: model.id, content, regenerateId, confirmedServiceId: model.service.id, readGrant, execGrant,
-            diagnosisTarget: taskIntent.diagnosisTarget || null, analyzeMessageId: taskIntent.analyzeMessageId || null }, channel });
+            diagnosisTarget: taskIntent.diagnosisTarget || null, analyzeMessageId: taskIntent.analyzeMessageId || null,
+            continueDiagnosis: taskIntent.continueDiagnosis || null, cmdDirectory: taskIntent.cmdDirectory || null,
+            deploymentTarget: taskIntent.deploymentTarget || null, skill: taskIntent.skill || null }, channel });
           flush();
           accepted = true;
           if (this.current?.id === conversationId) {
@@ -228,9 +230,12 @@ export const useAiStore = defineStore('ai', {
             for (const tool of partial.tools || []) if (['running', 'waiting_approval', 'approved'].includes(tool.status)) {
               tool.approvalId = null; tool.approvalExpiresAt = null;
               const uncertain = tool.execution && ['dispatching', 'running'].includes(tool.execution.outcome);
+              const local = tool.name === 'execute_local_cmd' || tool.arguments?.skill?.targetKind === 'cmd';
               tool.status = uncertain ? 'unknown' : 'interrupted';
               if (tool.execution) { tool.execution.outcome = uncertain ? 'unknown' : 'not_started'; tool.execution.outputComplete = false; }
-              tool.result = uncertain ? '聊天连接中断，无法确认远端进程是否结束；请先核实状态，不自动重试' : '聊天连接中断，未派发命令或未获取查询结果';
+              tool.result = uncertain
+                ? (local ? '聊天连接中断，本地命令结果未知；请先核实状态，不自动重试' : '聊天连接中断，无法确认远端进程是否结束；请先核实状态，不自动重试')
+                : '聊天连接中断，未派发命令或未获取查询结果';
             }
           }
         } finally {

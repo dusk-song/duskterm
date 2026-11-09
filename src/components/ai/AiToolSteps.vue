@@ -18,9 +18,22 @@ watch(waiting, value => {
   if (value) { timer = setInterval(() => { clock.value = Date.now(); }, 1000); void knowledge.loadEntries().catch(() => {}); }
 }, { immediate: true });
 onBeforeUnmount(() => clearInterval(timer));
-const names = { list_remote_directory: '列出目录', read_remote_text: '读取文本', stat_remote_path: '查看属性', execute_ssh_command: '执行 SSH 命令' };
+const names = { list_remote_directory: '列出目录', read_remote_text: '读取文本', stat_remote_path: '查看属性', execute_ssh_command: '执行 SSH 命令', execute_local_cmd: '执行本地 CMD 命令', run_registered_skill: '执行固定脚本' };
 const states = { running: '查询中…', completed: '已完成', failed: '失败', stopped: '已停止', interrupted: '已中断', waiting_approval: '等待确认', approved: '已批准，尚未派发', denied: '已拒绝，未执行', expired: '确认过期，未执行', unknown: '远端状态未知' };
-const isExec = tool => tool.name === 'execute_ssh_command';
+const skillFor = tool => tool.arguments?.skill;
+const isCmd = tool => tool.name === 'execute_local_cmd' || skillFor(tool)?.targetKind === 'cmd';
+const directoryActions = { current: '核实任务目录', change: '切换任务目录', list: '列出任务目录' };
+const stepName = tool => (tool.name === 'terminal_directory' && directoryActions[tool.arguments?.action]) || names[tool.name] || tool.name;
+const isExec = tool => tool.name === 'execute_ssh_command' || tool.name === 'run_registered_skill' || isCmd(tool);
+const timeoutSecs = tool => skillFor(tool)?.timeoutSecs || 30;
+const hasOutput = execution => !!(execution.stdout || execution.stderr);
+function stepStatus(tool) {
+  if (isExec(tool) && tool.status === 'running') return '执行中…';
+  if (tool.execution?.endReason === 'timeout') return hasOutput(tool.execution) ? '超时，保留部分输出' : '超时，未收到输出';
+  if (tool.status === 'unknown') return isCmd(tool) ? '本地命令结果未知' : '远端状态未知';
+  if (tool.status === 'completed' && tool.execution && !tool.execution.outputComplete) return '命令已退出，输出不完整';
+  return states[tool.status] || tool.status;
+}
 const remaining = tool => Math.max(0, Math.ceil(((tool.approvalExpiresAt || 0) - clock.value) / 1000));
 const canDecide = tool => tool.status === 'waiting_approval' && !!tool.approvalId && remaining(tool) > 0 && props.requestId
   && ai.active?.requestId === props.requestId && !ai.active.cancelRequested && !security.isLocked && !responding.value;
@@ -42,15 +55,20 @@ function resultText(text) {
 <template>
   <div v-if="tools.length" class="tool-steps" aria-label="工具调用记录">
     <details v-for="(tool, index) in tools" :key="tool.callId" class="tool-step" :open="['running', 'waiting_approval', 'approved', 'unknown'].includes(tool.status)">
-      <summary :title="tool.callId"><span :class="{ running: tool.status === 'running' }">{{ index + 1 }} · {{ names[tool.name] || tool.name }}</span><span>{{ isExec(tool) && tool.status === 'running' ? '执行中…' : states[tool.status] || tool.status }}</span></summary>
+      <summary :title="tool.callId"><span :class="{ running: tool.status === 'running' }">{{ index + 1 }} · {{ stepName(tool) }}</span><span>{{ stepStatus(tool) }}</span></summary>
       <div class="tool-details">
-        <p :title="tool.target">目标：{{ ssh.getSession(tool.target)?.name || tool.target }}</p>
+        <p :title="tool.target">目标：{{ isCmd(tool) ? '本机 Windows CMD' : ssh.getSession(tool.target)?.name || tool.target }}</p>
         <template v-if="isExec(tool)">
-          <p>请求目录：{{ tool.root }} · /bin/sh · 非交互 · 最长 30 秒</p>
+          <p>{{ isCmd(tool) ? '执行目录' : '请求目录' }}：{{ tool.root }} · {{ skillFor(tool)?.interpreter || (isCmd(tool) ? 'cmd.exe' : '/bin/sh') }} · 非交互 · 最长 {{ timeoutSecs(tool) }} 秒</p>
+          <template v-if="skillFor(tool)">
+            <p :title="skillFor(tool).revision">Skill @{{ skillFor(tool).id }} · {{ skillFor(tool).version }} · {{ skillFor(tool).revision.slice(0, 12) }}</p>
+            <p>固定入口：{{ skillFor(tool).script }}</p>
+            <pre v-if="Object.keys(tool.arguments.parameters || {}).length" aria-label="脚本参数">{{ JSON.stringify(tool.arguments.parameters, null, 2) }}</pre>
+          </template>
           <p>用途：{{ tool.arguments?.purpose }}</p>
-          <pre class="command" aria-label="待执行的完整命令">{{ tool.arguments?.command }}</pre>
+          <pre class="command" :aria-label="skillFor(tool) ? '固定脚本与位置参数' : '待执行的完整命令'">{{ tool.arguments?.command }}</pre>
           <p v-if="sensitive(tool)" class="warning">命中敏感命令规则：{{ sensitive(tool) }}</p>
-          <p v-if="tool.status === 'waiting_approval'" class="warning">命令可改变服务器，请审阅完整内容。{{ remaining(tool) }} 秒后确认失效，等待也计入本次请求总超时。</p>
+          <p v-if="tool.status === 'waiting_approval'" class="warning">命令可改变{{ isCmd(tool) ? '本机' : '服务器' }}，请审阅完整内容。{{ remaining(tool) }} 秒后确认失效，等待也计入本次请求总超时。</p>
           <div v-if="tool.status === 'waiting_approval'" class="approval-actions">
             <Button variant="outline" size="sm" :disabled="!canDecide(tool)" @click="decide(tool, false)">拒绝</Button>
             <Button size="sm" :disabled="!canDecide(tool)" @click="decide(tool, true)">确认执行</Button>
@@ -61,11 +79,15 @@ function resultText(text) {
             <p v-if="tool.execution.signal">退出信号：{{ tool.execution.signal }}</p>
             <p v-if="tool.execution.truncated">输出已截断；最多保留 stdout/stderr 合计 256 KiB，模型收到有界预览。</p>
             <p v-if="tool.execution.encodingReplaced">部分输出无法按 UTF-8 解码，已替换显示。</p>
-            <p v-if="tool.execution.endReason === 'timeout'">执行超过 30 秒，已请求终止；请核实远端状态。</p>
+            <p v-if="tool.execution.endReason === 'timeout'">执行超过 {{ timeoutSecs(tool) }} 秒，已请求终止；请核实{{ isCmd(tool) ? '本机' : '远端' }}状态。</p>
             <p v-if="tool.execution.outcome === 'exited' && !tool.execution.outputComplete">已收到退出状态，但输出通道未完整结束。</p>
             <p v-if="tool.execution.stdout">stdout</p><pre v-if="tool.execution.stdout">{{ tool.execution.stdout }}</pre>
             <p v-if="tool.execution.stderr">stderr</p><pre v-if="tool.execution.stderr">{{ tool.execution.stderr }}</pre>
           </template>
+        </template>
+        <template v-else-if="tool.name === 'terminal_directory'">
+          <p>任务目录：{{ tool.root }}</p>
+          <p v-if="tool.arguments?.path">切换目标：{{ tool.arguments.path }}</p>
         </template>
         <template v-else>
           <p>授权范围：{{ tool.root }}</p>

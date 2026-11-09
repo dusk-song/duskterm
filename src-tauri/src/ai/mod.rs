@@ -1,17 +1,22 @@
 mod call_log;
+#[cfg(windows)]
+mod cmd_exec;
 mod compatibility;
 mod config;
 mod diagnosis;
+mod deployment;
 mod exec_access;
 mod provider;
 mod read_access;
 mod runtime;
+mod skill;
 mod storage;
+mod terminal_directory;
 mod tools;
 mod types;
 
 use std::sync::{Arc, Mutex};
-use tauri::{ipc::Channel, State};
+use tauri::{ipc::Channel, Manager, State};
 use tokio::sync::watch;
 use types::*;
 
@@ -651,12 +656,21 @@ pub async fn ai_cancel(state: State<'_, AiState>, request_id: String) -> Result<
 }
 
 #[tauri::command]
+pub async fn ai_list_skills(state: State<'_, AiState>) -> Result<skill::Catalog, String> {
+    state.blocking(|state| skill::catalog(&skill::root(&state.db_path))).await
+}
+
+#[tauri::command]
 pub async fn ai_send(
     state: State<'_, AiState>,
     app: tauri::AppHandle,
     request: SendRequest,
     channel: Channel<AiEvent>,
 ) -> Result<Conversation, String> {
+    if let Some(target) = deployment::target(&request)? {
+        app.state::<crate::session::supervisor::SessionSupervisor>()
+            .ai_ssh_session(&target.id)?;
+    }
     diagnosis::send(state.inner().clone(), app, request, channel).await
 }
 

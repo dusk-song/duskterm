@@ -8,6 +8,7 @@ import { toast } from '@/composables/useToast';
 import AiMarkdown from './AiMarkdown.vue';
 import AiToolSteps from './AiToolSteps.vue';
 import AiDiagnosticTask from './AiDiagnosticTask.vue';
+import AiDeploymentPlan from './AiDeploymentPlan.vue';
 
 const props = defineProps({ message: Object, canRegenerate: Boolean, busy: Boolean, requestId: String });
 // The first body chunk ends the thinking phase; streaming continues for the answer.
@@ -15,9 +16,10 @@ const isThinking = computed(() => props.message.status === 'streaming'
   && !!props.message.reasoning && (props.message.phase ? props.message.phase === 'reasoning' : !props.message.content));
 const thinkingOpen = ref(false);
 const activity = computed(() => {
+  if (props.message.deployment) return '正在起草部署计划…';
   const tools=props.message.tools || [];
   if (tools.some(tool=>tool.status==='waiting_approval')) return '等待你确认命令…';
-  if (tools.some(tool=>tool.name==='execute_ssh_command' && ['approved','running'].includes(tool.status))) return '正在处理命令…';
+  if (tools.some(tool=>['execute_ssh_command','execute_local_cmd'].includes(tool.name) && ['approved','running'].includes(tool.status))) return '正在处理命令…';
   return '正在生成…';
 });
 const reasoningContent = ref(null);
@@ -38,7 +40,7 @@ watch([() => props.message.id, isThinking], ([, thinking]) => {
 }, { immediate: true });
 watch([() => props.message.reasoning, thinkingOpen], scrollReasoning, { flush: 'post' });
 onBeforeUnmount(() => { if (reasoningFrame !== null) cancelAnimationFrame(reasoningFrame); });
-defineEmits(['regenerate', 'select', 'analyze']);
+defineEmits(['regenerate', 'select', 'analyze', 'continue']);
 async function copy(text) {
   try { await navigator.clipboard.writeText(text); toast.success('已复制'); }
   catch { toast.error('复制失败，请手动选择文本'); }
@@ -48,7 +50,8 @@ async function copy(text) {
 <template>
   <article class="ai-message" :class="[message.role, { alternative: !message.active && message.role === 'assistant' }]">
     <div class="bubble">
-      <AiDiagnosticTask v-if="message.task" :task="message.task" :tools="message.tools" :model-label="message.actualModelId || message.modelId" :service-name="message.serviceName" :busy="busy" @analyze="$emit('analyze')" />
+      <AiDiagnosticTask v-if="message.task" :task="message.task" :tools="message.tools" :model-label="message.actualModelId || message.modelId" :service-name="message.serviceName" :busy="busy" @analyze="$emit('analyze')" @continue="$emit('continue')" />
+      <AiDeploymentPlan v-if="message.deployment" :preview="message.deployment" :status="message.status" />
       <span v-if="message.role === 'assistant' && !message.active && message.status === 'completed'" class="version">历史版本</span>
       <details v-if="message.reasoning" class="thinking" :open="thinkingOpen">
         <summary @click.prevent="thinkingOpen = !thinkingOpen"><span v-if="isThinking" class="thinking-indicator" aria-hidden="true" />{{ isThinking ? '思考中…' : '思考过程' }}</summary>

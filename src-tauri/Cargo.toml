@@ -27,6 +27,7 @@ tokio = { version = "1", features = [
   "net",
   "io-util",
   "macros",
+  "process",
 ] }
 anyhow = "1"
 rig = { package = "rig-core", version = "=0.46.0", default-features = false, features = ["reqwest", "native-tls"] }
@@ -69,6 +70,7 @@ libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
 drag = "2.1.1"
+tempfile = "3"
 windows = { version = "0.52", features = [
   "implement",
   "Win32_Foundation",
@@ -85,6 +87,8 @@ windows = { version = "0.52", features = [
 ] }
 windows-sys = { version = "0.61", features = [
   "Win32_Foundation",
+  "Win32_Globalization",
+  "Win32_System_Diagnostics_ToolHelp",
   "Win32_System_JobObjects",
   "Win32_System_Threading",
 ] }

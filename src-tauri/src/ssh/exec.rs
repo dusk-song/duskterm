@@ -37,13 +37,16 @@ impl Default for ExecOptions {
     }
 }
 
+pub(crate) fn shell_quote(text: &str) -> String {
+    format!("'{}'", text.replace('\'', "'\"'\"'"))
+}
+
 pub(crate) fn shell_command(command: &str, cwd: Option<&str>) -> String {
-    let quote = |text: &str| format!("'{}'", text.replace('\'', "'\"'\"'"));
     let script = cwd.map_or_else(
         || command.to_string(),
-        |cwd| format!("cd {} || exit $?\n{command}", quote(cwd)),
+        |cwd| format!("cd {} || exit $?\n{command}", shell_quote(cwd)),
     );
-    format!("exec /bin/sh -c {}", quote(&script))
+    format!("exec /bin/sh -c {}", shell_quote(&script))
 }
 
 struct ChannelGuard {
@@ -66,14 +69,25 @@ impl Drop for ChannelGuard {
     }
 }
 
-struct Output {
+pub(crate) struct Output {
     stdout: Vec<u8>,
     stderr: Vec<u8>,
-    state: Execution,
+    pub(crate) state: Execution,
     limit: usize,
 }
 impl Output {
-    fn append(&mut self, stderr: bool, data: &[u8]) {
+    pub(crate) fn new(limit: usize) -> Self {
+        Self {
+            stdout: Vec::new(),
+            stderr: Vec::new(),
+            state: Execution {
+                outcome: "dispatching".into(),
+                ..Default::default()
+            },
+            limit,
+        }
+    }
+    pub(crate) fn append(&mut self, stderr: bool, data: &[u8]) {
         self.state.bytes_seen = self.state.bytes_seen.saturating_add(data.len() as u64);
         let remaining = self
             .limit
@@ -87,13 +101,19 @@ impl Output {
         self.state.truncated |= take < data.len();
     }
     fn snapshot(&self) -> Execution {
-        let stdout = String::from_utf8_lossy(&self.stdout);
-        let stderr = String::from_utf8_lossy(&self.stderr);
+        self.snapshot_with(|bytes| {
+            let text = String::from_utf8_lossy(bytes);
+            let replaced = matches!(text, std::borrow::Cow::Owned(_));
+            (text.into_owned(), replaced)
+        })
+    }
+    pub(crate) fn snapshot_with(&self, decode: impl Fn(&[u8]) -> (String, bool)) -> Execution {
+        let (stdout, stdout_replaced) = decode(&self.stdout);
+        let (stderr, stderr_replaced) = decode(&self.stderr);
         let mut state = self.state.clone();
-        state.encoding_replaced = matches!(stdout, std::borrow::Cow::Owned(_))
-            || matches!(stderr, std::borrow::Cow::Owned(_));
-        state.stdout = stdout.into_owned();
-        state.stderr = stderr.into_owned();
+        state.encoding_replaced = stdout_replaced || stderr_replaced;
+        state.stdout = stdout;
+        state.stderr = stderr;
         state
     }
 }
@@ -112,15 +132,7 @@ where
         channel: Some(channel),
         attempted: false,
     };
-    let mut output = Output {
-        stdout: Vec::new(),
-        stderr: Vec::new(),
-        state: Execution {
-            outcome: "dispatching".into(),
-            ..Default::default()
-        },
-        limit: options.output_limit,
-    };
+    let mut output = Output::new(options.output_limit);
     // A durable 'dispatching' record precedes the only place issuing SSH exec.
     report(output.snapshot(), true).await?;
     guard.attempted = true;

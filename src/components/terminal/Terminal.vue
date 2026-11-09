@@ -611,6 +611,7 @@ async function sendData(data) {
   if (terminalTransferOwned.value) return false;
   const session = currentSession.value;
   if (session && (session.status === 'connected' || session.status === 'connecting')) {
+    if (session.cmdCwd && /[\r\n\x03]/.test(data)) session.cmdCwd = '';
     const command = session.isSplitChild ? 'write_ssh_shell_channel' : 'write_ssh';
     const payload = session.isSplitChild
       ? { rootSessionId: session.workspaceSessionId || session.parentId, channelId: props.sessionId, data }
@@ -2405,6 +2406,19 @@ onMounted(async () => {
     term.loadAddon(new WebLinksAddon());
 
     term.attachCustomKeyEventHandler(handleTerminalCustomKeyEvent);
+
+    if (config.protocol === 'local' && config.local_profile === 'cmd') {
+      term.parser.registerOscHandler(9, payload => {
+        if (!payload.startsWith('9;')) return false;
+        const directory = payload.slice(2);
+        const session = sshStore.getSession(props.sessionId);
+        if (session && (session.status === 'connected' || session.status === 'connecting')) {
+          session.cmdCwd = /^[a-z]:[\\/]/i.test(directory) && directory.length <= 4096
+            && !/[\u0000-\u001f\u007f-\u009f\u202a-\u202e\u2066-\u2069]/.test(directory) ? directory : '';
+        }
+        return true;
+      });
+    }
 
     // Intercept Title Changes for Directory Tracking
     termTitleDisposable = term.onTitleChange((title) => {

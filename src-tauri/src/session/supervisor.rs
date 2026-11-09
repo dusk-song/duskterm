@@ -117,6 +117,28 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(rx.await.unwrap(), true);
     }
+
+    #[cfg(windows)]
+    #[tokio::test]
+    async fn context_cmd_split_binds_its_own_runtime() {
+        let supervisor = SessionSupervisor::new();
+        let actor = supervisor.get_or_spawn_actor("root");
+        let (mut root, _input, _resize, _close) = crate::ssh::create_terminal_runtime_channels();
+        let (mut split, _split_input, _split_resize, _split_close) =
+            crate::ssh::create_terminal_runtime_channels();
+        root.local_cmd_directory = Some(r"C:\root".into());
+        split.local_cmd_directory = Some(r"C:\split".into());
+        actor.terminal_handles.lock().unwrap().extend([
+            ("root".into(), root.clone()),
+            ("split".into(), split.clone()),
+        ]);
+        let (generation, directory) = supervisor.ai_cmd_session("split").unwrap();
+        assert!(generation.same_channel(&split.close_tx));
+        assert!(!generation.same_channel(&root.close_tx));
+        assert_eq!(directory, std::path::PathBuf::from(r"C:\split"));
+        actor.terminal_handles.lock().unwrap().remove("split");
+        assert!(supervisor.ai_cmd_session("split").is_err());
+    }
 }
 
 impl SessionSupervisor {
@@ -143,7 +165,7 @@ impl SessionSupervisor {
     pub(crate) fn ai_ssh_session(
         &self,
         session_id: &str,
-    ) -> Result<crate::ssh::SharedSshSessionSlot, String> {
+    ) -> Result<(crate::ssh::SharedSshSessionSlot, String), String> {
         let actor = self.get_actor(session_id)?;
         let handles = actor.terminal_handles.lock().map_err(|_| "终端状态不可用")?;
         let handle = handles
@@ -158,7 +180,34 @@ impl SessionSupervisor {
         {
             return Err("当前会话不是已连接的 SSH 会话".into());
         }
-        Ok(handle.shared_session.clone())
+        let identity = handle.ssh_diagnostic_identity.clone().ok_or("SSH 终端缺少连接标识")?;
+        Ok((handle.shared_session.clone(), identity))
+    }
+
+    #[cfg(windows)]
+    pub(crate) fn ai_cmd_session(
+        &self,
+        session_id: &str,
+    ) -> Result<(tokio::sync::mpsc::UnboundedSender<()>, std::path::PathBuf), String> {
+        // A local split has its own PTY and directory, under the workspace actor.
+        let terminals: Vec<_> = self
+            .actors
+            .lock()
+            .map_err(|_| "终端状态不可用")?
+            .values()
+            .map(|actor| actor.terminal_handles.clone())
+            .collect();
+        for terminals in terminals {
+            let handles = terminals.lock().map_err(|_| "终端状态不可用")?;
+            if let Some(handle) = handles.get(session_id) {
+                if !handle.is_live() || handle.close_tx.is_closed() {
+                    return Err("本地 CMD 终端已关闭".into());
+                }
+                let directory = handle.local_cmd_directory.clone().ok_or("当前会话不是本地 CMD")?;
+                return Ok((handle.close_tx.clone(), directory));
+            }
+        }
+        Err("本地 CMD 终端已关闭".into())
     }
 
     fn get_or_spawn_actor(&self, session_id: &str) -> SessionActorHandle {

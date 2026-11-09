@@ -76,20 +76,27 @@ fn transcript(c: &Conversation) -> Vec<RigMessage> {
                     })
                     .and_then(|answer| answer.task.as_ref())
             });
-        let text = contextual_task
-            .and_then(|task| task.context_snapshot.as_ref())
-            .map_or_else(
-                || user.content.clone(),
-                |snapshot| {
-                    format!(
-                        "{}\n\n历史诊断证据（仅用于分析，不授权任何操作）：\n{snapshot}",
-                        user.content
-                    )
-                },
-            );
+        let continuation = c.messages.last()
+            .filter(|message| message.status == "streaming" && message.reply_to.as_ref() == Some(&user.id))
+            .and_then(|message| message.task.as_ref())
+            .filter(|task| !task.analysis_only && task.parent_message_id.is_some())
+            .map(|task| super::diagnosis::continuation_context(c, task));
+        let snapshot = continuation.as_deref().or_else(|| {
+            contextual_task.and_then(|task| task.context_snapshot.as_deref())
+        });
+        let mut text = with_evidence(&user.content, snapshot);
+        if let Some(preview) = c.messages.last()
+            .filter(|message| message.status == "streaming" && message.reply_to.as_ref() == Some(&user.id))
+            .and_then(|message| message.deployment.as_ref())
+        {
+            text.push_str(&format!("\n\n本次计划绑定的 SSH 目标标签：{}", preview.target.label));
+        }
         messages.push(RigMessage::user(text));
         if let Some(answer) = answers.get(user.id.as_str()) {
-            if answer.tool_history.is_empty() {
+            if let Some(preview) = answer.deployment.as_ref().filter(|preview| preview.plan.is_some()) {
+                let text = serde_json::to_string(preview).unwrap_or_default();
+                messages.push(RigMessage::assistant(text));
+            } else if answer.tool_history.is_empty() {
                 messages.push(RigMessage::assistant(&answer.content));
             } else {
                 messages.extend(answer.tool_history.clone());
@@ -97,6 +104,13 @@ fn transcript(c: &Conversation) -> Vec<RigMessage> {
         }
     }
     messages
+}
+
+fn with_evidence(content: &str, snapshot: Option<&str>) -> String {
+    match snapshot {
+        Some(snapshot) => format!("{content}\n\n历史诊断证据（作为分析参考，执行权限由应用校验）\n{snapshot}"),
+        None => content.to_owned(),
+    }
 }
 
 fn counter() -> HeuristicTokenCounter {
@@ -326,6 +340,12 @@ pub async fn send(
     request_data: SendRequest,
     channel: Channel<AiEvent>,
 ) -> Result<Conversation, String> {
+    super::deployment::target(&request_data)?;
+    if request_data.skill.is_some() && (!request_data.diagnosis_target.as_ref().is_some_and(|target| target.terminal_task)
+        || request_data.continue_diagnosis.is_some() || request_data.read_grant.is_some()
+        || request_data.analyze_message_id.is_some() || request_data.regenerate_id.is_some()) {
+        return Err("固定脚本 Skill 需要独立发起终端任务".into());
+    }
     if uuid::Uuid::parse_str(&request_data.request_id).is_err() {
         return Err("请求标识无效".into());
     }
@@ -358,14 +378,39 @@ pub async fn send(
                 provider::configure_request(CompletionRequest::new("validate"), &config, &service)?;
                 let read_access = super::read_access::take(state, &request_data, &service, &config)?;
                 let mut exec_access = super::exec_access::take(state, &request_data, &service, &config)?;
-                if let Some(target)=&request_data.diagnosis_target {
-                    if exec_access.as_ref().is_none_or(|exec|exec.target()!=target.id) || read_access.is_some() {return Err("诊断任务缺少匹配的 SSH 目标许可".into());}
-                    exec_access=exec_access.map(|exec|exec.diagnostic());
-                }
                 if read_access.as_ref().zip(exec_access.as_ref()).is_some_and(|(read,exec)|read.target!=exec.target()) {
                     return Err("读取和命令提议必须绑定同一 SSH 目标".into());
                 }
                 let mut c = db.get(&request_data.conversation_id)?;
+                let diagnostic_task = if let Some(target) = &request_data.diagnosis_target {
+                    let exec = exec_access.take()
+                        .filter(|exec| exec.target() == target.id && exec.kind() == target.kind)
+                        .ok_or("诊断任务缺少匹配的目标许可")?;
+                    if read_access.is_some() || request_data.regenerate_id.is_some() {
+                        return Err("诊断任务不能混用读取授权或重新生成".into());
+                    }
+                    let (mut task, unresolved) = super::diagnosis::continue_task(&c, &request_data, target, exec.identity())?;
+                    let mut exec = exec.diagnostic(unresolved);
+                    if task.terminal_task {
+                        if let Some(selection) = &request_data.skill {
+                            let skill = super::skill::Skill::select(&super::skill::root(&state.db_path), selection, task.target_kind)?;
+                            task.directory = Some(skill.info.directory.clone());
+                            task.skill = Some(skill.info.clone());
+                            task.tool_limit = 1;
+                            task.command_limit = 1;
+                            exec = exec.with_skill(skill);
+                        } else {
+                            task.directory = task.directory.or_else(|| exec.cmd_directory().map(str::to_owned));
+                        }
+                        exec = exec.terminal_task(task.directory.clone());
+                    }
+                    exec_access = Some(exec);
+                    Some(task)
+                } else if request_data.continue_diagnosis.is_some() {
+                    return Err("继续检查需要重新取得目标许可".into());
+                } else {
+                    None
+                };
                 let analysis_task=super::diagnosis::analysis_task(&c,&request_data)?;
                 if request_data.regenerate_id.as_ref().is_some_and(|id|c.messages.iter().any(|message|message.id==*id&&message.task.is_some())) && analysis_task.is_none() {
                     return Err("诊断回答重新生成仅支持分析已有证据，不能恢复执行权限".into());
@@ -379,6 +424,9 @@ pub async fn send(
                         .iter()
                         .find(|m| m.id == *regenerate && m.role == "assistant")
                         .ok_or("要重新生成的回答不存在")?;
+                    if answer.deployment.is_some() {
+                        return Err("请从 SSH 部署计划入口重新生成计划".into());
+                    }
                     let user_id = answer.reply_to.clone().ok_or("回答缺少问题关联")?;
                     if c.messages
                         .iter()
@@ -405,7 +453,9 @@ pub async fn send(
                     }
                     // Reject an oversized current question before persisting a turn
                     // or calling the summarizer. Older history can still compact.
-                    if tokens(&[RigMessage::user(text)]) > input_budget {
+                    let snapshot = diagnostic_task.as_ref().filter(|task| task.parent_message_id.is_some())
+                        .map(|task| super::diagnosis::continuation_context(&c, task));
+                    if tokens(&[RigMessage::user(with_evidence(text, snapshot.as_deref()))]) > input_budget {
                         return Err("CONTEXT_LIMIT: 当前问题过长，请缩减终端文本或调整模型窗口与输出预算；草稿已保留".into());
                     }
                     if c.messages.is_empty() {
@@ -417,10 +467,10 @@ pub async fn send(
                     id
                 };
                 let mut answer = new_message("assistant", String::new());
-                answer.task=if let Some(target)=&request_data.diagnosis_target {
-                    let goal=c.messages.iter().find(|message|message.id==user_id).map(|message|message.content.as_str()).unwrap_or_default();
-                    Some(super::diagnosis::Task::new(&request_data.request_id,goal,target.clone()))
-                }else{analysis_task};
+                answer.task = diagnostic_task.or(analysis_task);
+                answer.deployment = request_data.deployment_target.clone().map(|target| {
+                    super::deployment::Preview { target, plan: None }
+                });
                 answer.status = "streaming".into();
                 answer.reply_to = Some(user_id);
                 answer.model_id = Some(config.id.clone());
@@ -445,7 +495,9 @@ pub async fn send(
     let message_id = c.messages[index].id.clone();
     let mut seq = 0;
     let mut record = state.call_log.guard(state.start_call(
-        if c.messages[index].task.is_some() {
+        if c.messages[index].deployment.is_some() {
+            "deployment_plan"
+        } else if c.messages[index].task.is_some() {
             "diagnosis"
         } else {
             "chat"
@@ -456,6 +508,7 @@ pub async fn send(
     let mut api_started = None;
     let mut usage_reserved = false;
     let mut checkpoint_task: Option<tokio::task::JoinHandle<Result<(), String>>> = None;
+    let mut wrapped_up = false;
     let outcome = async {
         emit(
             &channel,
@@ -518,6 +571,7 @@ pub async fn send(
             };
             let mut finished = false;
             let mut pending_calls = 0_u64;
+            let mut summary_text = String::new();
             let mut checkpoint = Instant::now();
             while let Some(item) = stream.next().await {
                 use super::tools::Delta;
@@ -538,10 +592,15 @@ pub async fn send(
                     Delta::Text(kind, text) => {
                         if c.messages[index].content.len()
                             + c.messages[index].reasoning.len()
+                            + summary_text.len()
                             + text.len()
                             > 4_000_000
                         {
                             return Err("回答超过应用大小上限，已保留部分内容".into());
+                        }
+                        if wrapped_up && kind == "text" {
+                            summary_text.push_str(&text);
+                            continue;
                         }
                         if kind == "reasoning" {
                             c.messages[index].reasoning.push_str(&text);
@@ -572,6 +631,9 @@ pub async fn send(
                         if let Some(task) = &mut c.messages[index].task {
                             task.tool_calls = tool_count;
                             task.elapsed_ms = now().saturating_sub(task.started_at);
+                            if task.terminal_task && tool.name == super::tools::TERMINAL_DIRECTORY && tool.status == "completed" {
+                                task.directory = Some(tool.root.clone());
+                            }
                             task.status = if tool.status == "waiting_approval" {
                                 "waiting_confirmation"
                             } else {
@@ -616,13 +678,14 @@ pub async fn send(
                         }
                     }
                     Delta::DurableTool(..) | Delta::Progress(..) => unreachable!(),
+                    Delta::WrapUp => wrapped_up = true,
                     Delta::Call => {
                         c.ensure_usage_stats().unreported_calls += 1;
                         pending_calls += 1;
                         if let Some(task) = &mut c.messages[index].task {
                             task.model_calls += 1;
                             task.elapsed_ms = now().saturating_sub(task.started_at);
-                            task.status = "running".into();
+                            task.status = if wrapped_up { "summarizing" } else { "running" }.into();
                             seq += 1;
                             channel
                                 .send(AiEvent {
@@ -667,6 +730,19 @@ pub async fn send(
                             add(total.reasoning_tokens, usage.reasoning_tokens);
                     }
                     Delta::Final(history) => {
+                        if wrapped_up {
+                            if super::diagnosis::has_raw_tool_markup(&summary_text) {
+                                return Err(super::diagnosis::SUMMARY_PROTOCOL_ERROR.into());
+                            }
+                            if summary_text.trim().is_empty() {
+                                return Err("模型没有返回证据整理结果。已有工具结果可查看。".into());
+                            }
+                            c.messages[index].content.push_str(&summary_text);
+                            emit(
+                                &channel, &request_data, &message_id, &mut seq,
+                                "text", Some(std::mem::take(&mut summary_text)), None,
+                            )?;
+                        }
                         c.messages[index].tool_history = history;
                         finished = true;
                     }
@@ -707,8 +783,15 @@ pub async fn send(
                 api_started.map_or(0, |time| time.elapsed().as_millis() as u64);
             return Ok(());
         }
+        let mut completion = request(messages, config.max_output_tokens)?;
+        let planning = c.messages[index].deployment.is_some();
+        if planning {
+            completion = completion.preamble(super::deployment::PROMPT);
+        } else if c.messages[index].task.as_ref().is_some_and(|task| task.analysis_only) {
+            completion = completion.preamble(format!("{SYSTEM}\n{}", super::diagnosis::SUMMARY));
+        }
         let prepared = super::tools::replay_history(
-            request(messages, config.max_output_tokens)?,
+            completion,
             super::read_access::allowed_model(&config, &service),
         );
         let extra = if prepared.tools.is_empty() {
@@ -738,12 +821,20 @@ pub async fn send(
         }
         state.save_conversation(&c).await?;
         let mut checkpoint = Instant::now();
+        let mut plan_text = String::new();
         while let Some(item) = stream.next().await {
             let (kind, text) = match item.map_err(provider::error)? {
                 Item::Event(StreamEvent::Text { text, .. }) => ("text", text),
                 Item::Event(StreamEvent::Reasoning { text, .. }) => ("reasoning", text),
                 _ => continue,
             };
+            if planning && kind == "text" {
+                if plan_text.len() + text.len() > super::deployment::MAX_RESPONSE {
+                    return Err("模型返回的部署计划过长，请缩小计划范围".into());
+                }
+                plan_text.push_str(&text);
+                continue;
+            }
             {
                 if c.messages[index].content.len() + c.messages[index].reasoning.len() + text.len()
                     > 4_000_000
@@ -804,6 +895,12 @@ pub async fn send(
         if !matches!(response.finish_reason(), Some(FinishReason::Stop)) {
             return Err("INCOMPLETE: 回答达到输出限制或被服务中断，可调整预算后重新生成".into());
         }
+        if let Some(preview) = &mut c.messages[index].deployment {
+            let plan = super::deployment::parse(&plan_text)?;
+            let summary = plan.summary.clone();
+            preview.plan = Some(plan);
+            c.messages[index].content = summary;
+        }
         if c.messages[index].content.trim().is_empty() {
             return Err("EMPTY: 模型未返回文本，请检查模型能力或输出预算".into());
         }
@@ -852,7 +949,7 @@ pub async fn send(
     {
         let message = &mut c.messages[index];
         if let Some(task) = &mut message.task {
-            task.finish(status, message.error.as_deref(), &message.tools);
+            task.finish(status, message.error.as_deref(), &message.tools, wrapped_up);
         }
     }
     state.finish_call(

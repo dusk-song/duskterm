@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button';
 import TooltipHint from '@/components/ui/tooltip/TooltipHint.vue';
 import { conversationUsage } from '@/utils/aiUsage';
 import { formatTokens, modelOptions } from '@/utils/ai';
-import { useAiStore } from '@/stores/ai';
+import { aiInvoke, useAiStore } from '@/stores/ai';
 import { useSshStore } from '@/stores/ssh';
 import { supportsTerminalTextContext } from '@/utils/aiContext';
 import { getTerminalContextReader } from '@/utils/terminalContextReaders';
@@ -20,7 +20,20 @@ defineEmits(['close', 'maximize']);
 const store = useAiStore();
 const sshStore = useSshStore();
 const readScope = ref(null), readGrant = ref(null), diagnosisTarget = ref(null);
+const skillCatalog = ref(null), skillError = ref(''), skillLoading = ref(false), pickedSkill = ref(null);
+let catalogRequest;
 const terminalSession = computed(() => sshStore.getSession(props.terminalSessionId));
+const diagnosisCmdDirectory = computed(() => {
+  const intent = diagnosisTarget.value;
+  const session = intent?.kind === 'cmd' ? sshStore.getSession(intent.rebindSessionId || intent.id) : null;
+  return session?.status === 'connected' ? session.cmdCwd || '' : '';
+});
+const intentLabel = computed(() => {
+  if (diagnosisTarget.value?.kind === 'deployment') return 'SSH 部署计划';
+  if (diagnosisTarget.value?.terminalTask) return diagnosisTarget.value.kind === 'cmd' ? '本地 CMD 终端任务' : 'SSH 终端任务';
+  if (diagnosisTarget.value?.kind === 'cmd') return '本地 CMD 诊断';
+  return 'SSH 诊断';
+});
 const canCapture = computed(() => !!terminalSession.value && supportsTerminalTextContext(terminalSession.value.config?.protocol));
 const captureMenuOpen = ref(false);
 let captureController;
@@ -103,6 +116,36 @@ const usage = computed(() => conversationUsage(store.current));
 const draft = computed({ get: () => store.current?.draft ?? emptyDraft.value, set: text => {
   if (store.current) store.current.draft = text; else emptyDraft.value = text;
 } });
+const skillPrefix = /^\s*@([a-z0-9][a-z0-9-]*)(?=\s|$)/;
+const skillQuery = computed(() => /^\s*@([a-z0-9-]*)$/.exec(draft.value)?.[1]);
+const showSkills = computed(() => !!diagnosisTarget.value?.terminalTask && skillQuery.value !== undefined && !store.active);
+const skillKind = computed(() => diagnosisTarget.value?.kind || 'ssh');
+const skillMatches = computed(() => (skillCatalog.value?.skills || [])
+  .filter(skill => skill.targetKind === skillKind.value && skill.id.startsWith(skillQuery.value || '')));
+const attachedSkill = computed(() => {
+  const id = skillPrefix.exec(draft.value)?.[1];
+  return diagnosisTarget.value?.terminalTask && pickedSkill.value?.id === id ? pickedSkill.value : null;
+});
+function loadSkills() {
+  if (!catalogRequest) {
+    skillError.value = '';
+    skillLoading.value = true;
+    catalogRequest = aiInvoke('ai_list_skills').then(catalog => { skillCatalog.value = catalog; return catalog; })
+      .catch(error => { skillError.value = String(error); throw error; })
+      .finally(() => { skillLoading.value = false; catalogRequest = null; });
+  }
+  return catalogRequest;
+}
+watch(showSkills, show => { if (show) void loadSkills().catch(() => {}); });
+watch(() => [store.current?.id, diagnosisTarget.value?.id], () => { pickedSkill.value = null; });
+watch(() => skillPrefix.exec(draft.value)?.[1], id => { if (pickedSkill.value?.id !== id) pickedSkill.value = null; });
+function pickSkill(skill) {
+  if (!showSkills.value || skill.targetKind !== skillKind.value) return;
+  const origin = document.activeElement;
+  pickedSkill.value = skill;
+  draft.value = `@${skill.id} `;
+  void focusComposer(origin);
+}
 const lastUserId = computed(() => store.current?.messages.filter(m => m.role === 'user').at(-1)?.id);
 const visibleTurns = ref(30);
 const turns = computed(() => {
@@ -183,6 +226,38 @@ async function stopGeneration() {
   await store.stop(); await focusComposer(origin);
 }
 async function safe(action) { try { await action(); } catch (e) { if (e) store.error = String(e); } }
+async function continueDiagnosis(message) {
+  if (store.active || sending.value) return;
+  const conversationId = store.current?.id;
+  const source = store.current?.messages.findLast(item => item.task?.id === message.task.id && !item.task.analysisOnly);
+  if (!source) return;
+  const task = source.task;
+  const kind = task.targetKind || 'ssh';
+  let rebindSessionId = null;
+  if (sshStore.getSession(task.target.id)?.status !== 'connected') {
+    const current = terminalSession.value;
+    const session = kind === 'cmd' ? current : sshStore.getSession(current?.workspaceSessionId || current?.id);
+    const config = session?.config;
+    const matchesKind = kind === 'cmd'
+      ? config?.protocol === 'local' && config.local_profile === 'cmd'
+      : !!config && ['', 'ssh'].includes(config.protocol || '');
+    if (session?.status !== 'connected' || !matchesKind) {
+      throw new Error(`请先打开原任务对应的${kind === 'cmd' ? '本地 CMD' : ' SSH'}终端，再继续检查。`);
+    }
+    const target = kind === 'cmd' ? session.name : `${config.username || ''}@${config.host || session.name}:${config.port || 22}`;
+    const details = task.targetIdentity ? '应用会核对原任务的连接信息。' : '旧记录缺少可核对的连接信息，请确认这是原来的目标。';
+    try {
+      await confirm({ title: '确认续查连接', content: `原目标「${task.target.label}」，当前连接「${target}」。${details}`, okText: '使用此连接' });
+    } catch { return; }
+    if (store.current?.id !== conversationId || store.active || sending.value) return;
+    rebindSessionId = session.id;
+  }
+  readScope.value?.clear();
+  diagnosisTarget.value = { id: task.target.id, label: task.target.label, kind, terminalTask: task.terminalTask, messageId: source.id, rebindSessionId };
+  if (!draft.value.trim()) draft.value = task.terminalTask ? '请根据已有结果继续完成任务。' : '请根据已有证据继续检查。';
+  await focusComposer();
+}
+
 async function send(regenerateId = null, analyzeMessageId = null) {
   if (regenerateId && store.current?.messages.find(message => message.id === regenerateId)?.task) analyzeMessageId = regenerateId;
   if (sending.value || store.importingText || store.active || !store.selectedModel || (!regenerateId && !analyzeMessageId && !draft.value.trim())) return;
@@ -198,17 +273,58 @@ async function send(regenerateId = null, analyzeMessageId = null) {
       try { await confirm({ title: `发送到 ${service.name}？`, content: '本次问题、有效历史对话、摘要及历史工具读取结果将发送到该服务。切换服务不会删除本地历史。', okText: '发送' }); } catch { return; }
     }
     const text = analyzeMessageId ? '继续分析已保存的诊断证据，不执行任何操作。' : draft.value;
+    let selectedSkill = null;
+    if (intent?.terminalTask && !regenerateId && !analyzeMessageId) {
+      if (text.trim() === '@') throw new Error('请先选择要使用的 Skill');
+      const skillId = skillPrefix.exec(text)?.[1];
+      if (skillId) {
+        selectedSkill = attachedSkill.value || (await loadSkills()).skills.find(skill => skill.id === skillId);
+        if (!selectedSkill || selectedSkill.targetKind !== (intent.kind || 'ssh')) throw new Error(`找不到适用于当前终端的 Skill @${skillId}`);
+      }
+    }
     await flushDrafts();
-    if (store.current?.id !== sourceId || store.selectedModelId !== selectedId || (!analyzeMessageId && diagnosisTarget.value !== intent)) return;
+    if (store.current?.id !== sourceId || store.selectedModelId !== selectedId
+      || (!analyzeMessageId && diagnosisTarget.value !== intent) || (selectedSkill && draft.value !== text)) return;
     const grant = !analyzeMessageId && !intent ? readScope.value?.consume() : null;
     if (!regenerateId && !analyzeMessageId) draft.value = '';
     followBottom.value = true;
-    const run = store.send(text, regenerateId, grant?.readGrant || null, grant?.execGrant || null, { diagnosisTarget: analyzeMessageId ? null : intent, analyzeMessageId });
+    const taskIntent = { analyzeMessageId };
+    if (!regenerateId && !analyzeMessageId && intent) {
+      if (diagnosisCmdDirectory.value) taskIntent.cmdDirectory = diagnosisCmdDirectory.value;
+      if (intent.kind === 'deployment') {
+        taskIntent.deploymentTarget = { id: intent.id, label: intent.label };
+      } else if (selectedSkill) {
+        taskIntent.diagnosisTarget = { id: intent.rebindSessionId || intent.id, label: intent.label, kind: intent.kind || 'ssh', terminalTask: true };
+        taskIntent.skill = { id: selectedSkill.id, revision: selectedSkill.revision };
+      } else if (intent.messageId) {
+        taskIntent.continueDiagnosis = { messageId: intent.messageId, rebindSessionId: intent.rebindSessionId || null };
+      } else {
+        taskIntent.diagnosisTarget = intent;
+      }
+    }
+    const run = store.send(text, regenerateId, grant?.readGrant || null, grant?.execGrant || null, taskIntent);
     await focusComposer(origin);
     const accepted = await run;
+    const answer = store.current?.messages.at(-1);
+    if (accepted && !regenerateId && !analyzeMessageId && intent && diagnosisTarget.value === intent
+      && (!sourceId || store.current?.id === sourceId) && answer?.task && !answer.task.analysisOnly) {
+      const { target, targetKind, terminalTask } = answer.task;
+      if (selectedSkill) {
+        const awaitingInputs = answer.status === 'completed' && !answer.tools?.length;
+        if (awaitingInputs && !draft.value.trim()) {
+          pickedSkill.value = selectedSkill;
+          draft.value = `@${selectedSkill.id} `;
+        } else if (!awaitingInputs) {
+          diagnosisTarget.value = null;
+        }
+      } else {
+        diagnosisTarget.value = { id: target.id, label: target.label, kind: targetKind || intent.kind || 'ssh', terminalTask, messageId: answer.id };
+      }
+    }
     // Validation failures before a persisted user message should retain the input.
     if (!regenerateId && !analyzeMessageId && !accepted && store.current?.id === sourceId) draft.value ||= text;
     if (!regenerateId && !analyzeMessageId && !accepted && !sourceId && !store.current) emptyDraft.value ||= text;
+    if (!accepted && selectedSkill && diagnosisTarget.value === intent && draft.value === text) pickedSkill.value = selectedSkill;
   } finally { sending.value = false; }
 }
 let scrollFrame = null;
@@ -256,16 +372,36 @@ onMounted(async () => {
       <div v-if="loading" class="empty">正在读取本地对话…</div>
       <div v-else-if="!store.settings.services.length || !modelOptions(store.settings).length" class="empty"><strong>配置你的 AI 模型</strong><p>请进入「首选项 → 模型服务」，新增服务并启用模型。</p><p>AI 可独立使用，无需连接 SSH。</p></div>
       <div v-else-if="!messages.length" class="empty"><strong>有什么可以帮你？</strong><p>输入问题，或粘贴代码和报错。</p></div>
-      <AiMessage v-for="message in messages" :key="message.id" :message="message" :request-id="generatingHere ? store.active?.requestId : undefined" :busy="!!store.active" :can-regenerate="message.role === 'assistant' && message.replyTo === lastUserId && message.status !== 'streaming'" @regenerate="safe(() => send(message.id))" @analyze="safe(() => send(null, message.id))" @select="safe(() => store.selectAnswer(message.id))" />
+      <AiMessage v-for="message in messages" :key="message.id" :message="message" :request-id="generatingHere ? store.active?.requestId : undefined" :busy="!!store.active" :can-regenerate="message.role === 'assistant' && !message.deployment && message.replyTo === lastUserId && message.status !== 'streaming'" @regenerate="safe(() => send(message.id))" @analyze="safe(() => send(null, message.id))" @continue="safe(() => continueDiagnosis(message))" @select="safe(() => store.selectAnswer(message.id))" />
       <p v-if="generatingHere && ['context','started'].includes(store.active.stage)" class="muted" role="status">正在准备上下文，长会话可能需要调用模型生成摘要…</p>
       </div>
     </div>
     <p v-if="store.error" class="error" role="alert">{{ store.error }}</p>
     <div class="composer">
-      <div v-if="diagnosisTarget" class="read-scope" aria-label="SSH 诊断模式"><span :title="diagnosisTarget.id">SSH 诊断：{{ diagnosisTarget.label }} · 按需提出检查命令</span><Button variant="ghost" size="sm" @click="diagnosisTarget = null">退出</Button></div>
+      <div v-if="diagnosisTarget" class="read-scope" :aria-label="`${intentLabel}模式`"><span :title="diagnosisTarget.id">{{ intentLabel }}：{{ diagnosisTarget.label }} · {{ diagnosisTarget.kind === 'deployment' ? '预览待审阅步骤' : diagnosisTarget.messageId ? '继续同一任务' : diagnosisTarget.terminalTask ? '目录操作自动执行，Shell 命令需确认' : '按需提出检查命令' }}</span><Button variant="ghost" size="sm" @click="diagnosisTarget = null">退出</Button></div>
+      <p v-if="diagnosisTarget?.kind === 'cmd'" class="muted" :title="diagnosisCmdDirectory">
+        {{ diagnosisCmdDirectory ? `终端上报目录：${diagnosisCmdDirectory}` : '当前目录未知，依赖目录的检查需要先确认路径。' }}
+      </p>
       <div v-if="readGrant" class="read-scope"><span :title="readGrant.root">本次工具：{{ terminalSession?.name || readGrant.target }} · {{ readGrant.root || '命令需逐条确认' }}{{ readGrant.root && readGrant.execToken ? ' · 命令需确认' : '' }}</span><Button variant="ghost" size="sm" @click="readScope?.clear()">取消</Button></div>
+      <div v-if="attachedSkill" class="read-scope" aria-label="已选 Skill">
+        <span :title="attachedSkill.revision">@{{ attachedSkill.id }} · {{ attachedSkill.version }} · {{ attachedSkill.directory }}</span>
+        <Button variant="ghost" size="sm" @click="draft = draft.replace(skillPrefix, '').trimStart()">移除 Skill</Button>
+      </div>
+      <section v-if="showSkills" class="skill-picker" aria-label="选择本地 Skill">
+        <strong>选择本地 Skill</strong>
+        <p v-if="skillLoading">正在读取 Skill…</p>
+        <p v-else-if="skillError" role="alert">{{ skillError }}</p>
+        <template v-else>
+          <Button v-for="skill in skillMatches" :key="skill.id" variant="ghost" size="sm" class="skill-option" :title="skill.description" @click="pickSkill(skill)">
+            @{{ skill.id }} · {{ skill.label }} · {{ skill.version }}
+          </Button>
+          <p v-if="!skillMatches.length">没有匹配当前终端的 Skill。</p>
+          <p v-if="skillCatalog" class="muted skill-directory">{{ skillCatalog.directory }}</p>
+          <details v-if="skillCatalog?.issues.length"><summary>配置问题</summary><p v-for="issue in skillCatalog.issues" :key="issue">{{ issue }}</p></details>
+        </template>
+      </section>
       <div class="input-shell">
-        <textarea ref="composer" v-model="draft" aria-label="AI 消息" placeholder="输入问题，或粘贴代码和报错…" rows="3" maxlength="128000" @keydown.enter.exact="if (!$event.isComposing) { $event.preventDefault(); safe(() => send()); }" />
+        <textarea ref="composer" v-model="draft" aria-label="AI 消息" :placeholder="diagnosisTarget?.terminalTask ? '描述任务，或输入 @ 选择固定脚本…' : '输入问题，或粘贴代码和报错…'" rows="3" maxlength="128000" @keydown.enter.exact="if (!$event.isComposing) { $event.preventDefault(); safe(() => send()); }" />
         <div class="input-actions">
           <Button v-if="store.importingText" variant="ghost" size="sm" @click="cancelCapture">取消带入</Button>
           <DropdownMenu v-model:open="captureMenuOpen" side="top" :side-offset="8" @close-auto-focus="closeCaptureFocus">
@@ -312,6 +448,8 @@ onMounted(async () => {
 
 <style scoped>
 .read-scope{display:flex;align-items:center;gap:6px;min-width:0;font-size:11px;color:var(--app-text-muted);margin-bottom:6px}.read-scope>span{flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.skill-picker{display:grid;gap:4px;max-height:180px;overflow:auto;margin-bottom:6px;padding:8px;border:1px solid var(--app-border-light);border-radius:8px;font-size:12px;overflow-wrap:anywhere}
+.skill-option{justify-content:flex-start;white-space:normal;text-align:left}.skill-directory{user-select:text}
 .ai-panel{height:100%;min-height:0;display:flex;flex-direction:column;color:var(--app-text);font-size:12px;background:var(--app-panel-bg)}
 header{display:flex;align-items:center;justify-content:space-between;padding:10px 12px;border-bottom:1px solid var(--app-border-light)}.header-actions{display:flex;gap:4px}
 .messages{flex:1;min-height:0;overflow:auto;padding:0 14px;scrollbar-gutter:stable}

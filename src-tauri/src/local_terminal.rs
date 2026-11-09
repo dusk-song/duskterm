@@ -64,13 +64,14 @@ fn append_output_chunk(output_batch: &mut Vec<u8>, data: Vec<u8>) -> Option<Vec<
 }
 
 #[cfg(windows)]
-struct ProcessTreeGuard {
-    job: windows_sys::Win32::Foundation::HANDLE,
+pub(crate) struct ProcessTreeGuard {
+    job: std::os::windows::io::OwnedHandle,
 }
 
 #[cfg(windows)]
 impl ProcessTreeGuard {
-    fn attach(process_id: u32) -> Result<Self, String> {
+    pub(crate) fn attach(process_id: u32) -> Result<Self, String> {
+        use std::os::windows::io::FromRawHandle;
         use std::ptr::null;
         use windows_sys::Win32::Foundation::{CloseHandle, INVALID_HANDLE_VALUE};
         use windows_sys::Win32::System::JobObjects::{
@@ -116,22 +117,14 @@ impl ProcessTreeGuard {
                 CloseHandle(job);
                 return Err(format!("无法管理本地 Shell 进程树：{error}"));
             }
-            Ok(Self { job })
+            Ok(Self { job: std::os::windows::io::OwnedHandle::from_raw_handle(job) })
         }
     }
 
     fn terminate(&self, _force: bool) {
+        use std::os::windows::io::AsRawHandle;
         unsafe {
-            windows_sys::Win32::System::JobObjects::TerminateJobObject(self.job, 1);
-        }
-    }
-}
-
-#[cfg(windows)]
-impl Drop for ProcessTreeGuard {
-    fn drop(&mut self) {
-        unsafe {
-            windows_sys::Win32::Foundation::CloseHandle(self.job);
+            windows_sys::Win32::System::JobObjects::TerminateJobObject(self.job.as_raw_handle(), 1);
         }
     }
 }
@@ -192,7 +185,7 @@ fn stop_process_tree(
 }
 
 #[cfg(windows)]
-fn windows_system_root() -> PathBuf {
+pub(crate) fn windows_system_root() -> PathBuf {
     std::env::var_os("SystemRoot")
         .map(PathBuf::from)
         .unwrap_or_else(|| PathBuf::from(r"C:\Windows"))
@@ -213,6 +206,14 @@ fn windows_cmd_path() -> PathBuf {
         .map(PathBuf::from)
         .filter(|path| path.is_file())
         .unwrap_or_else(|| windows_system_root().join("System32").join("cmd.exe"))
+}
+
+#[cfg(windows)]
+fn cmd_prompt() -> std::ffi::OsString {
+    // OSC 9;9 is emitted by this CMD process at each prompt.
+    let mut prompt = std::ffi::OsString::from(r"$E]9;9;$P$E\");
+    prompt.push(std::env::var_os("PROMPT").unwrap_or_else(|| "$P$G".into()));
+    prompt
 }
 
 #[cfg(windows)]
@@ -426,7 +427,10 @@ pub async fn connect_local_terminal_runtime(
     session_id: String,
     config: LocalTerminalConfig,
 ) -> Result<ManagedSshRuntime, String> {
-    let (handle, input_rx, resize_rx, close_rx) = create_terminal_runtime_channels();
+    let (mut handle, input_rx, resize_rx, close_rx) = create_terminal_runtime_channels();
+    if cfg!(windows) && config.profile_id == "cmd" {
+        handle.local_cmd_directory = Some(config.working_directory.clone());
+    }
     let (ready_tx, ready_rx) = oneshot::channel();
     let task = tokio::task::spawn_blocking(move || {
         run_local_terminal(
@@ -476,6 +480,10 @@ fn run_local_terminal(
         command.env("TERM", "xterm-256color");
         command.env("COLORTERM", "truecolor");
         command.env("TERM_PROGRAM", "DuskTerm");
+        #[cfg(windows)]
+        if config.profile_id == "cmd" {
+            command.env("PROMPT", cmd_prompt());
+        }
 
         let mut child = pair
             .slave
