@@ -345,9 +345,47 @@ pub(super) struct ExecRun {
 #[derive(Default)]
 struct DiagnosticBudget {
     commands: HashSet<(String, Option<String>)>,
-    unresolved: HashSet<(String, Option<String>)>,
+    unresolved_change: bool,
     blocked: bool,
 }
+
+pub(super) fn verification_command(kind: TargetKind, arguments: &serde_json::Value) -> bool {
+    if arguments.get("skill").is_some() {
+        return false;
+    }
+    let Some(command) = arguments.get("command").and_then(serde_json::Value::as_str) else {
+        return false;
+    };
+    if !command.bytes().all(|byte| byte.is_ascii_alphanumeric() || b" \t._:/@-".contains(&byte)) {
+        return false;
+    }
+    let words: Vec<_> = command.split_ascii_whitespace().collect();
+    let operand = |word: &str| !word.starts_with('-') && !word.starts_with('/');
+    match (kind, words.as_slice()) {
+        (TargetKind::Ssh, ["pwd" | "whoami" | "uptime" | "df"]) => true,
+        (TargetKind::Ssh, ["ls" | "stat", "--", path]) => !path.is_empty(),
+        (TargetKind::Ssh, ["systemctl", "is-active" | "is-enabled" | "is-failed", unit]) => operand(unit),
+        // CMD searches the working directory for external executables.
+        (TargetKind::Cmd, [command]) => command.eq_ignore_ascii_case("ver"),
+        _ => false,
+    }
+}
+
+impl DiagnosticBudget {
+    fn check_command(&mut self, verification: bool, command: (String, Option<String>)) -> Result<(), String> {
+        if verification {
+            return Ok(());
+        }
+        if self.unresolved_change {
+            return Err("存在结果未知的变更。可继续执行受限只读检查，核实后请在任务卡确认，再提出变更命令".into());
+        }
+        if !self.commands.insert(command) {
+            return Err("本轮已提议过同一变更命令，请使用已有结果分析".into());
+        }
+        Ok(())
+    }
+}
+
 impl ExecAccess {
     fn check_live(&self) -> Result<(), String> {
         if now() >= self.expires {
@@ -431,6 +469,29 @@ impl ExecRun {
     pub fn task_directory(&self) -> Option<String> {
         self.task_directory.as_ref()?.lock().ok()?.clone()
     }
+    pub fn requested_directory(&self, args: &super::terminal_directory::Args) -> Result<Option<String>, String> {
+        let current = self.task_directory();
+        let Some(path) = args.destination()? else { return Ok(current) };
+        if self.kind() == TargetKind::Ssh {
+            if path.starts_with('/') {
+                return Ok(Some(path.into()));
+            }
+            let base = current.as_deref().ok_or("请先核实 SSH 工作目录")?;
+            return Ok(Some(format!("{}/{path}", base.trim_end_matches('/'))));
+        }
+        #[cfg(windows)]
+        {
+            let path = std::path::Path::new(path);
+            if path.is_absolute() {
+                return Ok(Some(path.to_string_lossy().into_owned()));
+            }
+            let base = current.as_deref().ok_or("当前 CMD 目录未知，请提供本地绝对路径")?;
+            return Ok(Some(std::path::Path::new(base).join(path).to_string_lossy().into_owned()));
+        }
+        #[cfg(not(windows))]
+        Err("本地 CMD 仅支持 Windows".into())
+    }
+
     pub async fn directory(&self, args: super::terminal_directory::Args) -> Result<String, String> {
         use super::terminal_directory::{Action, PREVIEW_BYTES};
         self.check_live()?;
@@ -439,18 +500,11 @@ impl ExecRun {
         let path = args.destination()?;
         let (cwd, entries, truncated) = match &self.access.backend {
             Backend::Ssh(open) => {
-                let directory = match path {
-                    Some(path) if path.starts_with('/') => Some(path.to_owned()),
-                    Some(path) => {
-                        let base = current.as_deref().ok_or("请先核实 SSH 工作目录")?;
-                        Some(format!("{}/{path}", base.trim_end_matches('/')))
-                    }
-                    None => current,
-                };
+                let directory = self.requested_directory(&args)?;
                 if directory.as_ref().is_some_and(|path| !super::terminal_directory::valid_path(path) || !path.starts_with('/')) {
                     return Err("SSH 工作目录无效".into());
                 }
-                let command = if args.action == Action::List { "pwd -P && LC_ALL=C ls -1Ab ." } else { "pwd -P" };
+                let command = if args.action == Action::List { "pwd -P && LC_ALL=C ls -1bf ." } else { "pwd -P" };
                 let channel = tokio::time::timeout(Duration::from_secs(10), open()).await
                     .map_err(|_| "打开目录检查通道超时")??;
                 let live = self.clone();
@@ -480,9 +534,9 @@ impl ExecRun {
         *task_directory.lock().map_err(|_| "任务工作目录状态不可用")? = Some(cwd.clone());
         Ok(serde_json::json!({"cwd":cwd,"entries":entries,"truncated":truncated}).to_string())
     }
-    pub fn diagnostic(mut self, unresolved: HashSet<(String, Option<String>)>) -> Self {
+    pub fn diagnostic(mut self, unresolved_change: bool) -> Self {
         self.diagnostic_budget = Some(Arc::new(Mutex::new(DiagnosticBudget {
-            unresolved,
+            unresolved_change,
             ..Default::default()
         })));
         self
@@ -494,6 +548,16 @@ impl ExecRun {
         self.diagnostic_budget
             .as_ref()
             .is_some_and(|budget| budget.lock().map_or(true, |budget| budget.blocked))
+    }
+    pub fn unresolved_change(&self) -> bool {
+        self.diagnostic_budget.as_ref().is_some_and(|budget| budget.lock().map_or(true, |budget| budget.unresolved_change))
+    }
+
+    pub fn block_actions(&self) -> Result<(), String> {
+        if let Some(budget) = &self.diagnostic_budget {
+            budget.lock().map_err(|_| "任务预算不可用")?.blocked = true;
+        }
+        Ok(())
     }
     pub fn bind(mut self, message_id: &str) -> Self {
         self.message_id = message_id.into();
@@ -540,16 +604,25 @@ impl ExecRun {
             } else {
                 args.cwd.clone()
             };
-            let command = (args.command.clone(), cwd);
-            if budget.unresolved.contains(&command) {
-                return Err("同一命令已有结果未知的记录，请先用其他检查核实状态".into());
-            }
-            if !budget.commands.insert(command) {
-                return Err("不重复派发已提议的同一命令，请使用已有结果分析".into());
-            }
+            budget.check_command(verification_command(self.kind(), &record.arguments), (args.command.clone(), cwd))?;
         } else if self.used.swap(true, Ordering::SeqCst) {
             return Err("本次问答只允许提出一条命令；请核实结果后重新提问".into());
         }
+        let approved = self.confirm_operation(&mut record, calls, events, true).await?;
+        if approved {
+            *self.permit.lock().map_err(|_| "执行许可不可用")? = Some((args, record));
+        }
+        Ok(approved)
+    }
+
+    pub async fn confirm_operation(
+        &self,
+        record: &mut ToolRecord,
+        calls: &Calls,
+        events: &Events,
+        command: bool,
+    ) -> Result<bool, String> {
+        self.check_live()?;
         let approval = id();
         let expires = now() + APPROVAL_TTL;
         let (tx, rx) = oneshot::channel();
@@ -571,7 +644,7 @@ impl ExecRun {
         record.status = "waiting_approval".into();
         record.approval_id = Some(approval);
         record.approval_expires_at = Some(expires);
-        record.execution = Some(Execution {
+        record.execution = command.then(|| Execution {
             outcome: "not_started".into(),
             ..Default::default()
         });
@@ -586,7 +659,6 @@ impl ExecRun {
                 record.status = "approved".into();
                 tools::publish(record.clone(), calls, events, true).await?;
                 self.check_live()?;
-                *self.permit.lock().map_err(|_| "执行许可不可用")? = Some((args, record));
                 Ok(true)
             }
             _ => {
@@ -599,8 +671,8 @@ impl ExecRun {
                     "expired"
                 }
                 .into();
-                record.result = Some("用户未批准该命令，未派发执行；不可自动更换命令重试".into());
-                tools::publish(record, calls, events, true).await?;
+                record.result = Some("未获得操作许可，不能改用其他工具绕过审批".into());
+                tools::publish(record.clone(), calls, events, true).await?;
                 Ok(false)
             }
         }
@@ -633,12 +705,22 @@ impl ExecRun {
             None
         };
         let command = launch.as_ref().map_or(args.command.as_str(), |launch| launch.command.as_str());
+        let verification_shell;
+        let command = if self.kind() == TargetKind::Ssh && self.is_diagnostic()
+            && verification_command(self.kind(), &record.arguments)
+        {
+            verification_shell = format!("PATH=/usr/sbin:/usr/bin:/sbin:/bin; export PATH\n{command}");
+            verification_shell.as_str()
+        } else {
+            command
+        };
         let progress = Arc::new(Mutex::new(None));
         let base = record.clone();
         let callback_calls = calls.clone();
         let callback_events = events.clone();
         let live = self.clone();
         let report = move |execution, durable| {
+            let exit_observed = Execution::has_exit_status(&execution);
             let mut record = base.clone();
             record.execution = Some(execution);
             record.status = "running".into();
@@ -648,10 +730,16 @@ impl ExecRun {
             let slot = progress.clone();
             let live = live.clone();
             async move {
-                live.check_live()?;
+                // A closed connection may still have delivered the exit status.
+                // Save observed results even if the connection is no longer usable.
+                if !exit_observed {
+                    live.check_live()?;
+                }
                 if durable {
                     tools::publish(record, &calls, &events, true).await?;
-                    live.check_live()?;
+                    if !exit_observed {
+                        live.check_live()?;
+                    }
                 } else {
                     calls
                         .lock()
@@ -709,7 +797,7 @@ impl ExecRun {
         record.status = match execution.outcome.as_str() {
             "unknown" => "unknown",
             "rejected" => "failed",
-            _ if execution.exit_code == Some(0) => "completed",
+            "exited" => exited_tool_status(&execution),
             _ => "failed",
         }
         .into();

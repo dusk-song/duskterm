@@ -7,6 +7,19 @@ pub enum Protocol {
     AnthropicMessages,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ModelRecipient {
+    pub base_url: String,
+    pub protocol: Protocol,
+}
+
+impl From<&Service> for ModelRecipient {
+    fn from(service: &Service) -> Self {
+        Self { base_url: service.base_url.clone(), protocol: service.protocol.clone() }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ModelConfig {
@@ -109,6 +122,21 @@ pub struct Usage {
     pub reasoning_tokens: Option<u64>,
 }
 
+impl Usage {
+    pub(super) fn accumulate(&mut self, usage: &Self) {
+        let add = |a: Option<u64>, b: Option<u64>| match (a, b) {
+            (None, None) => None,
+            _ => Some(a.unwrap_or(0).saturating_add(b.unwrap_or(0))),
+        };
+        self.input_tokens = add(self.input_tokens, usage.input_tokens);
+        self.output_tokens = add(self.output_tokens, usage.output_tokens);
+        self.total_tokens = add(self.total_tokens, usage.total_tokens);
+        self.cached_input_tokens = add(self.cached_input_tokens, usage.cached_input_tokens);
+        self.cache_creation_input_tokens = add(self.cache_creation_input_tokens, usage.cache_creation_input_tokens);
+        self.reasoning_tokens = add(self.reasoning_tokens, usage.reasoning_tokens);
+    }
+}
+
 #[derive(Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UsageStats {
@@ -196,6 +224,14 @@ pub struct ToolRecord {
 
 pub(crate) use crate::ssh::exec::Execution;
 
+pub(super) fn exited_tool_status(execution: &Execution) -> &'static str {
+    if execution.exit_code == Some(0) && execution.signal.is_none() {
+        "completed"
+    } else {
+        "failed"
+    }
+}
+
 pub(super) fn interrupt_tool(tool: &mut ToolRecord, reason: &str) {
     if !["running", "waiting_approval", "approved"].contains(&tool.status.as_str()) {
         return;
@@ -204,14 +240,26 @@ pub(super) fn interrupt_tool(tool: &mut ToolRecord, reason: &str) {
     tool.approval_expires_at = None;
     tool.elapsed_ms = now().saturating_sub(tool.started_at);
     if let Some(execution) = &mut tool.execution {
-        if ["dispatching", "running"].contains(&execution.outcome.as_str()) {
+        if execution.has_exit_status() {
+            execution.outcome = "exited".into();
+            execution.end_reason = "interrupted".into();
+            tool.status = exited_tool_status(execution).into();
+            let output = if execution.output_complete {
+                "已保留退出状态与输出"
+            } else {
+                "已保留退出状态和已收到的输出，输出可能不完整"
+            };
+            tool.result = Some(format!("{reason}。{output}"));
+        } else if ["dispatching", "running"].contains(&execution.outcome.as_str()) {
             execution.outcome = "unknown".into();
             execution.end_reason = "interrupted".into();
             execution.output_complete = false;
             tool.status = "unknown".into();
             let local = tool.name == super::tools::CMD_COMMAND
                 || tool.arguments.pointer("/skill/targetKind").and_then(serde_json::Value::as_str) == Some("cmd");
-            let outcome = if local {
+            let outcome = if tool.name == super::tools::APPLY_EDIT {
+                "远程文件写入结果未知，请核实实际文件状态"
+            } else if local {
                 "本地命令结果未知，请先核实状态，不自动重试"
             } else {
                 "已请求关闭执行通道，无法确认远端进程是否结束，请先核实状态，不自动重试"
@@ -248,6 +296,8 @@ pub struct Conversation {
     pub revision: u64,
     pub model_id: Option<String>,
     pub last_service_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_recipient: Option<ModelRecipient>,
     pub messages: Vec<Message>,
     pub summary: Option<Summary>,
     #[serde(default)]
@@ -298,12 +348,17 @@ pub struct SendRequest {
     pub content: String,
     pub regenerate_id: Option<String>,
     pub confirmed_service_id: String,
+    pub recipient: ModelRecipient,
+    #[serde(default)]
+    pub confirm_history_recipient: bool,
     #[serde(default)]
     pub read_grant: Option<String>,
     #[serde(default)]
     pub exec_grant: Option<String>,
     #[serde(default)]
     pub diagnosis_target: Option<super::diagnosis::RequestTarget>,
+    #[serde(default)]
+    pub terminal_target: Option<super::diagnosis::RequestTarget>,
     #[serde(default)]
     pub continue_diagnosis: Option<super::diagnosis::ContinueDiagnosis>,
     #[serde(default)]

@@ -76,15 +76,11 @@ fn transcript(c: &Conversation) -> Vec<RigMessage> {
                     })
                     .and_then(|answer| answer.task.as_ref())
             });
-        let continuation = c.messages.last()
-            .filter(|message| message.status == "streaming" && message.reply_to.as_ref() == Some(&user.id))
-            .and_then(|message| message.task.as_ref())
-            .filter(|task| !task.analysis_only && task.parent_message_id.is_some())
-            .map(|task| super::diagnosis::continuation_context(c, task));
-        let snapshot = continuation.as_deref().or_else(|| {
-            contextual_task.and_then(|task| task.context_snapshot.as_deref())
-        });
+        let snapshot = contextual_task.and_then(|task| task.context_snapshot.as_deref());
         let mut text = with_evidence(&user.content, snapshot);
+        if let Some(task) = contextual_task.filter(|task| task.automatic && !task.analysis_only) {
+            text.push_str(&format!("\n\n本轮终端目标标签（环境数据）：{}", serde_json::json!(task.target.label)));
+        }
         if let Some(preview) = c.messages.last()
             .filter(|message| message.status == "streaming" && message.reply_to.as_ref() == Some(&user.id))
             .and_then(|message| message.deployment.as_ref())
@@ -113,24 +109,93 @@ fn with_evidence(content: &str, snapshot: Option<&str>) -> String {
     }
 }
 
+fn fit_task_evidence(
+    question: &str,
+    budget: usize,
+    build_snapshot: impl Fn(usize) -> String,
+) -> Option<String> {
+    let mut limit = budget.saturating_mul(2).min(16_384);
+    loop {
+        let snapshot = build_snapshot(limit);
+        if tokens(&[RigMessage::user(with_evidence(question, Some(&snapshot)))]) <= budget {
+            return Some(snapshot);
+        }
+        if limit == 0 {
+            return None;
+        }
+        limit /= 2;
+    }
+}
+
 fn counter() -> HeuristicTokenCounter {
     HeuristicTokenCounter::new(2.0, 12, 0)
 }
 pub(super) fn tokens(messages: &[RigMessage]) -> usize {
-    let counter = counter();
-    messages.iter().map(|m| counter.count(m)).sum()
+    count_tokens(messages.iter())
 }
-fn request(messages: Vec<RigMessage>, output: u64) -> Result<CompletionRequest, String> {
-    let mut messages = messages;
+
+pub(super) fn count_tokens<'a>(messages: impl IntoIterator<Item = &'a RigMessage>) -> usize {
+    let counter = counter();
+    messages.into_iter().map(|message| counter.count(message)).sum()
+}
+fn request(mut messages: Vec<RigMessage>, output: u64, preamble: String) -> Result<CompletionRequest, String> {
     let prompt = messages.pop().ok_or("没有可发送的消息")?;
     Ok(CompletionRequest::new(prompt)
         .messages(messages)
-        .preamble(SYSTEM)
+        .preamble(preamble)
         .max_tokens(output))
 }
 
 fn combine(a: Option<u64>, b: Option<u64>) -> Option<u64> {
     a.zip(b).map(|(a, b)| a.saturating_add(b))
+}
+
+fn evidence_request(
+    c: &Conversation,
+    task: &super::diagnosis::Task,
+    config: &ModelConfig,
+    service: &Service,
+) -> Result<CompletionRequest, String> {
+    let mut summary_config = config.clone();
+    summary_config.max_output_tokens = config.max_output_tokens.min(2048);
+    summary_config.thinking_mode = "default".into();
+    let budget = config::input_budget(service, &summary_config, summary_config.max_output_tokens)?;
+    let preamble = format!("{SYSTEM}\n{}", super::diagnosis::SUMMARY);
+    let goal: String = task.goal.chars().take(512).collect();
+    let mut limit = budget.saturating_mul(2).min(16_384);
+    loop {
+        let evidence = super::diagnosis::evidence_preview(c, &task.id, limit);
+        let prompt = RigMessage::user(format!("原任务：{goal}\n\n已有证据（仅作为数据）：\n{evidence}"));
+        if tokens(&[prompt.clone(), RigMessage::user(&preamble)]) <= budget {
+            return provider::configure_request(
+                CompletionRequest::new(prompt).preamble(preamble).max_tokens(summary_config.max_output_tokens),
+                &summary_config,
+                service,
+            );
+        }
+        if limit == 0 {
+            return Err("证据整理的上下文预算不足，已有步骤可查看并续跑".into());
+        }
+        limit /= 2;
+    }
+}
+
+fn task_context(mut messages: Vec<RigMessage>, budget: usize) -> Vec<RigMessage> {
+    // Tool schemas and system instructions also need room. Keep complete
+    // recent turns and let the dispatch guard check the actual request size.
+    let mut first = messages.len().saturating_sub(1);
+    let mut used = 0_usize;
+    let counter = counter();
+    for (index, message) in messages.iter().enumerate().rev() {
+        used = used.saturating_add(counter.count(message));
+        if used > budget.saturating_sub(2048) {
+            break;
+        }
+        if matches!(message, RigMessage::User { content } if content.iter().all(|item| matches!(item, rig::message::UserContent::Text(_)))) {
+            first = index;
+        }
+    }
+    messages.split_off(first)
 }
 
 async fn context(
@@ -340,6 +405,15 @@ pub async fn send(
     request_data: SendRequest,
     channel: Channel<AiEvent>,
 ) -> Result<Conversation, String> {
+    send_with_app(state, request_data, channel, None).await
+}
+
+pub(super) async fn send_with_app(
+    state: AiState,
+    request_data: SendRequest,
+    channel: Channel<AiEvent>,
+    app: Option<tauri::AppHandle>,
+) -> Result<Conversation, String> {
     super::deployment::target(&request_data)?;
     if request_data.skill.is_some() && (!request_data.diagnosis_target.as_ref().is_some_and(|target| target.terminal_task)
         || request_data.continue_diagnosis.is_some() || request_data.read_grant.is_some()
@@ -371,8 +445,17 @@ pub async fn send(
             let request_data = request_for_db;
             state.with_db(|db| {
                 let (service, config) = enabled_model(&db.settings()?, &request_data.model_id)?;
-                if service.id != request_data.confirmed_service_id {
+                let recipient = ModelRecipient::from(&service);
+                if service.id != request_data.confirmed_service_id || recipient != request_data.recipient {
                     return Err("发送目标发生变化，请重新确认服务".into());
+                }
+                let mut c = db.get(&request_data.conversation_id)?;
+                if !c.messages.is_empty()
+                    && (c.last_service_id.as_deref() != Some(service.id.as_str())
+                        || c.last_recipient.as_ref() != Some(&recipient))
+                    && !request_data.confirm_history_recipient
+                {
+                    return Err("发送历史记录前，请确认模型服务的实际地址和协议".into());
                 }
                 let input_budget = config::input_budget(&service, &config, config.max_output_tokens)?;
                 provider::configure_request(CompletionRequest::new("validate"), &config, &service)?;
@@ -381,15 +464,17 @@ pub async fn send(
                 if read_access.as_ref().zip(exec_access.as_ref()).is_some_and(|(read,exec)|read.target!=exec.target()) {
                     return Err("读取和命令提议必须绑定同一 SSH 目标".into());
                 }
-                let mut c = db.get(&request_data.conversation_id)?;
-                let diagnostic_task = if let Some(target) = &request_data.diagnosis_target {
+                let mut diagnostic_task = if let Some(target) = &request_data.diagnosis_target {
                     let exec = exec_access.take()
                         .filter(|exec| exec.target() == target.id && exec.kind() == target.kind)
                         .ok_or("诊断任务缺少匹配的目标许可")?;
                     if read_access.is_some() || request_data.regenerate_id.is_some() {
                         return Err("诊断任务不能混用读取授权或重新生成".into());
                     }
-                    let (mut task, unresolved) = super::diagnosis::continue_task(&c, &request_data, target, exec.identity())?;
+                    let mut task = super::diagnosis::continue_task(&c, &request_data, target, exec.identity())?;
+                    task.automatic |= request_data.terminal_target.is_some();
+                    let unresolved = !task.unknown_steps.is_empty()
+                        || (task.automatic && super::diagnosis::has_unverified_change(&c, target.kind, exec.identity(), &task.id));
                     let mut exec = exec.diagnostic(unresolved);
                     if task.terminal_task {
                         if let Some(selection) = &request_data.skill {
@@ -411,7 +496,7 @@ pub async fn send(
                 } else {
                     None
                 };
-                let analysis_task=super::diagnosis::analysis_task(&c,&request_data)?;
+                let mut analysis_task = super::diagnosis::analysis_task(&c, &request_data)?;
                 if request_data.regenerate_id.as_ref().is_some_and(|id|c.messages.iter().any(|message|message.id==*id&&message.task.is_some())) && analysis_task.is_none() {
                     return Err("诊断回答重新生成仅支持分析已有证据，不能恢复执行权限".into());
                 }
@@ -453,9 +538,7 @@ pub async fn send(
                     }
                     // Reject an oversized current question before persisting a turn
                     // or calling the summarizer. Older history can still compact.
-                    let snapshot = diagnostic_task.as_ref().filter(|task| task.parent_message_id.is_some())
-                        .map(|task| super::diagnosis::continuation_context(&c, task));
-                    if tokens(&[RigMessage::user(with_evidence(text, snapshot.as_deref()))]) > input_budget {
+                    if tokens(&[RigMessage::user(text)]) > input_budget {
                         return Err("CONTEXT_LIMIT: 当前问题过长，请缩减终端文本或调整模型窗口与输出预算；草稿已保留".into());
                     }
                     if c.messages.is_empty() {
@@ -466,6 +549,25 @@ pub async fn send(
                     c.messages.push(user);
                     id
                 };
+                let question = c.messages.iter().find(|message| message.id == user_id)
+                    .ok_or("找不到任务对应的问题")?.content.as_str();
+                if let Some(task) = diagnostic_task.as_mut().filter(|task| task.parent_message_id.is_some()) {
+                    let reserve = (input_budget / 3).min(2048);
+                    task.context_snapshot = Some(
+                        fit_task_evidence(question, input_budget - reserve, |limit| {
+                            super::diagnosis::continuation_context(&c, task, limit.min(8192))
+                        }).ok_or("CONTEXT_LIMIT: 当前问题和续跑上下文超出预算，请缩短问题或调整模型配置；草稿已保留")?,
+                    );
+                }
+                if let Some(task) = analysis_task.as_mut() {
+                    let preamble = format!("{SYSTEM}\n{}", super::diagnosis::SUMMARY);
+                    let reserve = tokens(&[RigMessage::system(preamble)]);
+                    task.context_snapshot = Some(
+                        fit_task_evidence(question, input_budget.saturating_sub(reserve), |limit| {
+                            super::diagnosis::analysis_context(&c, task, limit)
+                        }).ok_or("CONTEXT_LIMIT: 当前模型无法容纳证据分析请求，请调整上下文窗口或输出预算")?,
+                    );
+                }
                 let mut answer = new_message("assistant", String::new());
                 answer.task = diagnostic_task.or(analysis_task);
                 answer.deployment = request_data.deployment_target.clone().map(|target| {
@@ -492,6 +594,7 @@ pub async fn send(
         })
         .await?;
     let index = c.messages.len() - 1;
+    let automatic = c.messages[index].task.as_ref().is_some_and(|task| task.automatic);
     let message_id = c.messages[index].id.clone();
     let mut seq = 0;
     let mut record = state.call_log.guard(state.start_call(
@@ -509,6 +612,8 @@ pub async fn send(
     let mut usage_reserved = false;
     let mut checkpoint_task: Option<tokio::task::JoinHandle<Result<(), String>>> = None;
     let mut wrapped_up = false;
+    let execution_deadline = tokio::time::Instant::now()
+        + Duration::from_secs(super::diagnosis::TASK_TIMEOUT - super::diagnosis::SUMMARY_TIME);
     let outcome = async {
         emit(
             &channel,
@@ -519,11 +624,16 @@ pub async fn send(
             None,
             Some(c.clone()),
         )?;
+        let recipient = ModelRecipient::from(&service);
         let service_for_key = service.clone();
-        let key =
-            tauri::async_runtime::spawn_blocking(move || provider::credential(&service_for_key))
-                .await
-                .map_err(|_| "凭据读取任务中断")??;
+        let model_id = config.id.clone();
+        let key = state.blocking(move |state| state.with_db(|db| {
+            let (current, _) = enabled_model(&db.settings()?, &model_id)?;
+            if current.id != service_for_key.id || ModelRecipient::from(&current) != ModelRecipient::from(&service_for_key) {
+                return Err("发送目标发生变化，请重新确认服务".into());
+            }
+            provider::credential(&current)
+        })).await?;
         let model = provider::model(&service, &config, &key)?;
         emit(
             &channel,
@@ -534,9 +644,21 @@ pub async fn send(
             None,
             None,
         )?;
-        let messages = context(&mut c, &model, &config, &service, &state).await?;
         c.last_service_id = Some(service.id.clone());
+        c.last_recipient = Some(recipient);
         state.save_conversation(&c).await?;
+        let analysis_only = c.messages[index].task.as_ref().is_some_and(|task| task.analysis_only);
+        let messages = if analysis_only {
+            let answer = &c.messages[index];
+            let question = c.messages.iter().find(|message| Some(&message.id) == answer.reply_to.as_ref())
+                .ok_or("找不到任务对应的问题")?;
+            vec![RigMessage::user(with_evidence(&question.content, answer.task.as_ref().and_then(|task| task.context_snapshot.as_deref())))]
+        } else if request_data.diagnosis_target.is_some() {
+            let budget = config::input_budget(&service, &config, config.max_output_tokens)?;
+            task_context(transcript(&c), budget)
+        } else {
+            context(&mut c, &model, &config, &service, &state).await?
+        };
         emit(
             &channel,
             &request_data,
@@ -550,18 +672,30 @@ pub async fn send(
         if read_access.is_some() || exec_access.is_some() {
             let budget = config::input_budget(&service, &config, config.max_output_tokens)?;
             let mut stream = if let Some(exec) = exec_access {
+                let exec = exec.bind(&message_id);
+                let automatic_read = if automatic && exec.kind() == super::diagnosis::TargetKind::Ssh && exec.skill().is_none() {
+                    app.as_ref().and_then(|app| super::read_access::AutomaticRead::new(
+                        app, exec.clone(), request_data.recipient.base_url.clone(),
+                    ).ok())
+                } else {
+                    None
+                };
                 super::tools::stream_with_exec(
-                    model,
+                    model.clone(),
                     messages,
                     &config,
                     &service,
                     read_access,
-                    exec.bind(&message_id),
+                    exec,
                     budget,
+                    automatic.then(|| super::tools::AutomaticTools {
+                        read: automatic_read,
+                        skill_root: super::skill::root(&state.db_path),
+                    }),
                 )?
             } else {
                 super::tools::stream(
-                    model,
+                    model.clone(),
                     messages,
                     &config,
                     &service,
@@ -571,9 +705,20 @@ pub async fn send(
             };
             let mut finished = false;
             let mut pending_calls = 0_u64;
-            let mut summary_text = String::new();
             let mut checkpoint = Instant::now();
-            while let Some(item) = stream.next().await {
+            let diagnostic = c.messages[index].task.is_some();
+            loop {
+                let next = if diagnostic {
+                    tokio::time::timeout_at(execution_deadline, stream.next())
+                        .await.unwrap_or(Some(Err(super::diagnosis::WRAP_UP.into())))
+                } else {
+                    stream.next().await
+                };
+                let Some(item) = next else { break };
+                if diagnostic && item.as_ref().is_err_and(|error| error == super::diagnosis::WRAP_UP || error.starts_with("BUDGET:") || error.starts_with("CONTEXT_LIMIT:")) {
+                    wrapped_up = true;
+                    break;
+                }
                 use super::tools::Delta;
                 let (item, ack) = match item? {
                     super::tools::Delta::DurableTool(tool, ack) => {
@@ -592,15 +737,10 @@ pub async fn send(
                     Delta::Text(kind, text) => {
                         if c.messages[index].content.len()
                             + c.messages[index].reasoning.len()
-                            + summary_text.len()
                             + text.len()
                             > 4_000_000
                         {
                             return Err("回答超过应用大小上限，已保留部分内容".into());
-                        }
-                        if wrapped_up && kind == "text" {
-                            summary_text.push_str(&text);
-                            continue;
                         }
                         if kind == "reasoning" {
                             c.messages[index].reasoning.push_str(&text);
@@ -678,14 +818,13 @@ pub async fn send(
                         }
                     }
                     Delta::DurableTool(..) | Delta::Progress(..) => unreachable!(),
-                    Delta::WrapUp => wrapped_up = true,
                     Delta::Call => {
                         c.ensure_usage_stats().unreported_calls += 1;
                         pending_calls += 1;
                         if let Some(task) = &mut c.messages[index].task {
                             task.model_calls += 1;
                             task.elapsed_ms = now().saturating_sub(task.started_at);
-                            task.status = if wrapped_up { "summarizing" } else { "running" }.into();
+                            task.status = "running".into();
                             seq += 1;
                             channel
                                 .send(AiEvent {
@@ -712,37 +851,9 @@ pub async fn send(
                             pending_calls -= 1;
                         }
                         stats.add(&usage);
-                        let total = &mut c.messages[index].usage;
-                        let add = |a: Option<u64>, b: Option<u64>| match (a, b) {
-                            (None, None) => None,
-                            _ => Some(a.unwrap_or(0).saturating_add(b.unwrap_or(0))),
-                        };
-                        total.input_tokens = add(total.input_tokens, usage.input_tokens);
-                        total.output_tokens = add(total.output_tokens, usage.output_tokens);
-                        total.total_tokens = add(total.total_tokens, usage.total_tokens);
-                        total.cached_input_tokens =
-                            add(total.cached_input_tokens, usage.cached_input_tokens);
-                        total.cache_creation_input_tokens = add(
-                            total.cache_creation_input_tokens,
-                            usage.cache_creation_input_tokens,
-                        );
-                        total.reasoning_tokens =
-                            add(total.reasoning_tokens, usage.reasoning_tokens);
+                        c.messages[index].usage.accumulate(&usage);
                     }
                     Delta::Final(history) => {
-                        if wrapped_up {
-                            if super::diagnosis::has_raw_tool_markup(&summary_text) {
-                                return Err(super::diagnosis::SUMMARY_PROTOCOL_ERROR.into());
-                            }
-                            if summary_text.trim().is_empty() {
-                                return Err("模型没有返回证据整理结果。已有工具结果可查看。".into());
-                            }
-                            c.messages[index].content.push_str(&summary_text);
-                            emit(
-                                &channel, &request_data, &message_id, &mut seq,
-                                "text", Some(std::mem::take(&mut summary_text)), None,
-                            )?;
-                        }
                         c.messages[index].tool_history = history;
                         finished = true;
                     }
@@ -773,6 +884,57 @@ pub async fn send(
                     checkpoint = Instant::now();
                 }
             }
+            drop(stream);
+            if wrapped_up {
+                if let Some(checkpoint) = checkpoint_task.take() {
+                    checkpoint.await.map_err(|_| "AI 检查点任务中断")??;
+                }
+                for tool in &mut c.messages[index].tools {
+                    interrupt_tool(tool, "本轮执行已结束，正在整理证据");
+                }
+                let task = c.messages[index].task.as_ref().unwrap();
+                let completion = evidence_request(&c, task, &config, &service)?;
+                let task = c.messages[index].task.as_mut().unwrap();
+                if task.model_calls >= task.model_limit {
+                    return Err("证据整理的模型调用预算已耗尽，已有步骤可查看并续跑".into());
+                }
+                task.status = "summarizing".into();
+                task.model_calls += 1;
+                task.elapsed_ms = now().saturating_sub(task.started_at);
+                seq += 1;
+                channel.send(AiEvent {
+                    conversation_id: request_data.conversation_id.clone(), request_id: request_data.request_id.clone(),
+                    message_id: message_id.clone(), seq, kind: "task".into(), text: None,
+                    conversation: None, tool: None, task: Some(task.clone()),
+                }).map_err(|_| "诊断接收端已断开")?;
+                c.ensure_usage_stats().unreported_calls += 1;
+                state.save_conversation(&c).await?;
+                let response = tokio::time::timeout(Duration::from_secs(super::diagnosis::SUMMARY_TIME), async {
+                    let mut stream = model.stream(completion).map_err(provider::error)?;
+                    while let Some(item) = stream.next().await {
+                        item.map_err(provider::error)?;
+                    }
+                    stream.finish().await.map_err(provider::error)
+                }).await.map_err(|_| "证据整理超时，已有步骤可查看并续跑")??;
+                let usage = provider::usage(&response);
+                let stats = c.ensure_usage_stats();
+                stats.unreported_calls = stats.unreported_calls.saturating_sub(1);
+                stats.add(&usage);
+                c.messages[index].usage.accumulate(&usage);
+                let text = response.text();
+                if super::diagnosis::has_raw_tool_markup(&text)
+                    || response.choice.iter().any(|item| matches!(item, rig::message::AssistantContent::ToolCall(_)))
+                {
+                    return Err(super::diagnosis::SUMMARY_PROTOCOL_ERROR.into());
+                }
+                if !matches!(response.finish_reason(), Some(FinishReason::Stop)) || text.trim().is_empty() {
+                    return Err("模型没有返回完整的证据整理结果，已有步骤可查看并续跑".into());
+                }
+                let text = if c.messages[index].content.is_empty() { text } else { format!("\n\n{text}") };
+                c.messages[index].content.push_str(&text);
+                emit(&channel, &request_data, &message_id, &mut seq, "text", Some(text), None)?;
+                finished = true;
+            }
             if !finished {
                 return Err("工具对话流提前结束，未形成完整回答".into());
             }
@@ -783,13 +945,15 @@ pub async fn send(
                 api_started.map_or(0, |time| time.elapsed().as_millis() as u64);
             return Ok(());
         }
-        let mut completion = request(messages, config.max_output_tokens)?;
         let planning = c.messages[index].deployment.is_some();
-        if planning {
-            completion = completion.preamble(super::deployment::PROMPT);
-        } else if c.messages[index].task.as_ref().is_some_and(|task| task.analysis_only) {
-            completion = completion.preamble(format!("{SYSTEM}\n{}", super::diagnosis::SUMMARY));
-        }
+        let preamble = if planning {
+            super::deployment::PROMPT.to_owned()
+        } else if analysis_only {
+            format!("{SYSTEM}\n{}", super::diagnosis::SUMMARY)
+        } else {
+            SYSTEM.to_owned()
+        };
+        let completion = request(messages, config.max_output_tokens, preamble)?;
         let prepared = super::tools::replay_history(
             completion,
             super::read_access::allowed_model(&config, &service),
@@ -822,6 +986,7 @@ pub async fn send(
         state.save_conversation(&c).await?;
         let mut checkpoint = Instant::now();
         let mut plan_text = String::new();
+        let mut analysis_text = String::new();
         while let Some(item) = stream.next().await {
             let (kind, text) = match item.map_err(provider::error)? {
                 Item::Event(StreamEvent::Text { text, .. }) => ("text", text),
@@ -835,8 +1000,15 @@ pub async fn send(
                 plan_text.push_str(&text);
                 continue;
             }
+            if analysis_only && kind == "text" {
+                if analysis_text.len() + c.messages[index].reasoning.len() + text.len() > 4_000_000 {
+                    return Err("证据分析超过应用大小上限".into());
+                }
+                analysis_text.push_str(&text);
+                continue;
+            }
             {
-                if c.messages[index].content.len() + c.messages[index].reasoning.len() + text.len()
+                if c.messages[index].content.len() + c.messages[index].reasoning.len() + analysis_text.len() + text.len()
                     > 4_000_000
                 {
                     return Err("回答超过应用大小上限，已保留部分内容".into());
@@ -895,6 +1067,16 @@ pub async fn send(
         if !matches!(response.finish_reason(), Some(FinishReason::Stop)) {
             return Err("INCOMPLETE: 回答达到输出限制或被服务中断，可调整预算后重新生成".into());
         }
+        if analysis_only {
+            if super::diagnosis::has_raw_tool_markup(&analysis_text)
+                || response.choice.iter().any(|item| matches!(item, rig::message::AssistantContent::ToolCall(_)))
+            {
+                return Err(super::diagnosis::SUMMARY_PROTOCOL_ERROR.into());
+            }
+            if !analysis_text.trim().is_empty() {
+                c.messages[index].content = analysis_text;
+            }
+        }
         if let Some(preview) = &mut c.messages[index].deployment {
             let plan = super::deployment::parse(&plan_text)?;
             let summary = plan.summary.clone();
@@ -945,11 +1127,17 @@ pub async fn send(
     for tool in &mut c.messages[index].tools {
         interrupt_tool(tool, "本次运行已停止或中断");
     }
+    if let Some(task_id) = c.messages[index].task.as_ref().map(|task| task.id.clone()) {
+        super::diagnosis::refresh_unknown_steps(&mut c, &task_id);
+    }
     c.messages[index].error = result.err();
     {
         let message = &mut c.messages[index];
         if let Some(task) = &mut message.task {
             task.finish(status, message.error.as_deref(), &message.tools, wrapped_up);
+        }
+        if automatic && message.tools.is_empty() && message.task.as_ref().is_some_and(|task| task.parent_message_id.is_none() && task.skill.is_none()) {
+            message.task = None;
         }
     }
     state.finish_call(

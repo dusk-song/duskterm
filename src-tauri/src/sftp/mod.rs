@@ -249,7 +249,7 @@ fn text_language_for_path(path: &str) -> Option<&'static str> {
         })
 }
 
-fn is_supported_text_path(path: &str) -> bool {
+pub(crate) fn is_supported_text_path(path: &str) -> bool {
     text_language_for_path(path).is_some()
 }
 
@@ -359,7 +359,8 @@ pub(crate) fn cleanup_session_state(state: &SftpAppState, session_id: &str) {
     drop(ug_cache);
 
     let mut path_locks = state.path_locks.lock().unwrap();
-    path_locks.retain(|key, _| !key.starts_with(&format!("{}::", session_id)));
+    let prefix = format!("{session_id}::");
+    path_locks.retain(|key, lock| !key.starts_with(&prefix) || Arc::strong_count(lock) > 1);
     drop(path_locks);
 
     let mut cache = state.list_cache.lock().unwrap();
@@ -923,13 +924,13 @@ pub async fn connect_sftp_legacy(
 
 pub async fn connect_sftp_runtime(
     app_handle: AppHandle,
-    _state: SftpAppState,
+    state: SftpAppState,
     shared_session_slot: Option<crate::ssh::SharedSshSessionSlot>,
     pending_hostkey: crate::session::state::SharedHostkeyDecision,
     session_id: String,
     config: SshConfig,
 ) -> Result<crate::session::state::ManagedSftpRuntime, String> {
-    let runtime_state = SftpAppState::new();
+    let runtime_state = SftpAppState { path_locks: state.path_locks.clone(), ..SftpAppState::new() };
     let handle = connect_sftp_legacy(
         app_handle,
         runtime_state.clone(),
@@ -1929,7 +1930,7 @@ fn ensure_inline_editor_file_size(path: &str, size: u64) -> Result<(), String> {
     ))
 }
 
-fn build_text_cas_token(bytes: &[u8]) -> String {
+pub(crate) fn build_text_cas_token(bytes: &[u8]) -> String {
     let mut hasher = Sha256::new();
     hasher.update(bytes);
     let digest = hasher.finalize();
@@ -2067,28 +2068,32 @@ fn encode_editable_text(
 }
 
 async fn read_remote_editable_bytes(sftp: &SftpSession, path: &str) -> Result<Vec<u8>, String> {
-    read_remote_editable_bytes_sequential(sftp, path, None).await
+    read_remote_editable_bytes_sequential(sftp, path, None, MAX_INLINE_EDITOR_FILE_BYTES).await
 }
 
 async fn read_remote_editable_bytes_sequential(
     sftp: &SftpSession,
     path: &str,
     expected_size: Option<u64>,
+    max_bytes: u64,
 ) -> Result<Vec<u8>, String> {
     let file = sftp
         .open(path)
         .await
         .map_err(|e| format!("Open Error: {}", e))?;
-    let mut limited = file.take(MAX_INLINE_EDITOR_FILE_BYTES + 1);
+    let mut limited = file.take(max_bytes + 1);
     let capacity = expected_size
         .unwrap_or(0)
         .saturating_add(1)
-        .min(MAX_INLINE_EDITOR_FILE_BYTES + 1) as usize;
+        .min(max_bytes + 1) as usize;
     let mut contents = Vec::with_capacity(capacity);
     limited
         .read_to_end(&mut contents)
         .await
         .map_err(|e| format!("Read Error: {}", e))?;
+    if contents.len() as u64 > max_bytes && max_bytes == AI_EDIT_MAX_BYTES {
+        return Err("CAS mismatch: remote file exceeds the edit limit".into());
+    }
     ensure_inline_editor_file_size(path, contents.len() as u64)?;
     Ok(contents)
 }
@@ -2123,7 +2128,7 @@ async fn read_remote_editable_bytes_sized(
     ensure_inline_editor_file_size(path, expected_size)?;
     let expected_len = expected_size as usize;
     if expected_len <= SFTP_TRANSFER_BUFFER_SIZE {
-        return read_remote_editable_bytes_sequential(&sftp, path, Some(expected_size)).await;
+        return read_remote_editable_bytes_sequential(&sftp, path, Some(expected_size), MAX_INLINE_EDITOR_FILE_BYTES).await;
     }
 
     let mut contents = vec![0; expected_len];
@@ -2170,13 +2175,13 @@ async fn read_remote_editable_bytes_sized(
     if parallel_failed {
         tasks.abort_all();
         while tasks.join_next().await.is_some() {}
-        return read_remote_editable_bytes_sequential(&sftp, path, Some(expected_size)).await;
+        return read_remote_editable_bytes_sequential(&sftp, path, Some(expected_size), MAX_INLINE_EDITOR_FILE_BYTES).await;
     }
 
     match read_remote_editable_range(sftp.clone(), path.to_string(), expected_size, 1).await {
         Ok((_, trailing)) if trailing.is_empty() => Ok(contents),
         Ok(_) | Err(_) => {
-            read_remote_editable_bytes_sequential(&sftp, path, Some(expected_size)).await
+            read_remote_editable_bytes_sequential(&sftp, path, Some(expected_size), MAX_INLINE_EDITOR_FILE_BYTES).await
         }
     }
 }
@@ -2258,7 +2263,7 @@ async fn verify_remote_bytes_with_retry(
         match sftp.open(path).await {
             Ok(mut file) => {
                 let mut observed = Vec::new();
-                match file.read_to_end(&mut observed).await {
+                match (&mut file).take(expected.len() as u64 + 1).read_to_end(&mut observed).await {
                     Ok(_) => {
                         last_observed_len = observed.len();
                         if observed == expected {
@@ -2655,16 +2660,16 @@ pub async fn sftp_open_text_file(
 
 async fn write_text_file_internal(
     state: &SftpAppState,
-    handle: &SftpConnectionHandle,
+    sftp: Arc<SftpSession>,
     session_id: String,
     path: String,
     content: String,
     expected_modified: Option<u64>,
     expected_size: Option<u64>,
     expected_cas_token: Option<&str>,
+    check_live: Option<&(dyn Fn() -> Result<(), String> + Send + Sync)>,
 ) -> Result<EncodedEditableText, String> {
     ensure_editable_text_path(&path)?;
-    let sftp = get_sftp_session(handle);
 
     let trimmed = path.trim_end_matches('/');
     if trimmed.is_empty() {
@@ -2672,6 +2677,10 @@ async fn write_text_file_internal(
     }
 
     let _path_guard = acquire_path_lock(state, &session_id, trimmed).await;
+    if let Some(check_live) = check_live {
+        check_live()?;
+    }
+    let max_bytes = if check_live.is_some() { AI_EDIT_MAX_BYTES } else { MAX_INLINE_EDITOR_FILE_BYTES };
 
     let (parent_dir, base_name) = if let Some((dir, name)) = trimmed.rsplit_once('/') {
         if !dir.is_empty() {
@@ -2700,9 +2709,16 @@ async fn write_text_file_internal(
     let original_exists = original_meta.is_some();
     let original_permissions = original_meta.as_ref().and_then(|m| m.permissions);
 
+    if check_live.is_some() {
+        let attrs = sftp.symlink_metadata(&path).await.map_err(|_| "CAS mismatch: remote file unavailable")?;
+        if !attrs.file_type().is_file() || attrs.size.is_none_or(|size| size > AI_EDIT_MAX_BYTES) {
+            return Err("CAS mismatch: remote file changed or exceeds the edit limit".into());
+        }
+    }
+
     let original_bytes = if let Some(meta) = original_meta.as_ref() {
         ensure_inline_editor_file_size(&path, meta.size.unwrap_or(0))?;
-        Some(read_remote_editable_bytes(&sftp, &path).await?)
+        Some(read_remote_editable_bytes_sequential(&sftp, &path, meta.size, max_bytes).await?)
     } else {
         None
     };
@@ -2774,6 +2790,13 @@ async fn write_text_file_internal(
         return Ok(encoded);
     }
 
+    if let Some(check_live) = check_live {
+        check_live()?;
+        if original_permissions.is_none_or(|mode| mode & 0o7000 != 0) {
+            return Err("原文件包含特殊权限或缺少权限信息".into());
+        }
+    }
+
     let backup_name = format!(".{}.bak.{}.{}", base_name, std::process::id(), ts);
     let backup_path = if parent_dir == "/" {
         format!("/{}", backup_name)
@@ -2784,10 +2807,13 @@ async fn write_text_file_internal(
     };
 
     {
-        let mut file = sftp
-            .create(&temp_path)
-            .await
-            .map_err(|e| format!("Create/Open Error: {}", e))?;
+        let mut file = if check_live.is_some() {
+            let mut attrs = FileAttributes::empty();
+            attrs.permissions = Some(0o600);
+            sftp.open_with_flags_and_attributes(&temp_path, OpenFlags::WRITE | OpenFlags::CREATE | OpenFlags::EXCLUDE, attrs).await
+        } else {
+            sftp.create(&temp_path).await
+        }.map_err(|e| format!("Create/Open Error: {}", e))?;
 
         if let Err(error) = file.write_all(&encoded.bytes).await {
             drop(file);
@@ -2823,11 +2849,21 @@ async fn write_text_file_internal(
             return Err(format!("Temp metadata Error: {}", error));
         }
     }
+    if check_live.is_some() {
+        let metadata = sftp.metadata(&temp_path).await;
+        if !metadata.is_ok_and(|temp| original_meta.as_ref().is_some_and(|original|
+            original.uid.is_some() && original.gid.is_some()
+                && temp.uid == original.uid && temp.gid == original.gid
+        )) {
+            let _ = sftp.remove_file(&temp_path).await;
+            return Err("当前 SSH 账号无法保留原文件的所有者和组".into());
+        }
+    }
 
     // Revalidate immediately before replacement. The initial CAS check can become stale while
     // the temporary file is being written if another client edits the same remote file.
     if original_exists {
-        let current_bytes = match read_remote_editable_bytes(&sftp, &path).await {
+        let current_bytes = match read_remote_editable_bytes_sequential(&sftp, &path, original_meta.as_ref().and_then(|m| m.size), max_bytes).await {
             Ok(bytes) => bytes,
             Err(error) => {
                 let _ = sftp.remove_file(&temp_path).await;
@@ -2858,14 +2894,39 @@ async fn write_text_file_internal(
         }
     }
 
+    if let Some(check_live) = check_live {
+        let same_metadata = sftp.symlink_metadata(&path).await.is_ok_and(|current| {
+            current.file_type().is_file() && original_meta.as_ref().is_some_and(|original| {
+                current.uid == original.uid && current.gid == original.gid
+                    && current.permissions == original.permissions && current.size == original.size
+                    && current.mtime == original.mtime
+            })
+        });
+        let check = if same_metadata { check_live() } else { Err("CAS mismatch: remote file metadata changed".into()) };
+        if let Err(error) = check {
+            let _ = sftp.remove_file(&temp_path).await;
+            return Err(error);
+        }
+    }
+
     if original_exists {
         if let Err(e) = sftp.rename(&path, &backup_path).await {
             let _ = sftp.remove_file(&temp_path).await;
+            if check_live.is_some() {
+                return Err(format!("Backup Error: {e}; possible recovery copy: {backup_path}"));
+            }
             return Err(format!("Backup Error: {}", e));
         }
     }
 
     if let Err(e) = sftp.rename(&temp_path, &path).await {
+        if check_live.is_some() {
+            let _ = sftp.remove_file(&temp_path).await;
+            if sftp.rename(&backup_path, &path).await.is_err() {
+                return Err(format!("Promote Error: {e}; possible recovery copy: {backup_path}"));
+            }
+            return Err(format!("Promote Error: {e}"));
+        }
         if original_exists {
             let _ = sftp.rename(&backup_path, &path).await;
         }
@@ -2874,6 +2935,9 @@ async fn write_text_file_internal(
     }
 
     if let Err(e) = verify_remote_bytes_with_retry(&sftp, &path, &encoded.bytes, 6, 100).await {
+        if check_live.is_some() {
+            return Err(format!("Final verify Error: {e}; recovery copy: {backup_path}"));
+        }
         if original_exists {
             let _ = sftp.remove_file(&path).await;
             let _ = sftp.rename(&backup_path, &path).await;
@@ -2902,12 +2966,13 @@ pub async fn sftp_write_file_legacy(
 ) -> Result<(), String> {
     write_text_file_internal(
         state,
-        handle,
+        get_sftp_session(handle),
         session_id,
         path,
         content,
         expected_modified,
         expected_size,
+        None,
         None,
     )
     .await
@@ -2939,13 +3004,14 @@ pub async fn sftp_save_text_file_legacy(
 ) -> Result<SftpSaveTextFileResult, String> {
     let encoded = write_text_file_internal(
         state,
-        handle,
+        get_sftp_session(handle),
         session_id.clone(),
         path.clone(),
         content,
         None,
         None,
         Some(expected_cas_token.as_str()),
+        None,
     )
     .await?;
 
@@ -2967,6 +3033,24 @@ pub async fn sftp_save_text_file_legacy(
         encoding: encoded.encoding.to_string(),
         line_ending: encoded.line_ending.to_string(),
     })
+}
+
+pub(crate) const AI_EDIT_MAX_BYTES: u64 = 16_384;
+
+pub(crate) async fn save_ai_text_file(
+    state: &SftpAppState,
+    slot: &crate::ssh::SharedSshSessionSlot,
+    target: String,
+    path: String,
+    content: String,
+    expected: &str,
+    check_live: &(dyn Fn() -> Result<(), String> + Send + Sync),
+) -> Result<(), String> {
+    check_live()?;
+    let sftp = crate::ssh::open_sftp_subsystem_for_session(slot).await?;
+    check_live()?;
+    write_text_file_internal(state, Arc::new(sftp), target, path, content, None, None, Some(expected), Some(check_live))
+        .await.map(|_| ())
 }
 
 #[tauri::command]

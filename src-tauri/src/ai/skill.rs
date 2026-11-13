@@ -176,6 +176,9 @@ pub(super) fn catalog(directory: &Path) -> Result<Catalog, String> {
 }
 
 impl Skill {
+    pub fn matches(&self, selection: &Selection) -> bool {
+        self.info.id == selection.id && self.info.revision == selection.revision
+    }
     fn load(root: &Path, id: &str) -> Result<Self, String> {
         if !slug(id) {
             return Err("Skill 名称须为小写字母、数字和连字符".into());
@@ -414,4 +417,20 @@ impl Skill {
             _snapshot: Some((file, dir)),
         })
     }
+}
+
+pub(super) fn search(catalog: &Catalog, kind: TargetKind, query: &str) -> Value {
+    let query = query.trim().to_lowercase();
+    let words: Vec<_> = query.split_whitespace().take(8).collect();
+    let mut matches: Vec<_> = catalog.skills.iter().filter(|info| info.target_kind == kind)
+        .filter_map(|info| {
+            let text = format!("{} {} {}", info.id, info.label, info.description).to_lowercase();
+            let hits = words.iter().filter(|word| text.contains(**word)).count();
+            (hits > 0 || words.is_empty()).then_some((info.id == query, hits, info))
+        }).collect();
+    matches.sort_by(|a, b| b.0.cmp(&a.0).then(b.1.cmp(&a.1)).then(a.2.id.cmp(&b.2.id)));
+    json!(matches.into_iter().take(8).map(|(_, _, info)| json!({
+        "id":info.id, "label":info.label, "description":info.description,
+        "version":info.version, "revision":info.revision
+    })).collect::<Vec<_>>())
 }

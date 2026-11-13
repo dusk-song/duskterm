@@ -40,7 +40,7 @@ watch([() => props.message.id, isThinking], ([, thinking]) => {
 }, { immediate: true });
 watch([() => props.message.reasoning, thinkingOpen], scrollReasoning, { flush: 'post' });
 onBeforeUnmount(() => { if (reasoningFrame !== null) cancelAnimationFrame(reasoningFrame); });
-defineEmits(['regenerate', 'select', 'analyze', 'continue']);
+defineEmits(['regenerate', 'select', 'analyze', 'continue', 'verified']);
 async function copy(text) {
   try { await navigator.clipboard.writeText(text); toast.success('已复制'); }
   catch { toast.error('复制失败，请手动选择文本'); }
@@ -50,7 +50,7 @@ async function copy(text) {
 <template>
   <article class="ai-message" :class="[message.role, { alternative: !message.active && message.role === 'assistant' }]">
     <div class="bubble">
-      <AiDiagnosticTask v-if="message.task" :task="message.task" :tools="message.tools" :model-label="message.actualModelId || message.modelId" :service-name="message.serviceName" :busy="busy" @analyze="$emit('analyze')" @continue="$emit('continue')" />
+      <AiDiagnosticTask v-if="message.task && (!message.task.automatic || message.tools?.length || message.task.runNumber > 1)" :task="message.task" :tools="message.tools" :model-label="message.actualModelId || message.modelId" :service-name="message.serviceName" :busy="busy" @analyze="$emit('analyze')" @continue="$emit('continue')" @verified="$emit('verified')" />
       <AiDeploymentPlan v-if="message.deployment" :preview="message.deployment" :status="message.status" />
       <span v-if="message.role === 'assistant' && !message.active && message.status === 'completed'" class="version">历史版本</span>
       <details v-if="message.reasoning" class="thinking" :open="thinkingOpen">

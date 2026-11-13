@@ -178,6 +178,10 @@ where
                 status = child.wait(), if !exited => {
                     output.state.exit_code = status.map_err(|_| "无法取得 CMD 退出状态")?.code().map(|code| code as u32);
                     exited = true;
+                    output.state.outcome = "exited".into();
+                    output.state.output_complete = stdout_done && stderr_done;
+                    output.state.elapsed_ms = started.elapsed().as_millis() as u64;
+                    report(output.snapshot_with(decode), true).await.map_err(|_| "CMD 输出接收端已关闭")?;
                 }
                 _ = progress.tick() => {
                     output.state.elapsed_ms = started.elapsed().as_millis() as u64;

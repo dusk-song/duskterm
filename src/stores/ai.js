@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia';
 import { Channel, invoke } from '@tauri-apps/api/core';
-import { acceptsAiEvent } from '@/utils/ai';
+import { acceptsAiEvent, modelRecipient } from '@/utils/ai';
 import { appendTerminalContext } from '@/utils/aiContext';
 
 // Keep credentials and provider errors out of the generic IPC logger.
@@ -139,6 +139,7 @@ export const useAiStore = defineStore('ai', {
     async send(content, regenerateId = null, readGrant = null, execGrant = null, taskIntent = {}) {
       if (this.active || this.importingText || !this.selectedModel) return false;
       const model = this.selectedModel;
+      const recipient = modelRecipient(model.service);
       const local = session(this), view = local.view;
       const requestId = crypto.randomUUID();
       let conversationId = this.current?.id;
@@ -208,8 +209,10 @@ export const useAiStore = defineStore('ai', {
           }
           if (this.active.cancelRequested) return;
           const conversation = await aiInvoke('ai_send', { request: { conversationId, requestId,
-            modelId: model.id, content, regenerateId, confirmedServiceId: model.service.id, readGrant, execGrant,
+            modelId: model.id, content, regenerateId, confirmedServiceId: model.service.id, recipient,
+            confirmHistoryRecipient: !!taskIntent.confirmHistoryRecipient, readGrant, execGrant,
             diagnosisTarget: taskIntent.diagnosisTarget || null, analyzeMessageId: taskIntent.analyzeMessageId || null,
+            terminalTarget: taskIntent.terminalTarget || null,
             continueDiagnosis: taskIntent.continueDiagnosis || null, cmdDirectory: taskIntent.cmdDirectory || null,
             deploymentTarget: taskIntent.deploymentTarget || null, skill: taskIntent.skill || null }, channel });
           flush();
@@ -231,11 +234,12 @@ export const useAiStore = defineStore('ai', {
               tool.approvalId = null; tool.approvalExpiresAt = null;
               const uncertain = tool.execution && ['dispatching', 'running'].includes(tool.execution.outcome);
               const local = tool.name === 'execute_local_cmd' || tool.arguments?.skill?.targetKind === 'cmd';
+              const edit = tool.name === 'apply_remote_edit';
               tool.status = uncertain ? 'unknown' : 'interrupted';
               if (tool.execution) { tool.execution.outcome = uncertain ? 'unknown' : 'not_started'; tool.execution.outputComplete = false; }
               tool.result = uncertain
-                ? (local ? '聊天连接中断，本地命令结果未知；请先核实状态，不自动重试' : '聊天连接中断，无法确认远端进程是否结束；请先核实状态，不自动重试')
-                : '聊天连接中断，未派发命令或未获取查询结果';
+                ? (edit ? '聊天连接中断，请核实远程文件的实际内容' : local ? '聊天连接中断，本地命令结果未知，请先核实状态' : '聊天连接中断，无法确认远端进程状态，请先核实')
+                : '聊天连接中断，未派发操作或未获取查询结果';
             }
           }
         } finally {

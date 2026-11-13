@@ -5,7 +5,7 @@ import IconButton from '@/components/common/IconButton.vue';
 import { Button } from '@/components/ui/button';
 import TooltipHint from '@/components/ui/tooltip/TooltipHint.vue';
 import { conversationUsage } from '@/utils/aiUsage';
-import { formatTokens, modelOptions } from '@/utils/ai';
+import { formatTokens, modelOptions, modelRecipient, sameModelRecipient } from '@/utils/ai';
 import { aiInvoke, useAiStore } from '@/stores/ai';
 import { useSshStore } from '@/stores/ssh';
 import { supportsTerminalTextContext } from '@/utils/aiContext';
@@ -13,26 +13,29 @@ import { getTerminalContextReader } from '@/utils/terminalContextReaders';
 import { DropdownMenu, DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { confirm } from '@/composables/useConfirm';
 import AiMessage from './AiMessage.vue';
-import AiReadScope from './AiReadScope.vue';
 
 const props = defineProps({ maximized: Boolean, visible: { type: Boolean, default: true }, terminalSessionId: { type: String, default: '' } });
 defineEmits(['close', 'maximize']);
 const store = useAiStore();
 const sshStore = useSshStore();
-const readScope = ref(null), readGrant = ref(null), diagnosisTarget = ref(null);
+const diagnosisTarget = ref(null);
 const skillCatalog = ref(null), skillError = ref(''), skillLoading = ref(false), pickedSkill = ref(null);
 let catalogRequest;
 const terminalSession = computed(() => sshStore.getSession(props.terminalSessionId));
+const terminalTarget = computed(() => {
+  const session = terminalSession.value;
+  if (session?.status !== 'connected') return null;
+  const protocol = session.config?.protocol || 'ssh';
+  const kind = protocol === 'local' && session.config?.local_profile === 'cmd' ? 'cmd' : protocol;
+  if (kind !== 'cmd' && kind !== 'ssh') return null;
+  const id = kind === 'cmd' ? session.id : session.workspaceSessionId || session.id;
+  const target = sshStore.getSession(id) || session;
+  return { id, kind, label: String(target.name || id).slice(0, 80) };
+});
 const diagnosisCmdDirectory = computed(() => {
-  const intent = diagnosisTarget.value;
+  const intent = diagnosisTarget.value || terminalTarget.value;
   const session = intent?.kind === 'cmd' ? sshStore.getSession(intent.rebindSessionId || intent.id) : null;
   return session?.status === 'connected' ? session.cmdCwd || '' : '';
-});
-const intentLabel = computed(() => {
-  if (diagnosisTarget.value?.kind === 'deployment') return 'SSH 部署计划';
-  if (diagnosisTarget.value?.terminalTask) return diagnosisTarget.value.kind === 'cmd' ? '本地 CMD 终端任务' : 'SSH 终端任务';
-  if (diagnosisTarget.value?.kind === 'cmd') return '本地 CMD 诊断';
-  return 'SSH 诊断';
 });
 const canCapture = computed(() => !!terminalSession.value && supportsTerminalTextContext(terminalSession.value.config?.protocol));
 const captureMenuOpen = ref(false);
@@ -118,13 +121,13 @@ const draft = computed({ get: () => store.current?.draft ?? emptyDraft.value, se
 } });
 const skillPrefix = /^\s*@([a-z0-9][a-z0-9-]*)(?=\s|$)/;
 const skillQuery = computed(() => /^\s*@([a-z0-9-]*)$/.exec(draft.value)?.[1]);
-const showSkills = computed(() => !!diagnosisTarget.value?.terminalTask && skillQuery.value !== undefined && !store.active);
-const skillKind = computed(() => diagnosisTarget.value?.kind || 'ssh');
+const showSkills = computed(() => !!terminalTarget.value && !diagnosisTarget.value && skillQuery.value !== undefined && !store.active);
+const skillKind = computed(() => terminalTarget.value?.kind);
 const skillMatches = computed(() => (skillCatalog.value?.skills || [])
   .filter(skill => skill.targetKind === skillKind.value && skill.id.startsWith(skillQuery.value || '')));
 const attachedSkill = computed(() => {
   const id = skillPrefix.exec(draft.value)?.[1];
-  return diagnosisTarget.value?.terminalTask && pickedSkill.value?.id === id ? pickedSkill.value : null;
+  return !diagnosisTarget.value && pickedSkill.value?.id === id ? pickedSkill.value : null;
 });
 function loadSkills() {
   if (!catalogRequest) {
@@ -137,7 +140,7 @@ function loadSkills() {
   return catalogRequest;
 }
 watch(showSkills, show => { if (show) void loadSkills().catch(() => {}); });
-watch(() => [store.current?.id, diagnosisTarget.value?.id], () => { pickedSkill.value = null; });
+watch(() => [store.current?.id, diagnosisTarget.value?.id, terminalTarget.value?.id], () => { pickedSkill.value = null; });
 watch(() => skillPrefix.exec(draft.value)?.[1], id => { if (pickedSkill.value?.id !== id) pickedSkill.value = null; });
 function pickSkill(skill) {
   if (!showSkills.value || skill.targetKind !== skillKind.value) return;
@@ -226,12 +229,21 @@ async function stopGeneration() {
   await store.stop(); await focusComposer(origin);
 }
 async function safe(action) { try { await action(); } catch (e) { if (e) store.error = String(e); } }
-async function continueDiagnosis(message) {
+async function continueDiagnosis(message, verify = false) {
   if (store.active || sending.value) return;
   const conversationId = store.current?.id;
   const source = store.current?.messages.findLast(item => item.task?.id === message.task.id && !item.task.analysisOnly);
   if (!source) return;
   const task = source.task;
+  const unknownSteps = task.unknownSteps || [];
+  if (verify) {
+    if (!unknownSteps.length) return;
+    const steps = unknownSteps.map(step => `第 ${step.run} 轮第 ${step.index} 步 ${step.command}`).join('；');
+    try {
+      await confirm({ title: '确认已核实变更结果', content: `请确认你已核实这些步骤的实际结果。确认后，后续变更仍需逐条审批。${steps}`, okText: '已核实', danger: true });
+    } catch { return; }
+    if (store.current?.id !== conversationId || store.active || sending.value) return;
+  }
   const kind = task.targetKind || 'ssh';
   let rebindSessionId = null;
   if (sshStore.getSession(task.target.id)?.status !== 'connected') {
@@ -252,8 +264,8 @@ async function continueDiagnosis(message) {
     if (store.current?.id !== conversationId || store.active || sending.value) return;
     rebindSessionId = session.id;
   }
-  readScope.value?.clear();
-  diagnosisTarget.value = { id: task.target.id, label: task.target.label, kind, terminalTask: task.terminalTask, messageId: source.id, rebindSessionId };
+  const verifiedSteps = verify ? unknownSteps.map(({ messageId, callId }) => ({ messageId, callId })) : [];
+  diagnosisTarget.value = { id: task.target.id, label: task.target.label, kind, terminalTask: task.terminalTask, messageId: source.id, rebindSessionId, verifiedSteps };
   if (!draft.value.trim()) draft.value = task.terminalTask ? '请根据已有结果继续完成任务。' : '请根据已有证据继续检查。';
   await focusComposer();
 }
@@ -267,48 +279,50 @@ async function send(regenerateId = null, analyzeMessageId = null) {
   try {
     const selectedId = store.selectedModelId;
     const intent = diagnosisTarget.value;
+    const target = terminalTarget.value;
     const service = store.selectedModel.service;
-    const oldService = store.current?.lastServiceId;
-    if (oldService && oldService !== service.id) {
-      try { await confirm({ title: `发送到 ${service.name}？`, content: '本次问题、有效历史对话、摘要及历史工具读取结果将发送到该服务。切换服务不会删除本地历史。', okText: '发送' }); } catch { return; }
+    const recipient = modelRecipient(service);
+    const confirmHistoryRecipient = !!store.current?.messages.length && (store.current.lastServiceId !== service.id
+      || !sameModelRecipient(store.current.lastRecipient, recipient));
+    if (confirmHistoryRecipient) {
+      const protocol = recipient.protocol === 'anthropic_messages' ? 'Anthropic Messages' : 'OpenAI Chat Completions';
+      try { await confirm({ title: `发送到 ${service.name}？`, content: `接收端为 ${recipient.baseUrl}（${protocol}）。本次问题、有效历史对话、摘要及历史工具结果将发送到该接收端。`, okText: '发送' }); } catch { return; }
     }
     const text = analyzeMessageId ? '继续分析已保存的诊断证据，不执行任何操作。' : draft.value;
     let selectedSkill = null;
-    if (intent?.terminalTask && !regenerateId && !analyzeMessageId) {
+    if (!intent && !regenerateId && !analyzeMessageId && target) {
       if (text.trim() === '@') throw new Error('请先选择要使用的 Skill');
       const skillId = skillPrefix.exec(text)?.[1];
       if (skillId) {
         selectedSkill = attachedSkill.value || (await loadSkills()).skills.find(skill => skill.id === skillId);
-        if (!selectedSkill || selectedSkill.targetKind !== (intent.kind || 'ssh')) throw new Error(`找不到适用于当前终端的 Skill @${skillId}`);
+        if (!selectedSkill || selectedSkill.targetKind !== target.kind) throw new Error(`找不到适用于当前终端的 Skill @${skillId}`);
       }
     }
     await flushDrafts();
     if (store.current?.id !== sourceId || store.selectedModelId !== selectedId
-      || (!analyzeMessageId && diagnosisTarget.value !== intent) || (selectedSkill && draft.value !== text)) return;
-    const grant = !analyzeMessageId && !intent ? readScope.value?.consume() : null;
+      || store.selectedModel?.service.id !== service.id || !sameModelRecipient(recipient, modelRecipient(store.selectedModel.service))
+      || (!analyzeMessageId && diagnosisTarget.value !== intent)
+      || (!intent && !regenerateId && !analyzeMessageId && terminalTarget.value !== target)
+      || (selectedSkill && draft.value !== text)) return;
     if (!regenerateId && !analyzeMessageId) draft.value = '';
     followBottom.value = true;
-    const taskIntent = { analyzeMessageId };
-    if (!regenerateId && !analyzeMessageId && intent) {
+    const taskIntent = { analyzeMessageId, confirmHistoryRecipient };
+    if (!regenerateId && !analyzeMessageId) {
       if (diagnosisCmdDirectory.value) taskIntent.cmdDirectory = diagnosisCmdDirectory.value;
-      if (intent.kind === 'deployment') {
-        taskIntent.deploymentTarget = { id: intent.id, label: intent.label };
-      } else if (selectedSkill) {
-        taskIntent.diagnosisTarget = { id: intent.rebindSessionId || intent.id, label: intent.label, kind: intent.kind || 'ssh', terminalTask: true };
-        taskIntent.skill = { id: selectedSkill.id, revision: selectedSkill.revision };
-      } else if (intent.messageId) {
-        taskIntent.continueDiagnosis = { messageId: intent.messageId, rebindSessionId: intent.rebindSessionId || null };
+      if (intent?.messageId) {
+        taskIntent.continueDiagnosis = { messageId: intent.messageId, rebindSessionId: intent.rebindSessionId || null,
+          verifiedSteps: intent.verifiedSteps || [] };
       } else {
-        taskIntent.diagnosisTarget = intent;
+        taskIntent.terminalTarget = target;
+        if (selectedSkill) taskIntent.skill = { id: selectedSkill.id, revision: selectedSkill.revision };
       }
     }
-    const run = store.send(text, regenerateId, grant?.readGrant || null, grant?.execGrant || null, taskIntent);
+    const run = store.send(text, regenerateId, null, null, taskIntent);
     await focusComposer(origin);
     const accepted = await run;
     const answer = store.current?.messages.at(-1);
-    if (accepted && !regenerateId && !analyzeMessageId && intent && diagnosisTarget.value === intent
+    if (accepted && !regenerateId && !analyzeMessageId && (intent || selectedSkill) && diagnosisTarget.value === intent
       && (!sourceId || store.current?.id === sourceId) && answer?.task && !answer.task.analysisOnly) {
-      const { target, targetKind, terminalTask } = answer.task;
       if (selectedSkill) {
         const awaitingInputs = answer.status === 'completed' && !answer.tools?.length;
         if (awaitingInputs && !draft.value.trim()) {
@@ -318,7 +332,7 @@ async function send(regenerateId = null, analyzeMessageId = null) {
           diagnosisTarget.value = null;
         }
       } else {
-        diagnosisTarget.value = { id: target.id, label: target.label, kind: targetKind || intent.kind || 'ssh', terminalTask, messageId: answer.id };
+        diagnosisTarget.value = null;
       }
     }
     // Validation failures before a persisted user message should retain the input.
@@ -372,17 +386,14 @@ onMounted(async () => {
       <div v-if="loading" class="empty">正在读取本地对话…</div>
       <div v-else-if="!store.settings.services.length || !modelOptions(store.settings).length" class="empty"><strong>配置你的 AI 模型</strong><p>请进入「首选项 → 模型服务」，新增服务并启用模型。</p><p>AI 可独立使用，无需连接 SSH。</p></div>
       <div v-else-if="!messages.length" class="empty"><strong>有什么可以帮你？</strong><p>输入问题，或粘贴代码和报错。</p></div>
-      <AiMessage v-for="message in messages" :key="message.id" :message="message" :request-id="generatingHere ? store.active?.requestId : undefined" :busy="!!store.active" :can-regenerate="message.role === 'assistant' && !message.deployment && message.replyTo === lastUserId && message.status !== 'streaming'" @regenerate="safe(() => send(message.id))" @analyze="safe(() => send(null, message.id))" @continue="safe(() => continueDiagnosis(message))" @select="safe(() => store.selectAnswer(message.id))" />
+      <AiMessage v-for="message in messages" :key="message.id" :message="message" :request-id="generatingHere ? store.active?.requestId : undefined" :busy="!!store.active" :can-regenerate="message.role === 'assistant' && !message.deployment && message.replyTo === lastUserId && message.status !== 'streaming'" @regenerate="safe(() => send(message.id))" @analyze="safe(() => send(null, message.id))" @continue="safe(() => continueDiagnosis(message))" @verified="safe(() => continueDiagnosis(message, true))" @select="safe(() => store.selectAnswer(message.id))" />
       <p v-if="generatingHere && ['context','started'].includes(store.active.stage)" class="muted" role="status">正在准备上下文，长会话可能需要调用模型生成摘要…</p>
       </div>
     </div>
     <p v-if="store.error" class="error" role="alert">{{ store.error }}</p>
     <div class="composer">
-      <div v-if="diagnosisTarget" class="read-scope" :aria-label="`${intentLabel}模式`"><span :title="diagnosisTarget.id">{{ intentLabel }}：{{ diagnosisTarget.label }} · {{ diagnosisTarget.kind === 'deployment' ? '预览待审阅步骤' : diagnosisTarget.messageId ? '继续同一任务' : diagnosisTarget.terminalTask ? '目录操作自动执行，Shell 命令需确认' : '按需提出检查命令' }}</span><Button variant="ghost" size="sm" @click="diagnosisTarget = null">退出</Button></div>
-      <p v-if="diagnosisTarget?.kind === 'cmd'" class="muted" :title="diagnosisCmdDirectory">
-        {{ diagnosisCmdDirectory ? `终端上报目录：${diagnosisCmdDirectory}` : '当前目录未知，依赖目录的检查需要先确认路径。' }}
-      </p>
-      <div v-if="readGrant" class="read-scope"><span :title="readGrant.root">本次工具：{{ terminalSession?.name || readGrant.target }} · {{ readGrant.root || '命令需逐条确认' }}{{ readGrant.root && readGrant.execToken ? ' · 命令需确认' : '' }}</span><Button variant="ghost" size="sm" @click="readScope?.clear()">取消</Button></div>
+      <div v-if="diagnosisTarget" class="read-scope"><span>续跑目标 · {{ diagnosisTarget.label }}</span><Button variant="ghost" size="sm" @click="diagnosisTarget = null">取消续跑</Button></div>
+      <div v-else-if="terminalTarget" class="read-scope"><span>当前终端 · {{ terminalTarget.label }}</span></div>
       <div v-if="attachedSkill" class="read-scope" aria-label="已选 Skill">
         <span :title="attachedSkill.revision">@{{ attachedSkill.id }} · {{ attachedSkill.version }} · {{ attachedSkill.directory }}</span>
         <Button variant="ghost" size="sm" @click="draft = draft.replace(skillPrefix, '').trimStart()">移除 Skill</Button>
@@ -401,7 +412,7 @@ onMounted(async () => {
         </template>
       </section>
       <div class="input-shell">
-        <textarea ref="composer" v-model="draft" aria-label="AI 消息" :placeholder="diagnosisTarget?.terminalTask ? '描述任务，或输入 @ 选择固定脚本…' : '输入问题，或粘贴代码和报错…'" rows="3" maxlength="128000" @keydown.enter.exact="if (!$event.isComposing) { $event.preventDefault(); safe(() => send()); }" />
+        <textarea ref="composer" v-model="draft" aria-label="AI 消息" :placeholder="terminalTarget ? '输入问题或描述要完成的事，输入 @ 可选脚本…' : '输入问题，或粘贴代码和报错…'" rows="3" maxlength="128000" @keydown.enter.exact="if (!$event.isComposing) { $event.preventDefault(); safe(() => send()); }" />
         <div class="input-actions">
           <Button v-if="store.importingText" variant="ghost" size="sm" @click="cancelCapture">取消带入</Button>
           <DropdownMenu v-model:open="captureMenuOpen" side="top" :side-offset="8" @close-auto-focus="closeCaptureFocus">
@@ -413,8 +424,6 @@ onMounted(async () => {
             <DropdownMenuItem @select="captureOutput('recent', 500)">最近 500 行</DropdownMenuItem>
             <DropdownMenuItem @select="captureOutput('selection')">当前选区</DropdownMenuItem>
           </DropdownMenu>
-          <AiReadScope ref="readScope" :session="terminalSession" :model-id="store.selectedModelId" :service-name="store.selectedModel?.service.name" :conversation-id="store.current?.id"
-            :visible="props.visible" :busy="!!store.active || sending || loading" :diagnosis-target="diagnosisTarget" @diagnose="diagnosisTarget = $event" @change="readGrant = $event" @focus="focusComposer()" />
           <div class="model-container">
             <DropdownMenu v-model:open="pickerOpen" :id="modelMenuId" side="top" align="end" :side-offset="8" class="model-picker" :hint="store.selectedModel ? `${store.selectedModel.service.name}（${store.selectedModel.modelId}）` : '请选择模型'"
               @close-auto-focus="closeModelFocus">

@@ -1,5 +1,5 @@
 //! One-question, read-only capabilities over an existing authenticated SSH session.
-use super::{types::*, AiState};
+use super::{exec_access::ExecRun, types::*, AiState};
 use crate::session::supervisor::SessionSupervisor;
 use russh_sftp::{
     client::{error::Error as SftpError, RawSftpSession},
@@ -13,6 +13,7 @@ use std::{
     time::Duration,
 };
 use tauri::Manager;
+use tokio::sync::OnceCell;
 
 pub(super) type Grants = Arc<Mutex<HashMap<String, ReadAccess>>>;
 const TTL: u64 = 300_000;
@@ -60,10 +61,10 @@ pub(super) fn allowed_model(model: &ModelConfig, service: &Service) -> bool {
 }
 
 // POSIX SFTP paths only. Do not normalize traversal into a seemingly safe path.
-fn normalize(path: &str) -> Result<String, String> {
+pub(super) fn normalize(path: &str) -> Result<String, String> {
     if !path.starts_with('/')
         || path.len() > 4096
-        || path.chars().any(|c| c == '\\' || c.is_control())
+        || path.contains('\\') || !super::terminal_directory::valid_path(path)
     {
         return Err("请使用不含控制字符的远程绝对路径".into());
     }
@@ -89,11 +90,137 @@ fn within(root: &str, directory: bool, path: &str) -> bool {
                     .is_some_and(|tail| tail.starts_with('/')))
 }
 
-async fn no_symlinks(raw: &RawSftpSession, path: &str) -> Result<FileAttributes, String> {
-    let mut current = String::new();
-    for part in path.split('/').filter(|part| !part.is_empty()) {
-        current.push('/');
-        current.push_str(part);
+#[derive(Clone)]
+pub(super) struct AutomaticRead {
+    exec: ExecRun,
+    open: Arc<dyn Fn() -> futures::future::BoxFuture<'static, Result<(RawSftpSession, u32), String>> + Send + Sync>,
+    channel: Arc<OnceCell<(Arc<RawSftpSession>, u32)>>,
+    scopes: Arc<Mutex<Vec<ReadAccess>>>,
+    budget: Arc<Mutex<(usize, usize)>>,
+    editor: Option<(crate::ssh::SharedSshSessionSlot, crate::sftp::SftpAppState)>,
+    pub recipient: String,
+}
+
+impl AutomaticRead {
+    pub fn new(app: &tauri::AppHandle, exec: ExecRun, recipient: String) -> Result<Self, String> {
+        exec.check_live()?;
+        let (slot, _) = app.state::<SessionSupervisor>().ai_ssh_session(exec.target())?;
+        exec.check_live()?;
+        let read_slot = slot.clone();
+        let mut access = Self::with_channel(exec, recipient, move || {
+            let slot = read_slot.clone();
+            Box::pin(async move {
+                crate::sftp::open_ai_query_session(&slot).await
+                    .map_err(|_| "无法在当前 SSH 连接打开只读查询通道".into())
+            })
+        });
+        access.editor = Some((slot, app.state::<crate::sftp::SftpAppState>().inner().clone()));
+        Ok(access)
+    }
+
+    pub(super) fn with_channel(
+        exec: ExecRun,
+        recipient: String,
+        open: impl Fn() -> futures::future::BoxFuture<'static, Result<(RawSftpSession, u32), String>> + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            exec, open: Arc::new(open), recipient,
+            channel: Arc::new(OnceCell::new()),
+            scopes: Default::default(),
+            budget: Default::default(),
+            editor: None,
+        }
+    }
+
+    pub fn scope(&self, path: &str) -> Result<Option<ReadAccess>, String> {
+        let scopes = self.scopes.lock().map_err(|_| "读取授权状态不可用")?;
+        Ok(scopes.iter().find(|scope| within(&scope.root, scope.directory, path)).cloned())
+    }
+
+    pub async fn authorize(&self, path: String) -> Result<(), String> {
+        self.exec.check_live()?;
+        let (raw, max_read_len, directory) = tokio::time::timeout(Duration::from_secs(10), async {
+            let (raw, max_read_len) = self.channel.get_or_try_init(|| async {
+                let (raw, max_read_len) = (self.open)().await?;
+                Ok::<_, String>((Arc::new(raw), max_read_len))
+            }).await?;
+            let attrs = protected_path(raw, &path).await?;
+            if canonical(raw, &path).await? != path || !(attrs.file_type().is_file() || attrs.file_type().is_dir()) {
+                return Err("只能授权解析稳定的普通文件或目录".into());
+            }
+            Ok::<_, String>((raw.clone(), *max_read_len, attrs.file_type().is_dir()))
+        }).await.map_err(|_| "检查远程范围超时")??;
+        self.exec.check_live()?;
+        let exec = self.exec.clone();
+        self.scopes.lock().map_err(|_| "读取授权状态不可用")?.push(ReadAccess {
+            live: Arc::new(move || exec.check_live()), raw, max_read_len,
+            target: self.exec.target().to_owned(), root: path, directory,
+            model_id: String::new(), configuration: String::new(),
+            expires: now() + TTL, budget: self.budget.clone(),
+        });
+        Ok(())
+    }
+
+    pub async fn query(&self, name: &str, mut args: super::tools::ReadArgs) -> Result<String, String> {
+        args.path = normalize(&args.path)?;
+        self.scope(&args.path)?.ok_or("读取范围未确认")?.query(name, args).await
+    }
+
+    pub fn can_edit(&self) -> bool { self.editor.is_some() }
+
+    pub async fn edit_snapshot(&self, path: &str) -> Result<String, String> {
+        if !crate::sftp::is_supported_text_path(path) {
+            return Err("该文件类型不支持助手编辑".into());
+        }
+        let scope = self.scope(path)?.ok_or("读取范围未确认")?;
+        let value = scope.query("read_remote_text", super::tools::ReadArgs {
+            path: path.into(), offset: 0, limit: Some(MAX_RESULT as u32), query: None, timestamp_prefix: None,
+        }).await?;
+        let parsed: Value = serde_json::from_str(&value).map_err(|_| "无法读取编辑预览")?;
+        if parsed["data"]["truncated"] != false {
+            return Err("文件超过单次编辑上限，请使用 SFTP 编辑器".into());
+        }
+        let text = parsed["data"]["text"].as_str().ok_or("无法读取编辑预览")?;
+        if text.starts_with('\u{feff}') || text.contains('\r') {
+            return Err("助手编辑支持无 BOM 的 UTF-8 LF 文件，请使用 SFTP 编辑器处理其他格式".into());
+        }
+        Ok(text.into())
+    }
+
+    pub async fn save_edit(&self, edit: &super::text_edit::Preview) -> Result<(), String> {
+        let (slot, state) = self.editor.as_ref().ok_or("当前连接不支持编辑")?;
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        let scope = self.scope(&edit.path)?.ok_or("读取范围未确认")?;
+        let (_, attrs) = tokio::time::timeout(Duration::from_secs(10), scope.checked_path(&edit.path))
+            .await.map_err(|_| "核对编辑路径超时")??;
+        if !attrs.file_type().is_file() || attrs.size.is_none_or(|size| size > MAX_RESULT as u64) {
+            return Err("CAS mismatch: 原文件已变化或超过编辑上限".into());
+        }
+        let (slot, state, exec, edit) = (slot.clone(), state.clone(), self.exec.clone(), edit.clone());
+        // Keep the replacement and its recovery steps together if the chat stops during commit.
+        tokio::spawn(async move {
+            let check_live = || {
+                if tokio::time::Instant::now() >= deadline {
+                    return Err("写入审批已超时".into());
+                }
+                exec.check_live()
+            };
+            crate::sftp::save_ai_text_file(&state, &slot, exec.target().into(), edit.path,
+                edit.content, &edit.version, &check_live).await
+        }).await.map_err(|_| "远程写入中断")?
+    }
+}
+
+fn protected_directory(attrs: &FileAttributes) -> bool {
+    attrs.file_type().is_dir()
+        && attrs.uid == Some(0)
+        && attrs.permissions.is_some_and(|mode| mode & 0o022 == 0)
+}
+
+async fn protected_path(raw: &RawSftpSession, path: &str) -> Result<FileAttributes, String> {
+    let mut components = path.trim_start_matches('/').split_terminator('/').peekable();
+    let mut current = String::from("/");
+    loop {
         let attrs = raw
             .lstat(current.clone())
             .await
@@ -102,11 +229,19 @@ async fn no_symlinks(raw: &RawSftpSession, path: &str) -> Result<FileAttributes,
         if attrs.file_type().is_symlink() {
             return Err("读取范围不支持符号链接，请选择实际路径".into());
         }
+        // SFTP v3 opens by path. Only traverse stable directory entries under
+        // privileged ownership, including the directory itself when listing it.
+        if (components.peek().is_some() || attrs.file_type().is_dir()) && !protected_directory(&attrs) {
+            return Err("无法保证远程路径的读取边界。请使用由 root 拥有且组和其他用户不可写的目录，或从终端带入文本。".into());
+        }
+        let Some(part) = components.next() else {
+            return Ok(attrs);
+        };
+        if current != "/" {
+            current.push('/');
+        }
+        current.push_str(part);
     }
-    raw.lstat(path.to_string())
-        .await
-        .map(|result| result.attrs)
-        .map_err(|_| "无法读取远程属性".into())
 }
 
 async fn canonical(raw: &RawSftpSession, path: &str) -> Result<String, String> {
@@ -138,9 +273,11 @@ pub(super) async fn prepare(
             let (raw, max_read_len) = crate::sftp::open_ai_query_session(&slot)
                 .await
                 .map_err(|_| "无法在当前 SSH 连接打开只读查询通道")?;
-            no_symlinks(&raw, &path).await?;
+            let attrs = protected_path(&raw, &path).await?;
             let root = canonical(&raw, &path).await?;
-            let attrs = no_symlinks(&raw, &root).await?;
+            if root != path {
+                return Err("远程路径解析发生变化，无法授权读取".into());
+            }
             if !attrs.file_type().is_dir() && !attrs.file_type().is_file() {
                 return Err("只能授权普通文件或目录".to_string());
             }
@@ -269,12 +406,11 @@ impl ReadAccess {
         if !within(&self.root, self.directory, &path) {
             return Err("路径超出本次授权范围".into());
         }
-        no_symlinks(&self.raw, &path).await?;
+        let attrs = protected_path(&self.raw, &path).await?;
         let actual = canonical(&self.raw, &path).await?;
         if actual != path || !within(&self.root, self.directory, &actual) {
             return Err("路径解析发生变化，已拒绝读取".into());
         }
-        let attrs = no_symlinks(&self.raw, &actual).await?;
         Ok((actual, attrs))
     }
     pub async fn query(&self, name: &str, args: super::tools::ReadArgs) -> Result<String, String> {
@@ -302,11 +438,24 @@ impl ReadAccess {
     ) -> Result<String, String> {
         let (path, attrs) = self.checked_path(&args.path).await?;
         let observed_at = now();
+        let query = match (name, args.query.as_deref()) {
+            (_, Some(query)) if !super::terminal_directory::valid_path(query) || query.chars().count() > 256 =>
+                return Err("搜索关键词须为 1–256 个可见字符".into()),
+            ("find_remote_files" | "search_remote_text", None) => return Err("请提供搜索关键词".into()),
+            (_, query) => query,
+        };
+        let timestamp = args.timestamp_prefix.as_deref();
+        if timestamp.is_some_and(|value| name != "tail_remote_log" || value.len() > 32
+            || !value.starts_with(|c: char| c.is_ascii_digit())
+            || !value.bytes().all(|b| b.is_ascii_digit() || b"-:T .+Z".contains(&b)))
+        {
+            return Err("时间前缀须以数字开头，并与日志行首的日期时间格式一致".into());
+        }
         let result: Value = match name {
             "stat_remote_path" => {
                 json!({"path":path,"kind":if attrs.file_type().is_dir(){"directory"}else if attrs.file_type().is_file(){"file"}else{"other"},"size":attrs.size,"modifiedAt":attrs.mtime,"permissions":attrs.permissions})
             }
-            "read_remote_text" => {
+            "read_remote_text" | "search_remote_text" | "tail_remote_log" => {
                 if !attrs.file_type().is_file() {
                     return Err("仅允许读取普通文本文件".into());
                 }
@@ -316,6 +465,11 @@ impl ReadAccess {
                 let limit = args.limit.unwrap_or(8192);
                 if limit == 0 || limit > MAX_RESULT as u32 {
                     return Err("单次读取限额必须为 1–16384 字节".into());
+                }
+                let read_size = limit.min(self.max_read_len);
+                let overlap = query.filter(|_| name == "search_remote_text").map_or(0, |q| q.len() - 1);
+                if name == "search_remote_text" && (read_size as usize) < overlap + 4 {
+                    return Err("读取限额太小，无法保证关键词跨页匹配".into());
                 }
                 let opened = self
                     .raw
@@ -338,26 +492,37 @@ impl ReadAccess {
                 {
                     return Err("文件已变化，请重试".into());
                 }
-                let data = match self
+                let size = opened_attrs.size.unwrap_or(0);
+                let end = if name == "tail_remote_log" { size.saturating_sub(args.offset) } else { size };
+                let offset = if name == "tail_remote_log" {
+                    end.saturating_sub(u64::from(read_size))
+                } else {
+                    args.offset
+                };
+                let count = end.saturating_sub(offset).min(u64::from(read_size)) as u32;
+                let data = if count == 0 { Vec::new() } else { match self
                     .raw
                     .read(
                         handle.handle.clone(),
-                        args.offset,
-                        limit.min(self.max_read_len),
+                        offset,
+                        count,
                     )
                     .await
                 {
                     Ok(data) => data.data,
                     Err(error) if eof(&error) => Vec::new(),
                     Err(_) => return Err("远程文本读取失败".into()),
-                };
-                if data.len() > limit as usize || data.contains(&0) {
+                }};
+                if data.len() > count as usize || data.contains(&0) {
                     return Err("内容为二进制或服务器返回超限数据".into());
                 }
-                let text = match std::str::from_utf8(&data) {
+                let start = if name == "tail_remote_log" && offset > 0 {
+                    data.iter().take(3).take_while(|byte| **byte & 0xc0 == 0x80).count()
+                } else { 0 };
+                let text = match std::str::from_utf8(&data[start..]) {
                     Ok(text) => text,
                     Err(error) if error.error_len().is_none() => {
-                        std::str::from_utf8(&data[..error.valid_up_to()])
+                        std::str::from_utf8(&data[start..start + error.valid_up_to()])
                             .map_err(|_| "文本不是 UTF-8")?
                     }
                     Err(_) => return Err("仅支持 UTF-8 文本；偏移量须位于字符边界".into()),
@@ -371,10 +536,24 @@ impl ReadAccess {
                 if after.size != opened_attrs.size || after.mtime != opened_attrs.mtime {
                     return Err("文件在读取期间变化，结果已丢弃，请重试".into());
                 }
-                let next = args.offset.saturating_add(text.len() as u64);
-                json!({"path":path,"offset":args.offset,"text":text,"bytes":text.len(),"nextOffset":next,"truncated":attrs.size.is_none_or(|size|next<size)})
+                let read_end = offset.saturating_add((start + text.len()) as u64);
+                let next = if name == "search_remote_text" && read_end < end && overlap > 0 {
+                    let mut advance = text.len().saturating_sub(overlap);
+                    while !text.is_char_boundary(advance) { advance -= 1; }
+                    offset + advance as u64
+                } else { read_end };
+                if count > 0 && next <= offset {
+                    return Err("服务器返回的文本不足以继续分页，请重试或增大读取限额".into());
+                }
+                let previous = (name == "tail_remote_log" && offset > 0).then(|| size - offset - start as u64);
+                let text = if query.is_some() || timestamp.is_some() {
+                    text.split_inclusive('\n').filter(|line| {
+                        query.is_none_or(|query| line.contains(query)) && timestamp.is_none_or(|prefix| line.starts_with(prefix))
+                    }).collect::<String>()
+                } else { text.to_owned() };
+                json!({"path":path,"offset":offset + start as u64,"endOffset":read_end,"bytes":text.len(),"text":text,"nextOffset":next,"previousOffset":previous,"truncated":previous.is_some() || read_end<end})
             }
-            "list_remote_directory" => {
+            "list_remote_directory" | "find_remote_files" => {
                 if !attrs.file_type().is_dir() {
                     return Err("指定路径不是目录".into());
                 }
@@ -395,7 +574,17 @@ impl ReadAccess {
                 let mut scanned = 0_u64;
                 let mut finished = false;
                 let mut bytes_full = false;
-                while scanned <= args.offset + u64::from(limit) && entries.len() < limit as usize {
+                let mut entries_bytes = 2; // JSON array brackets
+                let mut batches = 0;
+                let scan_end = if name == "find_remote_files" { args.offset + 512 } else { args.offset + u64::from(limit) };
+                while scanned < scan_end && entries.len() < limit as usize {
+                    if batches >= 128 {
+                        if entries.is_empty() {
+                            return Err("目录分页扫描达到上限，请缩小查询范围".into());
+                        }
+                        break;
+                    }
+                    batches += 1;
                     let batch = match self.raw.readdir(handle.handle.clone()).await {
                         Ok(batch) => batch,
                         Err(error) if eof(&error) => {
@@ -412,38 +601,40 @@ impl ReadAccess {
                         if file.filename == "." || file.filename == ".." {
                             continue;
                         }
-                        if scanned >= args.offset && entries.len() < limit as usize {
+                        if scanned >= scan_end {
+                            break;
+                        }
+                        if scanned >= args.offset && query.is_none_or(|query| file.filename.contains(query)) {
                             if file.filename.len() > 1024
-                                || file.filename.chars().any(char::is_control)
+                                || !super::terminal_directory::valid_path(&file.filename)
                             {
                                 return Err("目录包含不可展示的文件名".into());
                             }
-                            entries.push(json!({"name":file.filename,"kind":if file.attrs.file_type().is_symlink(){"symlink"}else if file.attrs.file_type().is_dir(){"directory"}else if file.attrs.file_type().is_file(){"file"}else{"other"},"size":file.attrs.size}));
-                            if serde_json::to_vec(&entries)
-                                .map_err(|_| "目录编码失败")?
-                                .len()
-                                > MAX_RESULT
-                            {
-                                entries.pop();
+                            let entry = json!({"name":file.filename,"kind":if file.attrs.file_type().is_symlink(){"symlink"}else if file.attrs.file_type().is_dir(){"directory"}else if file.attrs.file_type().is_file(){"file"}else{"other"},"size":file.attrs.size});
+                            let size = serde_json::to_vec(&entry).map_err(|_| "目录编码失败")?.len()
+                                + usize::from(!entries.is_empty());
+                            if entries_bytes + size > MAX_RESULT {
                                 bytes_full = true;
                                 break;
                             }
+                            entries_bytes += size;
+                            entries.push(entry);
                         }
                         scanned += 1;
                         if entries.len() >= limit as usize {
                             break;
                         }
                     }
-                    if bytes_full || scanned > 1100 {
+                    if bytes_full {
                         break;
                     }
                 }
-                json!({"path":path,"entries":entries,"offset":args.offset,"nextOffset":args.offset+entries.len() as u64,"truncated":!finished,"note":"目录可能变化；分页不是一致性快照，不递归、不跟随符号链接"})
+                json!({"path":path,"entries":entries,"offset":args.offset,"nextOffset":scanned.max(args.offset),"truncated":!finished,"note":"目录可能变化；分页不是一致性快照，不递归、不跟随符号链接"})
             }
             _ => return Err("未知只读工具".into()),
         };
         let (_, after_path) = self.checked_path(&path).await?;
-        if name == "read_remote_text"
+        if matches!(name, "read_remote_text" | "search_remote_text" | "tail_remote_log")
             && (after_path.size != attrs.size || after_path.mtime != attrs.mtime)
         {
             return Err("读取后的路径属性已变化，结果已丢弃，请重试".into());

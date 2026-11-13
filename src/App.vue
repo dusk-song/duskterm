@@ -137,7 +137,6 @@ onApp('app:toggle-tool-sftp', () => {
 });
 function toggleAiPanel() { activeToolPanel.value = activeToolPanel.value === 'ai' ? null : 'ai'; }
 onApp('app:toggle-tool-ai', toggleAiPanel);
-onApp('app:open-tool-ai', () => { activeToolPanel.value = 'ai'; });
 onApp('app:toggle-tool-knowledge', () => {
   toggleCommandKnowledgePanel();
 });
@@ -297,6 +296,9 @@ const notifyTerminalLayoutDragging = (dragging, options = {}) => {
 const notifyTerminalLayoutResize = () => {
   window.dispatchEvent(new CustomEvent('terminal-layout-resize'));
 };
+watch(aiMaximized, maximized => {
+  if (!maximized) nextTick(notifyTerminalLayoutResize);
+});
 
 watch(showSftpPanel, () => {
   const sessionId = getActiveSftpWorkspaceId();
@@ -557,6 +559,7 @@ const resizeWorkspaceByKey = (axis, event) => {
 };
 
 const workspaceGridStyle = computed(() => {
+  if (aiMaximized.value) return { gridTemplateColumns: 'minmax(0, 1fr)', gridTemplateRows: 'minmax(0, 1fr)' };
   const widthState = getWorkspaceWidthState();
   const { hasLeft, hasRight } = widthState;
 
@@ -1342,7 +1345,7 @@ useWindowInteraction({ onResize: measureWorkspace });
         :class="{ 'has-left-panels': hasWorkspaceLeftPanels, 'has-right-panel': hasWorkspaceRightPanel, 'ai-maximized': aiMaximized }"
         :style="workspaceGridStyle">
         <!-- Left: Session List (inline panel, not overlay) -->
-        <div v-if="hasWorkspaceLeftPanels" class="workspace-left-stack" :style="workspaceLeftStackStyle">
+        <div v-if="hasWorkspaceLeftPanels" v-show="!aiMaximized" class="workspace-left-stack" :style="workspaceLeftStackStyle">
           <TiledPanel class="workspace-panel workspace-panel-session" :dense="true" :padded="false">
             <SessionList :width="'100%'"
               @open-create="() => { showSessionModal(null); }" @open-edit="(s) => { openSavedSessionEditor(s); }"
@@ -1351,11 +1354,11 @@ useWindowInteraction({ onResize: measureWorkspace });
         </div>
 
         <!-- Column resize handle -->
-        <div v-if="hasWorkspaceLeftPanels" class="workspace-separator workspace-separator-vertical"
+        <div v-if="hasWorkspaceLeftPanels && !aiMaximized" class="workspace-separator workspace-separator-vertical"
           role="separator" tabindex="0" aria-label="调整会话面板宽度" aria-orientation="vertical" :aria-valuenow="Math.round(leftColumnWidth)" @keydown="resizeWorkspaceByKey('columns', $event)"
           @mousedown="startWorkspaceResize('columns', $event)" />
 
-        <TiledPanel class="workspace-panel workspace-panel-main"
+        <TiledPanel v-show="!aiMaximized" class="workspace-panel workspace-panel-main"
           :class="{ 'is-empty': visibleSessions.length === 0 }"
           :dense="true" :padded="false" aria-label="主界面面板">
           <div class="main-panel-body">
@@ -1403,7 +1406,7 @@ useWindowInteraction({ onResize: measureWorkspace });
           </div>
         </TiledPanel>
 
-        <div v-if="hasWorkspaceRightPanel" class="workspace-separator workspace-separator-vertical"
+        <div v-if="hasWorkspaceRightPanel && !aiMaximized" class="workspace-separator workspace-separator-vertical"
           role="separator" tabindex="0" aria-label="调整工具面板宽度" aria-orientation="vertical" :aria-valuenow="Math.round(toolPanelWidth)" @keydown="resizeWorkspaceByKey('tool', $event)"
           @mousedown="startWorkspaceResize('tool', $event)" />
 
@@ -1480,9 +1483,7 @@ useWindowInteraction({ onResize: measureWorkspace });
   padding: 16px;
 }
 
-.workspace-grid.ai-maximized { position: relative; }
-.workspace-grid.ai-maximized > .workspace-panel-tool { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; z-index: 5; }
-.workspace-grid.ai-maximized > .workspace-separator { visibility: hidden; }
+.app-shell .workspace-grid.ai-maximized > .workspace-panel-tool { margin-top: 0; height: 100%; }
 .workspace-grid {
   flex: 1;
   display: grid;

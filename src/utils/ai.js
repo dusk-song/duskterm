@@ -32,6 +32,14 @@ export function modelOptions(settings, query = '') {
 
 export function formatTokens(value) { return value == null ? '—' : Number(value).toLocaleString(); }
 
+export function modelRecipient(service) {
+  return { baseUrl: service.baseUrl, protocol: service.protocol };
+}
+
+export function sameModelRecipient(a, b) {
+  return !!a && !!b && a.baseUrl === b.baseUrl && a.protocol === b.protocol;
+}
+
 // Both request identity and sequence matter: a late answer must not alter a newer run.
 export function acceptsAiEvent(active, event) {
   return !!active && active.requestId === event.requestId

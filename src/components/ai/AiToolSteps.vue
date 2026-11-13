@@ -18,20 +18,30 @@ watch(waiting, value => {
   if (value) { timer = setInterval(() => { clock.value = Date.now(); }, 1000); void knowledge.loadEntries().catch(() => {}); }
 }, { immediate: true });
 onBeforeUnmount(() => clearInterval(timer));
-const names = { list_remote_directory: '列出目录', read_remote_text: '读取文本', stat_remote_path: '查看属性', execute_ssh_command: '执行 SSH 命令', execute_local_cmd: '执行本地 CMD 命令', run_registered_skill: '执行固定脚本' };
-const states = { running: '查询中…', completed: '已完成', failed: '失败', stopped: '已停止', interrupted: '已中断', waiting_approval: '等待确认', approved: '已批准，尚未派发', denied: '已拒绝，未执行', expired: '确认过期，未执行', unknown: '远端状态未知' };
+const names = { list_remote_directory: '列出目录', read_remote_text: '读取文本', stat_remote_path: '查看属性',
+  find_remote_files: '搜索文件名', search_remote_text: '搜索文本', tail_remote_log: '读取日志尾部',
+  preview_remote_edit: '预览文件修改', apply_remote_edit: '写入远程文件',
+  execute_ssh_command: '执行 SSH 命令', execute_local_cmd: '执行本地 CMD 命令',
+  run_registered_skill: '执行固定脚本', execute_registered_skill: '执行固定脚本', find_registered_skills: '查找固定脚本' };
+const states = { running: '查询中…', completed: '已完成', failed: '失败', stopped: '已停止', interrupted: '已中断', waiting_approval: '等待确认', approved: '已批准，正在准备…', denied: '已拒绝，未执行', expired: '确认过期，未执行', unknown: '远端状态未知' };
 const skillFor = tool => tool.arguments?.skill;
 const isCmd = tool => tool.name === 'execute_local_cmd' || skillFor(tool)?.targetKind === 'cmd';
 const directoryActions = { current: '核实任务目录', change: '切换任务目录', list: '列出任务目录' };
 const stepName = tool => (tool.name === 'terminal_directory' && directoryActions[tool.arguments?.action]) || names[tool.name] || tool.name;
-const isExec = tool => tool.name === 'execute_ssh_command' || tool.name === 'run_registered_skill' || isCmd(tool);
+const isExec = tool => ['execute_ssh_command', 'run_registered_skill', 'execute_registered_skill'].includes(tool.name) || isCmd(tool);
+const isEdit = tool => tool.name === 'apply_remote_edit';
 const timeoutSecs = tool => skillFor(tool)?.timeoutSecs || 30;
 const hasOutput = execution => !!(execution.stdout || execution.stderr);
 function stepStatus(tool) {
+  if (isEdit(tool) && tool.status === 'running') return '正在写入并校验…';
+  if (isEdit(tool) && tool.status === 'unknown') return '文件写入结果未知';
+  if (tool.status === 'running' && tool.execution?.outcome === 'exited') return '命令已退出，正在收集输出…';
   if (isExec(tool) && tool.status === 'running') return '执行中…';
+  if (tool.execution?.outcome === 'exited' && !tool.execution.outputComplete) {
+    return tool.status === 'failed' ? '命令执行失败，输出不完整' : '命令已退出，输出不完整';
+  }
   if (tool.execution?.endReason === 'timeout') return hasOutput(tool.execution) ? '超时，保留部分输出' : '超时，未收到输出';
   if (tool.status === 'unknown') return isCmd(tool) ? '本地命令结果未知' : '远端状态未知';
-  if (tool.status === 'completed' && tool.execution && !tool.execution.outputComplete) return '命令已退出，输出不完整';
   return states[tool.status] || tool.status;
 }
 const remaining = tool => Math.max(0, Math.ceil(((tool.approvalExpiresAt || 0) - clock.value) / 1000));
@@ -47,7 +57,7 @@ async function decide(tool, approved) {
 }
 function resultText(text) {
   try { const result = JSON.parse(text); return typeof result.data?.text === 'string'
-    ? `${result.data.path} · 字节 ${result.data.offset}–${result.data.nextOffset}${result.data.truncated ? '（内容未读完）' : ''}\n${result.data.text}`
+    ? `${result.data.path} · 字节 ${result.data.offset}–${result.data.endOffset ?? result.data.nextOffset}${result.data.truncated ? '（部分内容）' : ''}\n${result.data.text}`
     : JSON.stringify(result, null, 2); } catch { return text; }
 }
 </script>
@@ -79,8 +89,8 @@ function resultText(text) {
             <p v-if="tool.execution.signal">退出信号：{{ tool.execution.signal }}</p>
             <p v-if="tool.execution.truncated">输出已截断；最多保留 stdout/stderr 合计 256 KiB，模型收到有界预览。</p>
             <p v-if="tool.execution.encodingReplaced">部分输出无法按 UTF-8 解码，已替换显示。</p>
-            <p v-if="tool.execution.endReason === 'timeout'">执行超过 {{ timeoutSecs(tool) }} 秒，已请求终止；请核实{{ isCmd(tool) ? '本机' : '远端' }}状态。</p>
-            <p v-if="tool.execution.outcome === 'exited' && !tool.execution.outputComplete">已收到退出状态，但输出通道未完整结束。</p>
+            <p v-if="tool.execution.endReason === 'timeout' && tool.execution.outcome !== 'exited'">执行超过 {{ timeoutSecs(tool) }} 秒，已请求终止，请核实{{ isCmd(tool) ? '本机' : '远端' }}状态。</p>
+            <p v-if="tool.execution.outcome === 'exited' && !tool.execution.outputComplete">{{ tool.status === 'running' ? '已收到退出状态，正在等待剩余输出。' : '已保留退出状态和收到的输出。' }}</p>
             <p v-if="tool.execution.stdout">stdout</p><pre v-if="tool.execution.stdout">{{ tool.execution.stdout }}</pre>
             <p v-if="tool.execution.stderr">stderr</p><pre v-if="tool.execution.stderr">{{ tool.execution.stderr }}</pre>
           </template>
@@ -89,10 +99,23 @@ function resultText(text) {
           <p>任务目录：{{ tool.root }}</p>
           <p v-if="tool.arguments?.path">切换目标：{{ tool.arguments.path }}</p>
         </template>
+        <template v-else-if="isEdit(tool)">
+          <p>文件 {{ tool.root }}</p>
+          <template v-if="tool.arguments?.line">
+            <p>第 {{ tool.arguments.line }} 行起</p>
+            <p>原内容</p><pre class="command">{{ tool.arguments.oldText }}</pre>
+            <p>替换为</p><pre class="command">{{ tool.arguments.newText || '（删除此片段）' }}</pre>
+          </template>
+        </template>
         <template v-else>
           <p>授权范围：{{ tool.root }}</p>
           <p>路径：{{ tool.arguments?.path || '未提供' }}<template v-if="tool.arguments?.offset"> · 偏移 {{ tool.arguments.offset }}</template><template v-if="tool.arguments?.limit"> · 限额 {{ tool.arguments.limit }}</template></p>
         </template>
+        <div v-if="!isExec(tool) && tool.status === 'waiting_approval'" class="approval-actions">
+          <p v-if="tool.arguments?.recipient">查询结果将发送到 {{ tool.arguments.recipient }}</p>
+          <Button variant="outline" size="sm" :disabled="!canDecide(tool)" @click="decide(tool, false)">拒绝</Button>
+          <Button size="sm" :disabled="!canDecide(tool)" @click="decide(tool, true)">{{ isEdit(tool) ? '确认写入' : '确认查询' }}</Button>
+        </div>
         <p>{{ new Date(tool.startedAt).toLocaleString() }} · {{ (tool.elapsedMs / 1000).toFixed(1) }} 秒</p>
         <pre v-if="tool.result">{{ resultText(tool.result) }}</pre>
       </div>

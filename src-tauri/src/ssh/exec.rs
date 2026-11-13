@@ -16,6 +16,12 @@ pub struct Execution {
     pub elapsed_ms: u64,
 }
 
+impl Execution {
+    pub(crate) fn has_exit_status(&self) -> bool {
+        self.outcome == "exited" || self.exit_code.is_some() || self.signal.is_some()
+    }
+}
+
 use futures::future::BoxFuture;
 use russh::{client, Channel, ChannelMsg, Sig};
 use std::time::{Duration, Instant};
@@ -154,6 +160,7 @@ where
             .map_err(|_| "执行输入通道关闭失败")?;
         let mut last = Instant::now();
         while let Some(message) = guard.channel.as_mut().unwrap().wait().await {
+            let mut exit_observed = false;
             match message {
                 ChannelMsg::Success => output.state.outcome = "running".into(),
                 ChannelMsg::Failure => {
@@ -168,11 +175,11 @@ where
                 ChannelMsg::ExtendedData { ext: 1, data } => output.append(true, &data),
                 ChannelMsg::ExitStatus { exit_status } => {
                     output.state.exit_code = Some(exit_status);
-                    guard.attempted = false;
+                    exit_observed = true;
                 }
                 ChannelMsg::ExitSignal { signal_name, .. } => {
                     output.state.signal = Some(format!("{signal_name:?}"));
-                    guard.attempted = false;
+                    exit_observed = true;
                 }
                 ChannelMsg::Close => {
                     output.state.output_complete = true;
@@ -181,9 +188,13 @@ where
                 }
                 _ => {}
             }
-            if last.elapsed() >= Duration::from_millis(100) {
+            if exit_observed {
+                output.state.outcome = "exited".into();
+                guard.attempted = false;
+            }
+            if exit_observed || last.elapsed() >= Duration::from_millis(100) {
                 output.state.elapsed_ms = execution_started.elapsed().as_millis() as u64;
-                report(output.snapshot(), false)
+                report(output.snapshot(), exit_observed)
                     .await
                     .map_err(|_| "输出接收端已关闭")?;
                 last = Instant::now();
@@ -201,7 +212,7 @@ where
         }
         .into();
     }
-    if output.state.exit_code.is_some() || output.state.signal.is_some() {
+    if output.state.has_exit_status() {
         output.state.outcome = "exited".into();
     } else if output.state.outcome != "rejected" {
         output.state.outcome = "unknown".into();

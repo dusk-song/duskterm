@@ -12,6 +12,7 @@ mod runtime;
 mod skill;
 mod storage;
 mod terminal_directory;
+mod text_edit;
 mod tools;
 mod types;
 
@@ -525,7 +526,11 @@ pub async fn ai_get_conversation(
 ) -> Result<Conversation, String> {
     let state = state.inner().clone();
     state
-        .blocking(move |state| state.with_db(|db| db.get(&id)))
+        .blocking(move |state| state.with_db(|db| {
+            let mut conversation = db.get(&id)?;
+            diagnosis::hydrate_unknown_steps(&mut conversation);
+            Ok(conversation)
+        }))
         .await
 }
 #[tauri::command]
@@ -540,6 +545,7 @@ pub async fn ai_create_conversation(state: State<'_, AiState>) -> Result<Convers
                 revision: 0,
                 model_id: None,
                 last_service_id: None,
+                last_recipient: None,
                 messages: vec![],
                 summary: None,
                 draft: String::new(),

@@ -183,7 +183,7 @@ onBeforeUnmount(() => {
         <ContextMenuTrigger as-child>
           <div :ref="(element) => setTabItemRef(panel.id, element)"
             class="terminal-tab-item" :class="{
-              active: panel.id === activePanelId,
+              'is-current': panel.id === activePanelId,
               'is-dragging': panel.id === draggingId,
               'drop-before': dropTarget?.id === panel.id && dropTarget.placement === 'before',
               'drop-after': dropTarget?.id === panel.id && dropTarget.placement === 'after'
@@ -311,16 +311,18 @@ onBeforeUnmount(() => {
   background: color-mix(in srgb, var(--app-tab-bg-active) 54%, transparent);
 }
 
-.terminal-tab-item.active {
+.terminal-tab-item.is-current {
+  border-right-color: transparent;
   color: var(--app-text);
-  background: color-mix(in srgb, var(--app-tab-bg-active) 82%, transparent);
+  background: var(--app-tab-bg-active);
+  box-shadow: inset 0 0 0 1px var(--app-border-shadow);
 }
 
-.terminal-tab-item.active::after {
+.terminal-tab-item.is-current::after {
   opacity: 1;
 }
 
-.terminal-tab-item.active .terminal-tab-label {
+.terminal-tab-item.is-current .terminal-tab-label {
   font-weight: 600;
 }
 
@@ -398,7 +400,7 @@ onBeforeUnmount(() => {
 }
 
 .terminal-tab-item:hover .terminal-tab-close,
-.terminal-tab-item.active .terminal-tab-close,
+.terminal-tab-item.is-current .terminal-tab-close,
 .terminal-tab-item:focus-within .terminal-tab-close,
 .terminal-tab-close:focus-visible {
   opacity: .72;
