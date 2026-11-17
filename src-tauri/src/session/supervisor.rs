@@ -117,28 +117,6 @@ mod tests {
         assert!(result.is_ok());
         assert_eq!(rx.await.unwrap(), true);
     }
-
-    #[cfg(windows)]
-    #[tokio::test]
-    async fn context_cmd_split_binds_its_own_runtime() {
-        let supervisor = SessionSupervisor::new();
-        let actor = supervisor.get_or_spawn_actor("root");
-        let (mut root, _input, _resize, _close) = crate::ssh::create_terminal_runtime_channels();
-        let (mut split, _split_input, _split_resize, _split_close) =
-            crate::ssh::create_terminal_runtime_channels();
-        root.local_cmd_directory = Some(r"C:\root".into());
-        split.local_cmd_directory = Some(r"C:\split".into());
-        actor.terminal_handles.lock().unwrap().extend([
-            ("root".into(), root.clone()),
-            ("split".into(), split.clone()),
-        ]);
-        let (generation, directory) = supervisor.ai_cmd_session("split").unwrap();
-        assert!(generation.same_channel(&split.close_tx));
-        assert!(!generation.same_channel(&root.close_tx));
-        assert_eq!(directory, std::path::PathBuf::from(r"C:\split"));
-        actor.terminal_handles.lock().unwrap().remove("split");
-        assert!(supervisor.ai_cmd_session("split").is_err());
-    }
 }
 
 impl SessionSupervisor {

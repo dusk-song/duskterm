@@ -513,10 +513,10 @@ pub async fn ai_probe(
 #[tauri::command]
 pub async fn ai_list_conversations(
     state: State<'_, AiState>,
-) -> Result<Vec<ConversationInfo>, String> {
+) -> Result<ConversationHistory, String> {
     let state = state.inner().clone();
     state
-        .blocking(move |state| state.with_db(|db| db.list()))
+        .blocking(move |state| state.with_db(|db| db.history()))
         .await
 }
 #[tauri::command]
@@ -533,27 +533,45 @@ pub async fn ai_get_conversation(
         }))
         .await
 }
+fn workspace_name(name: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() || name.chars().count() > 80 || name.chars().any(char::is_control) {
+        return Err("请输入 1 至 80 字的工作区名称".into());
+    }
+    Ok(name.into())
+}
+
 #[tauri::command]
-pub async fn ai_create_conversation(state: State<'_, AiState>) -> Result<Conversation, String> {
+pub async fn ai_create_workspace(state: State<'_, AiState>, name: String) -> Result<AiWorkspace, String> {
+    let name = workspace_name(&name)?;
     let state = state.inner().clone();
     state
-        .blocking(move |state| {
-            let c = Conversation {
-                id: id(),
-                title: "新对话".into(),
-                updated_at: now(),
-                revision: 0,
-                model_id: None,
-                last_service_id: None,
-                last_recipient: None,
-                messages: vec![],
-                summary: None,
-                draft: String::new(),
-                usage_stats: Some(UsageStats::default()),
-            };
-            state.with_db(|db| db.save(&c))?;
-            Ok(c)
-        })
+        .blocking(move |state| state.with_db(|db| db.create_workspace(name)))
+        .await
+}
+
+#[tauri::command]
+pub async fn ai_rename_workspace(state: State<'_, AiState>, id: String, name: String) -> Result<(), String> {
+    let name = workspace_name(&name)?;
+    let state = state.inner().clone();
+    state
+        .blocking(move |state| state.with_db(|db| db.rename_workspace(&id, &name)))
+        .await
+}
+
+#[tauri::command]
+pub async fn ai_put_workspace_first(state: State<'_, AiState>, id: String) -> Result<(), String> {
+    let state = state.inner().clone();
+    state
+        .blocking(move |state| state.with_db(|db| db.put_workspace_first(&id)))
+        .await
+}
+
+#[tauri::command]
+pub async fn ai_move_conversation(state: State<'_, AiState>, id: String, workspace_id: String) -> Result<(), String> {
+    let state = state.inner().clone();
+    state
+        .blocking(move |state| state.with_db(|db| db.move_conversation(&id, &workspace_id)))
         .await
 }
 #[tauri::command]

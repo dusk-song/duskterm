@@ -1353,6 +1353,7 @@ dependencies = [
  "libc",
  "portable-pty",
  "rand 0.9.4",
+ "regex",
  "rig-agent",
  "rig-core",
  "rig-memory",

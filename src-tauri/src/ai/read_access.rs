@@ -133,8 +133,18 @@ impl AutomaticRead {
     }
 
     pub fn scope(&self, path: &str) -> Result<Option<ReadAccess>, String> {
-        let scopes = self.scopes.lock().map_err(|_| "读取授权状态不可用")?;
+        let mut scopes = self.scopes.lock().map_err(|_| "读取授权状态不可用")?;
+        scopes.retain(|scope| scope.expires > now());
         Ok(scopes.iter().find(|scope| within(&scope.root, scope.directory, path)).cloned())
+    }
+
+    pub fn budget_spent(&self) -> bool {
+        self.budget.lock().is_ok_and(|budget| budget.0 >= 8 || budget.1 >= 65_536)
+    }
+
+    pub fn reset_budget(&self) -> Result<(), String> {
+        *self.budget.lock().map_err(|_| "读取预算不可用")? = (0, 0);
+        Ok(())
     }
 
     pub async fn authorize(&self, path: String) -> Result<(), String> {

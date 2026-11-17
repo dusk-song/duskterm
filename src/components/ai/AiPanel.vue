@@ -1,6 +1,6 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { Maximize2, Minimize2, Plus, History, X, ArrowUp, Square, ChevronDown, Check } from '@lucide/vue';
+import { Maximize2, Minimize2, Plus, X, ArrowUp, Square, ChevronDown, Check } from '@lucide/vue';
 import IconButton from '@/components/common/IconButton.vue';
 import { Button } from '@/components/ui/button';
 import TooltipHint from '@/components/ui/tooltip/TooltipHint.vue';
@@ -13,6 +13,7 @@ import { getTerminalContextReader } from '@/utils/terminalContextReaders';
 import { DropdownMenu, DropdownMenuItem } from '@/components/ui/dropdown-menu';
 import { confirm } from '@/composables/useConfirm';
 import AiMessage from './AiMessage.vue';
+import AiHistoryPopover from './AiHistoryPopover.vue';
 
 const props = defineProps({ maximized: Boolean, visible: { type: Boolean, default: true }, terminalSessionId: { type: String, default: '' } });
 defineEmits(['close', 'maximize']);
@@ -100,6 +101,7 @@ watch(() => props.visible, visible => {
   if (!visible) { pickerOpen.value = false; historyOpen.value = false; navigation++; }
 });
 watch(captureMenuOpen, open => { if (open) { pickerOpen.value = false; historyOpen.value = false; } });
+watch(historyOpen, open => { if (open) { pickerOpen.value = false; captureMenuOpen.value = false; } });
 watch(pickerOpen, async open => {
   if (!open) return;
   captureMenuOpen.value = false; historyOpen.value = false;
@@ -112,6 +114,7 @@ watch(pickerOpen, async open => {
 });
 const emptyDraft = computed({ get: () => store.emptyDraft, set: text => { store.emptyDraft = text; } });
 const loading = ref(true);
+const workspaceName = computed(() => store.workspaces.find(workspace => workspace.id === store.workspaceId)?.name);
 const scroller = ref(null);
 const followBottom = ref(true);
 const options = computed(() => modelOptions(store.settings));
@@ -172,11 +175,10 @@ async function showOlder() {
 watch(() => store.current?.id, (id, previous) => {
   visibleTurns.value = 30; followBottom.value = true;
   if (previous && id !== previous) diagnosisTarget.value = null;
-  if (!previous && id && store.active?.conversationId === id && emptyDraft.value) {
-    store.current.draft = emptyDraft.value; emptyDraft.value = '';
-  }
 });
-const generatingHere = computed(() => !!store.active && store.active.conversationId === store.current?.id);
+const generatingHere = computed(() => !!store.active && (
+  store.active.conversationId === store.current?.id || (!store.current && store.active.pendingInComposer)
+));
 const draftWrites = new Map();
 const draftTimers = new Map();
 const pendingDrafts = new Map();
@@ -210,15 +212,14 @@ async function openConversation(id) {
   const opened = await store.open(id);
   if (opened && revision === navigation) { historyOpen.value = false; await focusComposer(origin); }
 }
-async function newConversation() {
+async function newConversation(workspaceId = store.workspaceId) {
   if (creating.value) return;
   const revision = ++navigation, origin = document.activeElement;
   creating.value = true;
   try {
     await flushDrafts();
     if (revision !== navigation) return;
-    const conversation = await store.create();
-    if (revision === navigation && store.current?.id === conversation.id) {
+    if (store.newConversation(workspaceId)) {
       historyOpen.value = false; pickerOpen.value = false;
       await focusComposer(origin);
     }
@@ -275,6 +276,7 @@ async function send(regenerateId = null, analyzeMessageId = null) {
   if (sending.value || store.importingText || store.active || !store.selectedModel || (!regenerateId && !analyzeMessageId && !draft.value.trim())) return;
   sending.value = true;
   const sourceId = store.current?.id;
+  const sourceNavigation = navigation;
   const origin = document.activeElement;
   try {
     const selectedId = store.selectedModelId;
@@ -299,7 +301,7 @@ async function send(regenerateId = null, analyzeMessageId = null) {
       }
     }
     await flushDrafts();
-    if (store.current?.id !== sourceId || store.selectedModelId !== selectedId
+    if (navigation !== sourceNavigation || store.current?.id !== sourceId || store.selectedModelId !== selectedId
       || store.selectedModel?.service.id !== service.id || !sameModelRecipient(recipient, modelRecipient(store.selectedModel.service))
       || (!analyzeMessageId && diagnosisTarget.value !== intent)
       || (!intent && !regenerateId && !analyzeMessageId && terminalTarget.value !== target)
@@ -336,8 +338,7 @@ async function send(regenerateId = null, analyzeMessageId = null) {
       }
     }
     // Validation failures before a persisted user message should retain the input.
-    if (!regenerateId && !analyzeMessageId && !accepted && store.current?.id === sourceId) draft.value ||= text;
-    if (!regenerateId && !analyzeMessageId && !accepted && !sourceId && !store.current) emptyDraft.value ||= text;
+    if (!regenerateId && !analyzeMessageId && !accepted && navigation === sourceNavigation && store.current?.id === sourceId) draft.value ||= text;
     if (!accepted && selectedSkill && diagnosisTarget.value === intent && draft.value === text) pickedSkill.value = selectedSkill;
   } finally { sending.value = false; }
 }
@@ -367,19 +368,20 @@ onMounted(async () => {
 <template>
   <section class="ai-panel" aria-label="智能助手">
     <header>
-      <strong>智能助手</strong>
+      <div class="assistant-heading">
+        <strong>智能助手</strong>
+        <span v-if="workspaceName" class="assistant-workspace" :title="workspaceName">{{ workspaceName }}</span>
+      </div>
       <div class="header-actions">
         <IconButton :icon="Plus" size="sm" :disabled="creating || loading" :aria-busy="creating" aria-label="新建对话" :action="() => safe(newConversation)" />
-        <IconButton :icon="History" size="sm" aria-label="历史对话" :aria-expanded="historyOpen" :active="historyOpen" :action="() => { historyOpen = !historyOpen; pickerOpen = false; }" />
+        <AiHistoryPopover v-model="historyOpen" :disabled="loading"
+          @open-conversation="id => safe(() => openConversation(id))"
+          @new-conversation="id => safe(() => newConversation(id))" />
         <IconButton :icon="props.maximized ? Minimize2 : Maximize2" size="sm" :aria-label="maximized ? '恢复面板' : '工作区内最大化'" :action="() => $emit('maximize')" />
         <IconButton :icon="X" size="sm" aria-label="关闭面板" :action="() => $emit('close')" />
       </div>
     </header>
-    <div v-if="historyOpen" class="history" @keydown.esc.stop.prevent="historyOpen = false; focusComposer()">
-      <p v-if="!store.conversations.length" class="muted">暂无历史对话</p>
-      <button v-for="c in store.conversations" :key="c.id" class="history-title" :class="{ selected: c.id === store.current?.id }" @click="safe(() => openConversation(c.id))">{{ c.title }}</button>
-    </div>
-    <div v-if="store.active && !generatingHere" class="background-status" role="status">另一个对话正在生成 <Button variant="ghost" size="sm" @click="safe(() => openConversation(store.active.conversationId))">查看</Button><Button variant="ghost" size="sm" @click="safe(stopGeneration)">停止</Button></div>
+    <div v-if="store.active && !generatingHere" class="background-status" role="status">另一个对话正在生成 <Button variant="ghost" size="sm" :disabled="!store.active.snapshot" @click="safe(() => openConversation(store.active.conversationId))">查看</Button><Button variant="ghost" size="sm" @click="safe(stopGeneration)">停止</Button></div>
     <div ref="scroller" class="messages" @scroll="followBottom = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80">
       <div ref="messageContent" class="message-content">
       <Button v-if="turns.length > visibleTurns" variant="ghost" size="sm" @click="safe(showOlder)">加载更早的消息</Button>
@@ -469,7 +471,7 @@ textarea{width:100%;resize:vertical;max-height:200px;min-height:65px;background:
 .input-actions{display:flex;align-items:center;gap:8px;padding:0 8px 8px}.model-container{position:relative;min-width:0;margin-left:auto}.model-toggle{display:flex;gap:5px;align-items:center;max-width:min(230px,100%)}.model-toggle span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .send{flex-shrink:0;background:var(--color-primary);color:var(--color-primary-foreground);border-radius:7px}.send:hover{background:var(--color-primary);filter:brightness(1.1)}
 .conversation-usage{display:flex;align-items:center;flex-wrap:wrap;gap:8px;font-size:10px;color:var(--app-text-muted);margin-top:8px;line-height:1.5}.cache-rate{border-left:1px solid var(--app-border-light);padding-left:8px}
-.history{max-height:190px;overflow:auto;padding:6px 10px;border-bottom:1px solid var(--app-border-light)}.history-title{display:block;width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;text-align:left;padding:6px;border-radius:5px}.history-title:hover{background:var(--app-btn-hover)}
+.assistant-heading{display:flex;align-items:baseline;gap:8px;min-width:0}.assistant-heading strong{flex-shrink:0}.assistant-workspace{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--app-text-muted);font-size:11px}
 .selected{background:color-mix(in srgb,var(--color-primary) 12%,transparent)}
 .model-picker{width:min(310px,calc(100vw - 32px));max-height:300px}.model-service-name{font-size:10px;color:var(--app-text-muted);padding:7px 8px}.model-option{justify-content:space-between}.model-option span{min-width:0;overflow-wrap:anywhere}.model-option small{display:block;color:var(--app-text-muted)}
 

@@ -22,41 +22,26 @@ impl Database {
         let version: i64 = connection
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .map_err(db_error)?;
-        if version > 6 {
+        if version > 7 {
             return Err("AI 数据库版本高于当前程序支持的版本".into());
         }
-        if version == 0 {
+        if version < 7 {
+            // Workspace support starts a fresh history for pre-release
+            // databases. Model settings live in their own table.
             connection.execute_batch("BEGIN;
-                CREATE TABLE settings (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
-                CREATE TABLE conversations (id TEXT PRIMARY KEY, title TEXT NOT NULL, updated_at INTEGER NOT NULL, data TEXT NOT NULL, draft TEXT NOT NULL DEFAULT '');
+                CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
+                DROP TABLE IF EXISTS generation_checkpoints;
+                DROP TABLE IF EXISTS conversations;
+                CREATE TABLE workspaces (id TEXT PRIMARY KEY, name TEXT NOT NULL, position INTEGER NOT NULL);
+                INSERT INTO workspaces VALUES ('default', '默认工作区', 0);
+                CREATE TABLE conversations (
+                    id TEXT PRIMARY KEY, workspace_id TEXT NOT NULL REFERENCES workspaces(id),
+                    title TEXT NOT NULL, updated_at INTEGER NOT NULL, data TEXT NOT NULL, draft TEXT NOT NULL DEFAULT '');
                 CREATE INDEX conversations_recent ON conversations(updated_at DESC);
-                PRAGMA user_version=1; COMMIT;").map_err(db_error)?;
-        }
-        if version > 0 && version < 6 && path != Path::new(":memory:") {
-            // VACUUM INTO includes committed WAL contents. A file copy of ai.db
-            // alone is not a consistent rollback snapshot while WAL is in use.
-            let backup = path.with_extension(format!("pre-v6-{}.db", id()));
-            connection
-                .execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])
-                .map_err(|_| "AI 数据库升级前备份失败，请检查磁盘空间和目录权限")?;
-        }
-        if version < 3 {
-            // Additive migration: retain the original conversation JSON. Seed old
-            // in-progress answers atomically, so a crash during migration is safe.
-            connection.execute_batch("BEGIN;
                 CREATE TABLE generation_checkpoints (
                     conversation_id TEXT PRIMARY KEY REFERENCES conversations(id) ON DELETE CASCADE,
                     message_id TEXT NOT NULL, data TEXT NOT NULL);
-                INSERT INTO generation_checkpoints
-                    SELECT id,json_extract(data,'$.messages[#-1].id'),json_extract(data,'$.messages[#-1]')
-                    FROM conversations WHERE json_extract(data,'$.messages[#-1].status')='streaming';
-                PRAGMA user_version=3; COMMIT;").map_err(db_error)?;
-        }
-        if version < 6 {
-            // Older executables must not erase approvals and uncertain outcomes.
-            connection
-                .pragma_update(None, "user_version", 6)
-                .map_err(db_error)?;
+                PRAGMA user_version=7; COMMIT;").map_err(db_error)?;
         }
         let db = Self { connection };
         // Only unfinished generations need decoding and recovery at startup.
@@ -133,20 +118,69 @@ impl Database {
         self.connection.execute("INSERT INTO settings VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET data=excluded.data", [data]).map_err(db_error)?;
         Ok(())
     }
-    pub fn list(&self) -> Result<Vec<ConversationInfo>, String> {
-        self.connection
-            .prepare("SELECT id,title,updated_at FROM conversations ORDER BY updated_at DESC")
+    pub fn history(&self) -> Result<ConversationHistory, String> {
+        let workspaces = self.connection
+            .prepare("SELECT id,name FROM workspaces ORDER BY position,id").map_err(db_error)?
+            .query_map([], |row| Ok(AiWorkspace { id: row.get(0)?, name: row.get(1)? }))
+            .map_err(db_error)?
+            .collect::<Result<_, _>>().map_err(db_error)?;
+        let conversations = self.connection
+            .prepare("SELECT id,title,updated_at,workspace_id FROM conversations ORDER BY updated_at DESC,id")
             .map_err(db_error)?
             .query_map([], |r| {
                 Ok(ConversationInfo {
                     id: r.get(0)?,
                     title: r.get(1)?,
                     updated_at: r.get::<_, i64>(2)?.max(0) as u64,
+                    workspace_id: r.get(3)?,
                 })
             })
             .map_err(db_error)?
             .collect::<Result<_, _>>()
-            .map_err(db_error)
+            .map_err(db_error)?;
+        Ok(ConversationHistory { workspaces, conversations })
+    }
+
+    pub fn create_workspace(&self, name: String) -> Result<AiWorkspace, String> {
+        let workspace = AiWorkspace { id: id(), name };
+        self.connection.execute(
+            "INSERT INTO workspaces SELECT ?1,?2,MAX(position)+1 FROM workspaces",
+            params![workspace.id,workspace.name],
+        ).map_err(db_error)?;
+        Ok(workspace)
+    }
+
+    pub fn rename_workspace(&self, id: &str, name: &str) -> Result<(), String> {
+        let rows = self.connection.execute(
+            "UPDATE workspaces SET name=?2 WHERE id=?1", params![id,name],
+        ).map_err(db_error)?;
+        (rows != 0).then_some(()).ok_or_else(|| "工作区不存在".into())
+    }
+
+    pub fn put_workspace_first(&self, id: &str) -> Result<(), String> {
+        let rows = self.connection.execute(
+            "UPDATE workspaces SET position=(SELECT MIN(position)-1 FROM workspaces) WHERE id=?1",
+            [id],
+        ).map_err(db_error)?;
+        (rows != 0).then_some(()).ok_or_else(|| "工作区不存在".into())
+    }
+
+    pub fn move_conversation(&self, id: &str, workspace_id: &str) -> Result<(), String> {
+        self.check_workspace(workspace_id)?;
+        let rows = self.connection.execute(
+            "UPDATE conversations SET workspace_id=?2 WHERE id=?1", params![id,workspace_id],
+        ).map_err(db_error)?;
+        (rows != 0).then_some(()).ok_or_else(|| "对话不存在".into())
+    }
+
+    fn check_workspace(&self, id: &str) -> Result<(), String> {
+        if self.connection.query_row(
+            "SELECT EXISTS (SELECT 1 FROM workspaces WHERE id=?1)", [id], |row| row.get::<_, bool>(0),
+        ).map_err(db_error)? {
+            Ok(())
+        } else {
+            Err("工作区不存在".into())
+        }
     }
     pub fn get(&self, id: &str) -> Result<Conversation, String> {
         let (data, draft): (String, String) = self
@@ -182,14 +216,37 @@ impl Database {
         Ok(c)
     }
     pub fn save(&self, c: &Conversation) -> Result<(), String> {
+        self.save_turn(c, None)
+    }
+
+    pub fn insert_conversation(&self, c: &Conversation, workspace_id: &str) -> Result<(), String> {
+        if !c.messages.iter().any(|message| message.role == "user" && !message.content.trim().is_empty()) {
+            return Err("发送首条消息后才保存对话".into());
+        }
+        self.check_workspace(workspace_id)?;
+        self.save_turn(c, Some(workspace_id))
+    }
+
+    fn save_turn(&self, c: &Conversation, workspace_id: Option<&str>) -> Result<(), String> {
         let mut stored = c.clone();
         stored.draft.clear();
         let data = serde_json::to_string(&stored).map_err(|_| "无法编码 AI 对话")?;
         // Draft updates never get overwritten by a stream checkpoint.
         let transaction = self.connection.unchecked_transaction().map_err(db_error)?;
-        transaction.execute("INSERT INTO conversations(id,title,updated_at,data,draft) VALUES(?1,?2,?3,?4,?5)
-            ON CONFLICT(id) DO UPDATE SET title=excluded.title,updated_at=excluded.updated_at,data=excluded.data",
-            params![c.id,c.title,c.updated_at as i64,data,c.draft]).map_err(db_error)?;
+        if let Some(workspace_id) = workspace_id {
+            transaction.execute(
+                "INSERT INTO conversations(id,workspace_id,title,updated_at,data,draft) VALUES(?1,?2,?3,?4,?5,?6)",
+                params![c.id,workspace_id,c.title,c.updated_at as i64,data,c.draft],
+            ).map_err(db_error)?;
+        } else {
+            let rows = transaction.execute(
+                "UPDATE conversations SET title=?2,updated_at=?3,data=?4 WHERE id=?1",
+                params![c.id,c.title,c.updated_at as i64,data],
+            ).map_err(db_error)?;
+            if rows == 0 {
+                return Err("对话不存在".into());
+            }
+        }
         if let Some(message) = c.messages.last().filter(|m| m.status == "streaming") {
             let data = serde_json::to_string(message).map_err(|_| "无法编码生成检查点")?;
             transaction.execute("INSERT INTO generation_checkpoints VALUES(?1,?2,?3)

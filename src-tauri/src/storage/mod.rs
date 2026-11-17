@@ -341,6 +341,41 @@ fn load_command_knowledge_storage_data(
     Ok(serde_json::from_str(&content).unwrap_or_default())
 }
 
+pub(crate) fn command_requires_ai_approval(
+    state: &SharedStorageState,
+    command: &str,
+) -> Result<bool, String> {
+    let content = {
+        let state = state.lock().map_err(|_| "命令知识库不可用")?;
+        match fs::read_to_string(state.get_command_knowledge_path()) {
+            Ok(content) => content,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error.to_string()),
+        }
+    };
+    knowledge_matches_sensitive_command(&content, command)
+}
+
+fn knowledge_matches_sensitive_command(content: &str, command: &str) -> Result<bool, String> {
+    let data: CommandKnowledgeStorageData =
+        serde_json::from_str(content).map_err(|e| e.to_string())?;
+    let rules: Vec<_> = data.entries.iter()
+        .filter(|entry| matches!(entry.safety_level.as_str(), "sensitive" | "dangerous"))
+        .map(|entry| entry.command.trim())
+        .filter(|pattern| !pattern.is_empty())
+        .collect();
+    if rules.is_empty() {
+        return Ok(false);
+    }
+    // An unsupported pattern must keep manual approval available.
+    let matcher = regex::RegexSetBuilder::new(rules)
+        .case_insensitive(true)
+        .size_limit(1 << 20)
+        .build()
+        .map_err(|e| e.to_string())?;
+    Ok(matcher.is_match(command.trim()) || command.lines().any(|line| matcher.is_match(line.trim())))
+}
+
 fn save_command_knowledge_storage_data(
     state: &StorageState,
     data: &CommandKnowledgeStorageData,

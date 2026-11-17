@@ -8,6 +8,7 @@ pub(super) const TOOL_LIMIT: usize = 12;
 pub(super) const TASK_TIMEOUT: u64 = 300;
 pub(super) const SUMMARY_TIME: u64 = 20;
 pub(super) const WRAP_UP: &str = "TASK_WRAP_UP";
+pub(super) const PAUSE: &str = "TASK_PAUSED:";
 const COMMON: &str = include_str!("prompts/diagnosis.md");
 const SSH: &str = include_str!("prompts/ssh.md");
 const CMD: &str = include_str!("prompts/cmd.md");
@@ -155,7 +156,9 @@ impl Task {
         wrapped_up: bool,
     ) {
         self.elapsed_ms = now().saturating_sub(self.started_at);
-        self.status = if error.is_some_and(|error| error.contains("BUDGET:")) {
+        self.status = if error.is_some_and(|error| error.starts_with(PAUSE)) {
+            "paused"
+        } else if error.is_some_and(|error| error.contains("BUDGET:")) {
             "budget_exhausted"
         } else if error.is_some_and(|error| error.starts_with("TIMEOUT:")) {
             "timed_out"
@@ -417,10 +420,17 @@ fn task_steps<'a>(
 }
 
 pub(super) fn evidence_preview(c: &Conversation, task_id: &str, limit: usize) -> String {
+    preview_steps(task_steps(c, task_id), task_steps(c, task_id).count(), limit)
+}
+
+pub(super) fn preview_steps<'a>(
+    steps: impl DoubleEndedIterator<Item = (usize, usize, &'a ToolRecord)>,
+    total: usize,
+    limit: usize,
+) -> String {
     let mut previews = Vec::new();
     let mut bytes = 0;
-    let total = task_steps(c, task_id).count();
-    for (run, step, tool) in task_steps(c, task_id).rev() {
+    for (run, step, tool) in steps.rev() {
         let clip = |text: &str| text.chars().take(512).collect::<String>();
         let execution = tool.execution.as_ref().map(|execution| {
             serde_json::json!({

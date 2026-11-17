@@ -50,7 +50,7 @@ async function copy(text) {
 <template>
   <article class="ai-message" :class="[message.role, { alternative: !message.active && message.role === 'assistant' }]">
     <div class="bubble">
-      <AiDiagnosticTask v-if="message.task && (!message.task.automatic || message.tools?.length || message.task.runNumber > 1)" :task="message.task" :tools="message.tools" :model-label="message.actualModelId || message.modelId" :service-name="message.serviceName" :busy="busy" @analyze="$emit('analyze')" @continue="$emit('continue')" @verified="$emit('verified')" />
+      <AiDiagnosticTask v-if="message.task && (!message.task.automatic || message.tools?.length || message.task.runNumber > 1)" :task="message.task" :model-label="message.actualModelId || message.modelId" :service-name="message.serviceName" :busy="busy" @analyze="$emit('analyze')" @continue="$emit('continue')" @verified="$emit('verified')" />
       <AiDeploymentPlan v-if="message.deployment" :preview="message.deployment" :status="message.status" />
       <span v-if="message.role === 'assistant' && !message.active && message.status === 'completed'" class="version">历史版本</span>
       <details v-if="message.reasoning" class="thinking" :open="thinkingOpen">

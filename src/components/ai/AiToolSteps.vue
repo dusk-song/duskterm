@@ -65,7 +65,7 @@ function resultText(text) {
 <template>
   <div v-if="tools.length" class="tool-steps" aria-label="工具调用记录">
     <details v-for="(tool, index) in tools" :key="tool.callId" class="tool-step" :open="['running', 'waiting_approval', 'approved', 'unknown'].includes(tool.status)">
-      <summary :title="tool.callId"><span :class="{ running: tool.status === 'running' }">{{ index + 1 }} · {{ stepName(tool) }}</span><span>{{ stepStatus(tool) }}</span></summary>
+      <summary :title="tool.callId"><span :class="{ running: tool.status === 'running' }">{{ index + 1 }} · {{ stepName(tool) }}</span><span>{{ tool.approvalMode === 'automatic' ? '自动执行 · ' : '' }}{{ stepStatus(tool) }}</span></summary>
       <div class="tool-details">
         <p :title="tool.target">目标：{{ isCmd(tool) ? '本机 Windows CMD' : ssh.getSession(tool.target)?.name || tool.target }}</p>
         <template v-if="isExec(tool)">
@@ -76,9 +76,10 @@ function resultText(text) {
             <pre v-if="Object.keys(tool.arguments.parameters || {}).length" aria-label="脚本参数">{{ JSON.stringify(tool.arguments.parameters, null, 2) }}</pre>
           </template>
           <p>用途：{{ tool.arguments?.purpose }}</p>
+          <p v-if="tool.approvalMode === 'manual'">已手动批准</p>
           <pre class="command" :aria-label="skillFor(tool) ? '固定脚本与位置参数' : '待执行的完整命令'">{{ tool.arguments?.command }}</pre>
           <p v-if="sensitive(tool)" class="warning">命中敏感命令规则：{{ sensitive(tool) }}</p>
-          <p v-if="tool.status === 'waiting_approval'" class="warning">命令可改变{{ isCmd(tool) ? '本机' : '服务器' }}，请审阅完整内容。{{ remaining(tool) }} 秒后确认失效，等待也计入本次请求总超时。</p>
+          <p v-if="tool.status === 'waiting_approval'" class="warning">命令可改变{{ isCmd(tool) ? '本机' : '服务器' }}，请审阅完整内容。{{ remaining(tool) }} 秒后确认失效。</p>
           <div v-if="tool.status === 'waiting_approval'" class="approval-actions">
             <Button variant="outline" size="sm" :disabled="!canDecide(tool)" @click="decide(tool, false)">拒绝</Button>
             <Button size="sm" :disabled="!canDecide(tool)" @click="decide(tool, true)">确认执行</Button>

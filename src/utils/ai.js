@@ -17,6 +17,7 @@ export function createService(template = serviceTemplates[0]) {
 
 export function createModel(modelId = '') {
   return { id: crypto.randomUUID(), modelId, name: modelId, enabled: true,
+    autoExecuteCommands: true,
     contextWindow: null, reportedContextWindow: null, reportedMaxInputTokens: null, maxOutputTokens: 262144, thinkingMode: 'default', thinkingFormat: '',
     adapterOverride: null, reasoningEffort: null, reasoningBudget: null, thinkingOnParams: null, thinkingOffParams: null,
     capabilities: { text: 'unknown', image: 'unknown', thinking: 'unknown', tools: 'unknown' },

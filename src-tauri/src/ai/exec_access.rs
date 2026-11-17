@@ -1,4 +1,4 @@
-//! A grant allows one proposal, never unattended execution. Each exact call needs a fresh decision.
+//! Bind command decisions to the model, target, and exact arguments before dispatch.
 use super::{
     diagnosis::TargetKind,
     tools::{self, Calls, Events},
@@ -6,13 +6,14 @@ use super::{
     Active, AiState,
 };
 use crate::session::supervisor::SessionSupervisor;
+use crate::storage::{command_requires_ai_approval, SharedStorageState};
 use futures::{future::BoxFuture, FutureExt};
 use russh::{client, Channel};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::{HashMap, HashSet},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex,
     },
     time::Duration,
@@ -292,6 +293,8 @@ pub(super) fn take(
         diagnostic_budget: None,
         task_directory: None,
         skill: None,
+        command_knowledge: None,
+        approval_wait_ms: Default::default(),
         permit: Arc::new(Mutex::new(None)),
     }))
 }
@@ -340,6 +343,8 @@ pub(super) struct ExecRun {
     diagnostic_budget: Option<Arc<Mutex<DiagnosticBudget>>>,
     task_directory: Option<Arc<Mutex<Option<String>>>>,
     skill: Option<Arc<super::skill::Skill>>,
+    command_knowledge: Option<SharedStorageState>,
+    approval_wait_ms: Arc<AtomicU64>,
     permit: Arc<Mutex<Option<(ExecArgs, ToolRecord)>>>,
 }
 #[derive(Default)]
@@ -544,6 +549,12 @@ impl ExecRun {
     pub fn is_diagnostic(&self) -> bool {
         self.diagnostic_budget.is_some()
     }
+    pub fn is_continuous(&self) -> bool {
+        self.is_diagnostic() && self.skill.is_none()
+    }
+    pub fn approval_wait(&self) -> Duration {
+        Duration::from_millis(self.approval_wait_ms.load(Ordering::Relaxed))
+    }
     pub fn diagnostic_blocked(&self) -> bool {
         self.diagnostic_budget
             .as_ref()
@@ -563,11 +574,19 @@ impl ExecRun {
         self.message_id = message_id.into();
         self
     }
+    pub fn with_command_knowledge(mut self, knowledge: SharedStorageState) -> Self {
+        self.command_knowledge = Some(knowledge);
+        self
+    }
     pub fn target(&self) -> &str {
         &self.access.target
     }
     pub fn check_live(&self) -> Result<(), String> {
-        self.access.check_live()?;
+        if self.is_continuous() {
+            (self.access.live)()?;
+        } else {
+            self.access.check_live()?;
+        }
         let active = self.active.lock().map_err(|_| "运行状态不可用")?;
         if !active
             .as_ref()
@@ -608,7 +627,25 @@ impl ExecRun {
         } else if self.used.swap(true, Ordering::SeqCst) {
             return Err("本次问答只允许提出一条命令；请核实结果后重新提问".into());
         }
-        let approved = self.confirm_operation(&mut record, calls, events, true).await?;
+        let automatic = if let Some(knowledge) = self.command_knowledge.clone().filter(|_| self.skill.is_none()) {
+            let command = args.command.clone();
+            tokio::task::spawn_blocking(move || command_requires_ai_approval(&knowledge, &command))
+                .await
+                .is_ok_and(|result| result.is_ok_and(|requires_approval| !requires_approval))
+        } else {
+            false
+        };
+        let approved = if automatic {
+            self.check_live()?;
+            record.approval_mode = Some(ApprovalMode::Automatic);
+            record.status = "approved".into();
+            record.execution = Some(Execution { outcome: "not_started".into(), ..Default::default() });
+            tools::publish(record.clone(), calls, events, true).await?;
+            self.check_live()?;
+            true
+        } else {
+            self.confirm_operation(&mut record, calls, events, true).await?
+        };
         if approved {
             *self.permit.lock().map_err(|_| "执行许可不可用")? = Some((args, record));
         }
@@ -648,15 +685,18 @@ impl ExecRun {
             outcome: "not_started".into(),
             ..Default::default()
         });
+        let waiting_since = tokio::time::Instant::now();
         tools::publish(record.clone(), calls, events, true).await?;
         let decision =
             tokio::time::timeout(Duration::from_millis(expires.saturating_sub(now())), rx).await;
+        self.approval_wait_ms.fetch_add(waiting_since.elapsed().as_millis() as u64, Ordering::Relaxed);
         record.approval_id = None;
         record.approval_expires_at = None;
         match decision {
             Ok(Ok(true)) => {
                 self.check_live()?;
                 record.status = "approved".into();
+                record.approval_mode = command.then_some(ApprovalMode::Manual);
                 tools::publish(record.clone(), calls, events, true).await?;
                 self.check_live()?;
                 Ok(true)

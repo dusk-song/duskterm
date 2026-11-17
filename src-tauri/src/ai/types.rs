@@ -27,6 +27,8 @@ pub struct ModelConfig {
     pub model_id: String,
     pub name: String,
     pub enabled: bool,
+    #[serde(default = "default_auto_execute_commands")]
+    pub auto_execute_commands: bool,
     pub context_window: Option<u64>,
     #[serde(default)]
     pub reported_context_window: Option<u64>,
@@ -53,6 +55,10 @@ pub struct ModelConfig {
     pub reported_capabilities: Capabilities,
     #[serde(default)]
     pub max_output_limit: Option<u64>,
+}
+
+fn default_auto_execute_commands() -> bool {
+    true
 }
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -219,7 +225,16 @@ pub struct ToolRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub approval_expires_at: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_mode: Option<ApprovalMode>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution: Option<Execution>,
+}
+
+#[derive(Clone, Copy, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalMode {
+    Automatic,
+    Manual,
 }
 
 pub(crate) use crate::ssh::exec::Execution;
@@ -306,6 +321,22 @@ pub struct Conversation {
     pub usage_stats: Option<UsageStats>,
 }
 impl Conversation {
+    pub fn empty(id: String) -> Self {
+        Self {
+            id,
+            title: "新对话".into(),
+            updated_at: now(),
+            revision: 0,
+            model_id: None,
+            last_service_id: None,
+            last_recipient: None,
+            messages: vec![],
+            summary: None,
+            draft: String::new(),
+            usage_stats: Some(UsageStats::default()),
+        }
+    }
+
     pub fn ensure_usage_stats(&mut self) -> &mut UsageStats {
         if self.usage_stats.is_none() {
             // Older versions did not retain every summary's usage. Recover the
@@ -337,12 +368,27 @@ pub struct ConversationInfo {
     pub id: String,
     pub title: String,
     pub updated_at: u64,
+    pub workspace_id: String,
+}
+
+#[derive(Serialize)]
+pub struct AiWorkspace {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Serialize)]
+pub struct ConversationHistory {
+    pub workspaces: Vec<AiWorkspace>,
+    pub conversations: Vec<ConversationInfo>,
 }
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SendRequest {
     pub conversation_id: String,
+    #[serde(default)]
+    pub workspace_id: Option<String>,
     pub request_id: String,
     pub model_id: String,
     pub content: String,

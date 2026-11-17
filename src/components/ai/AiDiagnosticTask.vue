@@ -1,10 +1,9 @@
 <script setup>
 import { computed } from 'vue';
 import { Button } from '@/components/ui/button';
-const props = defineProps({ task: Object, tools: Array, busy: Boolean, modelLabel: String, serviceName: String });
+const props = defineProps({ task: Object, busy: Boolean, modelLabel: String, serviceName: String });
 defineEmits(['analyze', 'continue', 'verified']);
 const states = { running:'诊断中', waiting_confirmation:'等待确认', summarizing:'正在整理已有证据', completed:'本轮运行结束', paused:'本轮已暂停，可继续检查', summary_failed:'证据整理未完成', failed:'诊断未完成', stopped:'诊断已停止', interrupted:'上次诊断已中断', budget_exhausted:'本轮已达到运行上限', timed_out:'本轮诊断超时' };
-const dispatched = computed(() => (props.tools || []).filter(tool => tool.execution && !['not_started','rejected'].includes(tool.execution.outcome)).length);
 const pending = computed(() => ['running','waiting_confirmation','summarizing'].includes(props.task.status));
 const localCmd = computed(() => props.task.targetKind === 'cmd');
 const heading = computed(() => {
@@ -23,9 +22,8 @@ const taskStates = { running:'执行任务中', paused:'本轮已暂停，可继
     <p>绑定目标：{{ task.target.label || task.target.id }}</p>
     <p v-if="task.terminalTask">任务目录：{{ task.directory || '待核实' }}</p>
     <p v-if="task.skill" :title="task.skill.revision">脚本版本：{{ task.skill.version }} · {{ task.skill.script }}</p>
-    <p v-if="modelLabel">本轮模型：{{ serviceName }} · {{ modelLabel }}</p>
-    <p><template v-if="!task.analysisOnly">第 {{ task.runNumber || 1 }} 轮{{ task.terminalTask ? '运行' : '检查' }} · </template>模型 {{ task.modelCalls }}/{{ task.modelLimit }} 次 · 工具 {{ task.toolCalls }}/{{ task.toolLimit }} 步<template v-if="!task.analysisOnly"> · 已派发 {{ dispatched }} 步操作</template></p>
-    <p v-if="pending && !task.analysisOnly">{{ task.skill ? '仅运行一次选定脚本，执行前需确认。' : '单次运行最多 5 分钟，命令逐条确认。' }}</p>
+    <p v-if="modelLabel">模型：{{ serviceName }} · {{ modelLabel }}</p>
+    <p v-if="pending && !task.analysisOnly && task.skill">执行固定脚本前需确认。</p>
     <p v-if="task.evidenceStatus === 'unknown_remote_state'" class="notice">存在{{ localCmd ? '本机' : '远端' }}状态未知的步骤，需先核实；继续分析不会重新执行命令。</p>
     <p v-else-if="!pending && task.evidenceStatus === 'insufficient_evidence'" class="notice">本轮实测证据不足，需要补充信息或批准检查。</p>
     <p v-if="!pending && !task.terminalTask" class="notice">本轮结束不代表问题已修复；未验证服务恢复。</p>

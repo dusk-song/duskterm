@@ -12,7 +12,7 @@ function session(store) {
 }
 
 export const useAiStore = defineStore('ai', {
-  state: () => ({ settings: { services: [], defaultModelId: null }, conversations: [], current: null,
+  state: () => ({ settings: { services: [], defaultModelId: null }, workspaces: [], workspaceId: null, conversations: [], current: null,
     active: null, error: '', initialized: false, selectedModelId: null, emptyDraft: '', importingText: false, composerRevision: 0 }),
   getters: {
     selectedModel(state) {
@@ -24,14 +24,12 @@ export const useAiStore = defineStore('ai', {
     },
   },
   actions: {
-    async initialize({ selectConversation = true } = {}) {
+    async initialize() {
       if (this.initialized) return;
       const local = session(this);
       if (!local.initializing) {
-        const view = local.view;
         local.initializing = (async () => {
           await Promise.all([this.loadSettings(), this.loadList()]);
-          if (selectConversation && !this.importingText && local.view === view && !this.current && this.conversations.length) await this.open(this.conversations[0].id);
           this.initialized = true;
         })().finally(() => { local.initializing = null; });
       }
@@ -55,19 +53,13 @@ export const useAiStore = defineStore('ai', {
         if (!unchanged()) throw new Error('对话或草稿已变化，请重新带入终端文本');
       };
       try {
-        await this.initialize({ selectConversation: false });
+        await this.initialize();
         check();
         context = typeof context === 'function' ? await context() : context;
         check();
         const text = appendTerminalContext(original, context.text);
-        if (!this.current) {
-          const created = await this.create({ preserveModel: true, canApply: () => !signal?.aborted && !local.importCancelled && this.current?.id === sourceId
-            && (this.current?.draft ?? this.emptyDraft) === original });
-          if (signal?.aborted || local.importCancelled) throw new DOMException('带入已取消', 'AbortError');
-          if (this.current?.id !== created.id || this.current.draft) throw new Error('对话已变化，请重新带入选区');
-        }
-        this.current.draft = text;
-        if (!sourceId) this.emptyDraft = '';
+        if (this.current) this.current.draft = text;
+        else this.emptyDraft = text;
         local.focusOrigin = focusOrigin;
         this.composerRevision++;
         return true;
@@ -79,13 +71,22 @@ export const useAiStore = defineStore('ai', {
     },
     async loadList() {
       const local = session(this), revision = ++local.list;
-      const list = await aiInvoke('ai_list_conversations');
-      if (revision === local.list) this.conversations = list;
+      const history = await aiInvoke('ai_list_conversations');
+      if (revision !== local.list) return;
+      this.workspaces = history.workspaces;
+      this.conversations = history.conversations;
+      if (!this.workspaces.some(workspace => workspace.id === this.workspaceId)) {
+        this.workspaceId = this.workspaces[0]?.id ?? null;
+      }
     },
     async open(id) {
       const local = session(this), revision = ++local.view;
       const conversation = await aiInvoke('ai_get_conversation', { id });
       if (revision !== local.view) return false;
+      const entry = this.conversations.find(item => item.id === id);
+      const workspaceId = entry?.workspaceId ?? (this.active?.conversationId === id ? this.active.workspaceId : null);
+      if (workspaceId) this.workspaceId = workspaceId;
+      if (this.active) this.active.pendingInComposer = false;
       this.current = this.active?.conversationId === id && this.active.snapshot
         ? { ...this.active.snapshot, draft: conversation.draft } : conversation;
       this.selectedModelId = conversation.modelId || this.settings.defaultModelId;
@@ -93,16 +94,35 @@ export const useAiStore = defineStore('ai', {
       this.error = '';
       return true;
     },
-    async create({ canApply = () => true, preserveModel = false } = {}) {
-      const local = session(this), revision = ++local.view;
-      const conversation = await aiInvoke('ai_create_conversation');
-      if (revision === local.view && canApply()) {
-        this.current = conversation;
-        if (!preserveModel) this.selectedModelId = this.settings.defaultModelId;
-        this.error = '';
-      }
+    newConversation(workspaceId = this.workspaceId) {
+      if (!this.workspaces.some(workspace => workspace.id === workspaceId)) return false;
+      session(this).view++;
+      if (this.active) this.active.pendingInComposer = false;
+      this.workspaceId = workspaceId;
+      this.current = null;
+      this.emptyDraft = '';
+      this.selectedModelId = this.settings.defaultModelId;
+      this.error = '';
+      return true;
+    },
+    async createWorkspace(name) {
+      const workspace = await aiInvoke('ai_create_workspace', { name });
       await this.loadList();
-      return conversation;
+      return workspace;
+    },
+    async renameWorkspace(id, name) {
+      await aiInvoke('ai_rename_workspace', { id, name });
+      await this.loadList();
+    },
+    async putWorkspaceFirst(id) {
+      await aiInvoke('ai_put_workspace_first', { id });
+      await this.loadList();
+    },
+    async moveConversation(id, workspaceId) {
+      await aiInvoke('ai_move_conversation', { id, workspaceId });
+      if (this.current?.id === id) this.workspaceId = workspaceId;
+      if (this.active?.conversationId === id) this.active.workspaceId = workspaceId;
+      await this.loadList();
     },
     async saveDraft(id, text) { await aiInvoke('ai_save_draft', { id, text }); },
     async stop() {
@@ -118,9 +138,8 @@ export const useAiStore = defineStore('ai', {
     async deleteConversation(id) {
       if (this.active?.conversationId === id) { await this.stop(); await this.waitForIdle(); }
       await aiInvoke('ai_delete_conversation', { id });
-      if (this.current?.id === id) { session(this).view++; this.current = null; }
+      if (this.current?.id === id) this.newConversation();
       await this.loadList();
-      if (!this.current && this.conversations.length) await this.open(this.conversations[0].id);
     },
     async deleteMessage(id) {
       const conversationId = this.current?.id;
@@ -142,7 +161,10 @@ export const useAiStore = defineStore('ai', {
       const recipient = modelRecipient(model.service);
       const local = session(this), view = local.view;
       const requestId = crypto.randomUUID();
-      let conversationId = this.current?.id;
+      const creating = !this.current;
+      const workspaceId = this.workspaceId;
+      if (creating && !workspaceId) return false;
+      const conversationId = this.current?.id ?? crypto.randomUUID();
       let accepted = false, timer = null;
       const pending = new Map();
       const flush = () => {
@@ -155,8 +177,20 @@ export const useAiStore = defineStore('ai', {
         pending.clear();
       };
       this.error = '';
-      // Reserve before the first await, including creation of the first conversation.
-      this.active = { requestId, conversationId, seq: -1, stage: 'preparing', snapshot: null, cancelRequested: false };
+      this.active = { requestId, conversationId, workspaceId, pendingInComposer: creating,
+        seq: -1, stage: 'preparing', snapshot: null, cancelRequested: false };
+      const updateCurrent = conversation => {
+        if (this.current?.id === conversationId) {
+          const draft = this.current.draft;
+          this.current = conversation;
+          this.current.draft = draft;
+        } else if (creating && local.view === view && !this.current && this.active?.pendingInComposer) {
+          this.current = conversation;
+          this.current.draft = this.emptyDraft;
+          this.emptyDraft = '';
+          this.active.pendingInComposer = false;
+        }
+      };
       const channel = new Channel();
       channel.onmessage = event => {
         if (!acceptsAiEvent(this.active, event)) return;
@@ -191,24 +225,15 @@ export const useAiStore = defineStore('ai', {
         this.active.stage = event.kind;
         if (event.conversation) {
           this.active.snapshot = event.conversation;
-          if (this.current?.id === conversationId) {
-            const draft = this.current.draft;
-            this.current = event.conversation; this.current.draft = draft;
-          }
+          updateCurrent(event.conversation);
         }
         // Cancellation while the command was being dispatched must reach Rust too.
         if (event.kind === 'started' && this.active.cancelRequested) void this.stop().catch(e => { this.error = String(e); });
       };
       const run = (async () => {
         try {
-          if (!conversationId) {
-            const conversation = await aiInvoke('ai_create_conversation');
-            conversationId = conversation.id;
-            this.active.conversationId = conversationId;
-            if (local.view === view) { this.current = conversation; this.selectedModelId = model.id; }
-          }
           if (this.active.cancelRequested) return;
-          const conversation = await aiInvoke('ai_send', { request: { conversationId, requestId,
+          const conversation = await aiInvoke('ai_send', { request: { conversationId, requestId, workspaceId: creating ? workspaceId : null,
             modelId: model.id, content, regenerateId, confirmedServiceId: model.service.id, recipient,
             confirmHistoryRecipient: !!taskIntent.confirmHistoryRecipient, readGrant, execGrant,
             diagnosisTarget: taskIntent.diagnosisTarget || null, analyzeMessageId: taskIntent.analyzeMessageId || null,
@@ -217,15 +242,14 @@ export const useAiStore = defineStore('ai', {
             deploymentTarget: taskIntent.deploymentTarget || null, skill: taskIntent.skill || null }, channel });
           flush();
           accepted = true;
+          updateCurrent(conversation);
           if (this.current?.id === conversationId) {
-            const draft = this.current.draft;
-            this.current = conversation; this.current.draft = draft;
             this.error = conversation.messages.at(-1)?.error || '';
           }
         } catch (error) {
           flush();
           const message = String(error);
-          if (!conversationId || this.current?.id === conversationId) this.error = message;
+          if (local.view === view || this.current?.id === conversationId) this.error = message;
           const partial = this.active?.snapshot?.messages.at(-1);
           if (partial?.status === 'streaming') {
             partial.status = 'failed'; partial.error = message;
@@ -246,7 +270,10 @@ export const useAiStore = defineStore('ai', {
           if (readGrant) await aiInvoke('ai_revoke_read_scope', { token: readGrant }).catch(() => {});
           if (execGrant) await aiInvoke('ai_revoke_exec_scope', { token: execGrant }).catch(() => {});
           flush();
-          if (!accepted && !regenerateId && !taskIntent.analyzeMessageId && this.current?.id === conversationId) this.current.draft ||= content;
+          if (!accepted && !regenerateId && !taskIntent.analyzeMessageId) {
+            if (this.current?.id === conversationId) this.current.draft ||= content;
+            else if (creating && local.view === view && !this.current) this.emptyDraft ||= content;
+          }
           if (this.active?.requestId === requestId) this.active = null;
           try { await this.loadList(); } catch (error) { this.error ||= String(error); }
         }
