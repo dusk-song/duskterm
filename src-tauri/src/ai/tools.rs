@@ -196,7 +196,7 @@ read_tool!(
 );
 read_tool!(FindFiles, "find_remote_files", "在指定目录按名称搜索条目，不递归。offset 为扫描起点，limit 为最多返回条目（默认50，最多100）。");
 read_tool!(SearchText, "search_remote_text", "对指定 UTF-8 文本从 offset 起搜索字面关键词。每页最多扫描 16384 字节，按 nextOffset 继续。页边界有重叠，可能返回重复或部分行。");
-read_tool!(TailLog, "tail_remote_log", "从指定 UTF-8 日志末尾读取最多 limit 字节（默认8192，最多16384），可按 query 和行首 timestamp_prefix 筛选。用 previousOffset 作为 offset 查看更早内容。边界可能截断行。");
+read_tool!(TailLog, "tail_remote_log", "从指定 UTF-8 日志末尾读取最多 limit 字节（默认8192，最多16384），可按 query 和行首 timestamp_prefix 筛选。用 previousOffset 作为 offset 查看更早内容。筛选以完整行为单位。若 skippedPartialLine 为 true，可提高 limit 并用原 offset 重读该页。");
 
 pub(super) enum Delta {
     Text(&'static str, String),
@@ -509,16 +509,21 @@ impl RunAccess {
         self.exec
             .as_ref()
             .filter(|exec| exec.is_diagnostic())
-            .map(|exec| if exec.is_terminal_task() {
-                if let Some(skill) = exec.skill() {
-                    return skill.preamble();
+            .map(|exec| {
+                let mut prompt = if let Some(skill) = exec.skill() {
+                    skill.preamble()
+                } else if exec.is_terminal_task() {
+                    let shell = if exec.kind() == TargetKind::Cmd { "本机 Windows CMD" } else { "SSH POSIX /bin/sh" };
+                    let directory = serde_json::json!(exec.task_directory());
+                    let instructions = if self.automatic { AUTOMATIC_PROMPT } else { TERMINAL_TASK_PROMPT };
+                    format!("{instructions}\n绑定终端类型：{shell}。任务目录：{directory}")
+                } else {
+                    super::diagnosis::preamble(exec.kind())
+                };
+                if exec.unresolved_change() {
+                    prompt.push_str("\n当前目标有待核实的变更。只能执行应用允许的只读检查，后续变更须等用户在原任务卡确认结果。");
                 }
-                let shell = if exec.kind() == TargetKind::Cmd { "本机 Windows CMD" } else { "SSH POSIX /bin/sh" };
-                let directory = serde_json::json!(exec.task_directory());
-                let instructions = if self.automatic { AUTOMATIC_PROMPT } else { TERMINAL_TASK_PROMPT };
-                format!("{instructions}\n绑定终端类型：{shell}。任务目录：{directory}")
-            } else {
-                super::diagnosis::preamble(exec.kind())
+                prompt
             })
     }
     fn local_cmd(&self) -> bool {

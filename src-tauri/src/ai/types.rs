@@ -197,6 +197,8 @@ pub struct Message {
     pub usage: Usage,
     pub elapsed_ms: u64,
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub terminal_notices: Vec<String>,
     #[serde(default)]
     pub tools: Vec<ToolRecord>,
     // Canonical Rig call/result pairs, retained only for completed answers.
@@ -457,6 +459,7 @@ pub fn new_message(role: &str, content: String) -> Message {
         usage: Usage::default(),
         elapsed_ms: 0,
         error: None,
+        terminal_notices: Vec::new(),
         tools: Vec::new(),
         tool_history: Vec::new(),
         task: None,

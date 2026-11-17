@@ -239,9 +239,9 @@ async function continueDiagnosis(message, verify = false) {
   const unknownSteps = task.unknownSteps || [];
   if (verify) {
     if (!unknownSteps.length) return;
-    const steps = unknownSteps.map(step => `第 ${step.run} 轮第 ${step.index} 步 ${step.command}`).join('；');
+    const steps = unknownSteps.map(step => step.command).join('、');
     try {
-      await confirm({ title: '确认已核实变更结果', content: `请确认你已核实这些步骤的实际结果。确认后，后续变更仍需逐条审批。${steps}`, okText: '已核实', danger: true });
+      await confirm({ title: '确认已核实变更结果', content: `请确认已核实以下操作的实际结果。发送续跑请求后，这些操作将解除待核实限制。后续命令仍按发送时所选模型的自动执行设置和敏感命令规则审批。操作包括「${steps}」。`, okText: '已核实', danger: true });
     } catch { return; }
     if (store.current?.id !== conversationId || store.active || sending.value) return;
   }
@@ -267,7 +267,10 @@ async function continueDiagnosis(message, verify = false) {
   }
   const verifiedSteps = verify ? unknownSteps.map(({ messageId, callId }) => ({ messageId, callId })) : [];
   diagnosisTarget.value = { id: task.target.id, label: task.target.label, kind, terminalTask: task.terminalTask, messageId: source.id, rebindSessionId, verifiedSteps };
-  if (!draft.value.trim()) draft.value = task.terminalTask ? '请根据已有结果继续完成任务。' : '请根据已有证据继续检查。';
+  if (!draft.value.trim()) {
+    draft.value = verify ? '请根据已核实的结果整理当前状态。'
+      : task.terminalTask ? '请根据已有结果继续完成任务。' : '请根据已有证据继续检查。';
+  }
   await focusComposer();
 }
 
@@ -394,7 +397,10 @@ onMounted(async () => {
     </div>
     <p v-if="store.error" class="error" role="alert">{{ store.error }}</p>
     <div class="composer">
-      <div v-if="diagnosisTarget" class="read-scope"><span>续跑目标 · {{ diagnosisTarget.label }}</span><Button variant="ghost" size="sm" @click="diagnosisTarget = null">取消续跑</Button></div>
+      <div v-if="diagnosisTarget" class="read-scope">
+        <span>续跑目标 · {{ diagnosisTarget.label }}<template v-if="diagnosisTarget.verifiedSteps.length && store.selectedModel"> · {{ store.selectedModel.autoExecuteCommands === false ? '命令需手动确认' : '按敏感命令规则审批' }}</template></span>
+        <Button variant="ghost" size="sm" @click="diagnosisTarget = null">取消续跑</Button>
+      </div>
       <div v-else-if="terminalTarget" class="read-scope"><span>当前终端 · {{ terminalTarget.label }}</span></div>
       <div v-if="attachedSkill" class="read-scope" aria-label="已选 Skill">
         <span :title="attachedSkill.revision">@{{ attachedSkill.id }} · {{ attachedSkill.version }} · {{ attachedSkill.directory }}</span>

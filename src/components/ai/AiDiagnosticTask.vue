@@ -30,7 +30,7 @@ const taskStates = { running:'执行任务中', paused:'本轮已暂停，可继
     <details v-if="task.contextSnapshot"><summary>本轮使用的历史证据预览</summary><pre>{{ task.contextSnapshot }}</pre></details>
     <div v-if="!pending" class="task-actions">
       <Button v-if="!task.analysisOnly && !task.skill" variant="outline" size="sm" :disabled="busy" @click="$emit('continue')">{{ task.terminalTask ? '继续任务' : '继续检查' }}</Button>
-      <Button v-if="!task.analysisOnly && !task.skill && task.unknownSteps?.length" variant="outline" size="sm" :disabled="busy" @click="$emit('verified')">确认已核实变更</Button>
+      <Button v-if="!task.analysisOnly && task.unknownSteps?.length" variant="outline" size="sm" :disabled="busy" @click="$emit('verified')">确认已核实变更</Button>
       <Button variant="outline" size="sm" :disabled="busy" @click="$emit('analyze')">仅继续分析已有证据</Button>
     </div>
   </section>

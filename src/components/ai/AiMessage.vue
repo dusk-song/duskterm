@@ -50,6 +50,7 @@ async function copy(text) {
 <template>
   <article class="ai-message" :class="[message.role, { alternative: !message.active && message.role === 'assistant' }]">
     <div class="bubble">
+      <p v-for="notice in message.terminalNotices" :key="notice" class="terminal-notice" role="status">{{ notice }}</p>
       <AiDiagnosticTask v-if="message.task && (!message.task.automatic || message.tools?.length || message.task.runNumber > 1)" :task="message.task" :model-label="message.actualModelId || message.modelId" :service-name="message.serviceName" :busy="busy" @analyze="$emit('analyze')" @continue="$emit('continue')" @verified="$emit('verified')" />
       <AiDeploymentPlan v-if="message.deployment" :preview="message.deployment" :status="message.status" />
       <span v-if="message.role === 'assistant' && !message.active && message.status === 'completed'" class="version">历史版本</span>
@@ -81,6 +82,7 @@ async function copy(text) {
 .user .bubble{width:fit-content;background:color-mix(in srgb,var(--color-primary) 13%,var(--app-bg-dialog));border:1px solid color-mix(in srgb,var(--color-primary) 20%,transparent)}
 .user-content{white-space:pre-wrap}.alternative .bubble{border:1px dashed var(--app-border-light)}
 .version{display:block;margin-bottom:8px;font-size:10px;color:var(--app-text-muted)}
+.terminal-notice{margin:0 0 10px;padding:6px 8px;border-left:2px solid var(--app-border-light);color:var(--app-text-muted);font-size:12px}
 .thinking{margin-bottom:10px;color:var(--app-text-muted);font-size:12px}.thinking summary{cursor:pointer;padding:3px 0}.thinking pre{white-space:pre-wrap;font:inherit;line-height:1.7;border-left:2px solid var(--app-border-light);padding:8px 12px;max-height:360px;overflow:auto}
 .thinking-indicator{display:inline-block;width:6px;height:6px;margin-right:6px;border-radius:50%;background:var(--color-primary);vertical-align:middle;animation:thinking-pulse 1.2s ease-in-out infinite}
 @keyframes thinking-pulse{0%,100%{opacity:.35}50%{opacity:1}}

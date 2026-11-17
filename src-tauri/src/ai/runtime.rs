@@ -405,7 +405,7 @@ pub async fn send(
     request_data: SendRequest,
     channel: Channel<AiEvent>,
 ) -> Result<Conversation, String> {
-    send_with_app(state, request_data, channel, None).await
+    send_with_app(state, request_data, channel, None, None).await
 }
 
 pub(super) async fn send_with_app(
@@ -413,6 +413,7 @@ pub(super) async fn send_with_app(
     request_data: SendRequest,
     channel: Channel<AiEvent>,
     app: Option<tauri::AppHandle>,
+    terminal_notice: Option<String>,
 ) -> Result<Conversation, String> {
     super::deployment::target(&request_data)?;
     if request_data.skill.is_some() && (!request_data.diagnosis_target.as_ref().is_some_and(|target| target.terminal_task)
@@ -462,6 +463,9 @@ pub(super) async fn send_with_app(
                 } else {
                     db.get(&request_data.conversation_id)?
                 };
+                if request_data.continue_diagnosis.is_some() {
+                    db.hydrate_unknown_steps(&mut c)?;
+                }
                 if !c.messages.is_empty()
                     && (c.last_service_id.as_deref() != Some(service.id.as_str())
                         || c.last_recipient.as_ref() != Some(&recipient))
@@ -476,6 +480,7 @@ pub(super) async fn send_with_app(
                 if read_access.as_ref().zip(exec_access.as_ref()).is_some_and(|(read,exec)|read.target!=exec.target()) {
                     return Err("读取和命令提议必须绑定同一 SSH 目标".into());
                 }
+                let mut terminal_notices: Vec<_> = terminal_notice.into_iter().collect();
                 let mut diagnostic_task = if let Some(target) = &request_data.diagnosis_target {
                     let exec = exec_access.take()
                         .filter(|exec| exec.target() == target.id && exec.kind() == target.kind)
@@ -485,8 +490,14 @@ pub(super) async fn send_with_app(
                     }
                     let mut task = super::diagnosis::continue_task(&c, &request_data, target, exec.identity())?;
                     task.automatic |= request_data.terminal_target.is_some();
-                    let unresolved = !task.unknown_steps.is_empty()
-                        || (task.automatic && super::diagnosis::has_unverified_change(&c, target.kind, exec.identity(), &task.id));
+                    let pending = db.pending_target_change(target.kind, exec.identity(), &c.id, &task.verified_steps)?;
+                    if let Some(title) = &pending {
+                        if request_data.skill.is_some() {
+                            return Err(format!("当前目标有待核实的变更，请在「{title}」的原任务卡确认结果后再运行固定脚本。"));
+                        }
+                        terminal_notices.push(format!("当前目标有待核实的变更，本次仅允许只读检查。请在「{title}」的原任务卡确认结果。"));
+                    }
+                    let unresolved = !task.unknown_steps.is_empty() || pending.is_some();
                     let mut exec = exec.diagnostic(unresolved);
                     if task.terminal_task {
                         if let Some(selection) = &request_data.skill {
@@ -506,6 +517,11 @@ pub(super) async fn send_with_app(
                 } else if request_data.continue_diagnosis.is_some() {
                     return Err("继续检查需要重新取得目标许可".into());
                 } else {
+                    if let Some(exec) = &exec_access {
+                        if let Some(title) = db.pending_target_change(exec.kind(), exec.identity(), &c.id, &[])? {
+                            return Err(format!("当前目标有待核实的变更，请在「{title}」的原任务卡确认结果。"));
+                        }
+                    }
                     None
                 };
                 let mut analysis_task = super::diagnosis::analysis_task(&c, &request_data)?;
@@ -582,6 +598,7 @@ pub(super) async fn send_with_app(
                 }
                 let mut answer = new_message("assistant", String::new());
                 answer.task = diagnostic_task.or(analysis_task);
+                answer.terminal_notices = terminal_notices;
                 answer.deployment = request_data.deployment_target.clone().map(|target| {
                     super::deployment::Preview { target, plan: None }
                 });
@@ -597,7 +614,7 @@ pub(super) async fn send_with_app(
                 if let Some(workspace_id) = request_data.workspace_id.as_deref() {
                     db.insert_conversation(&c, workspace_id)?;
                 } else {
-                    db.save(&c)?;
+                    db.save_generation(&c)?;
                 }
                 if request_data.regenerate_id.is_none()
                     && db.draft_text(&c.id)? == request_data.content
@@ -698,9 +715,20 @@ pub(super) async fn send_with_app(
                     }
                 }
                 let automatic_read = if automatic && exec.kind() == super::diagnosis::TargetKind::Ssh && exec.skill().is_none() {
-                    app.as_ref().and_then(|app| super::read_access::AutomaticRead::new(
-                        app, exec.clone(), request_data.recipient.base_url.clone(),
-                    ).ok())
+                    let read = app.as_ref().ok_or_else(|| "终端应用状态不可用".to_owned())
+                        .and_then(|app| super::read_access::AutomaticRead::new(
+                            app, exec.clone(), request_data.recipient.base_url.clone(),
+                        ));
+                    match read {
+                        Ok(read) => Some(read),
+                        Err(error) => {
+                            let notice = format!("本次未启用 SSH 文件查询和编辑工具。{error}");
+                            c.messages[index].terminal_notices.push(notice.clone());
+                            state.save_conversation(&c).await?;
+                            emit(&channel, &request_data, &message_id, &mut seq, "terminal_notice", Some(notice), None)?;
+                            None
+                        }
+                    }
                 } else {
                     None
                 };
@@ -1225,9 +1253,10 @@ pub(super) async fn send_with_app(
     let c = state
         .blocking(move |state| {
             state.with_db(|db| {
-                db.save(&saved)?;
+                db.save_generation(&saved)?;
                 let mut saved = saved;
                 saved.draft = db.draft_text(&saved.id)?;
+                db.hydrate_unknown_steps(&mut saved)?;
                 Ok(saved)
             })
         })

@@ -90,6 +90,28 @@ fn within(root: &str, directory: bool, path: &str) -> bool {
                     .is_some_and(|tail| tail.starts_with('/')))
 }
 
+// The leading fragment belongs to the older page. Use its terminating newline
+// as that page's end so filtering sees the timestamp and keyword together.
+fn filtered_log_span(data: &[u8], at_line_start: bool, at_file_end: bool) -> (std::ops::Range<usize>, usize, bool) {
+    let start = if at_line_start {
+        0
+    } else {
+        data.iter().position(|&byte| byte == b'\n').map_or(data.len(), |index| index + 1)
+    };
+    let end = if at_file_end {
+        data.len()
+    } else {
+        data.iter().rposition(|&byte| byte == b'\n').map_or(0, |index| index + 1)
+    };
+    if start >= end {
+        // A line can exceed a whole window. Advance past the fragment and
+        // report the incomplete coverage so callers can use a larger window.
+        let previous = if start < data.len() { start } else { 0 };
+        return (0..0, previous, !data.is_empty());
+    }
+    (start..end, start, end < data.len())
+}
+
 #[derive(Clone)]
 pub(super) struct AutomaticRead {
     exec: ExecRun,
@@ -510,7 +532,8 @@ impl ReadAccess {
                     args.offset
                 };
                 let count = end.saturating_sub(offset).min(u64::from(read_size)) as u32;
-                let data = if count == 0 { Vec::new() } else { match self
+                let filtered_tail = name == "tail_remote_log" && (query.is_some() || timestamp.is_some());
+                let mut data = if count == 0 { Vec::new() } else { match self
                     .raw
                     .read(
                         handle.handle.clone(),
@@ -523,20 +546,28 @@ impl ReadAccess {
                     Err(error) if eof(&error) => Vec::new(),
                     Err(_) => return Err("远程文本读取失败".into()),
                 }};
+                let mut at_line_start = offset == 0;
+                if filtered_tail && count > 0 {
+                    while data.len() < count as usize {
+                        let rest = self.raw.read(handle.handle.clone(), offset + data.len() as u64, count - data.len() as u32)
+                            .await.map_err(|_| "日志分页读取不完整，请重试")?.data;
+                        if rest.is_empty() || rest.len() > count as usize - data.len() {
+                            return Err("日志分页读取不完整，请重试".into());
+                        }
+                        data.extend_from_slice(&rest);
+                    }
+                    if offset > 0 {
+                        let preceding = self.raw.read(handle.handle.clone(), offset - 1, 1)
+                            .await.map_err(|_| "无法读取日志行边界")?.data;
+                        if preceding.len() != 1 {
+                            return Err("日志行边界读取不完整，请重试".into());
+                        }
+                        at_line_start = preceding[0] == b'\n';
+                    }
+                }
                 if data.len() > count as usize || data.contains(&0) {
                     return Err("内容为二进制或服务器返回超限数据".into());
                 }
-                let start = if name == "tail_remote_log" && offset > 0 {
-                    data.iter().take(3).take_while(|byte| **byte & 0xc0 == 0x80).count()
-                } else { 0 };
-                let text = match std::str::from_utf8(&data[start..]) {
-                    Ok(text) => text,
-                    Err(error) if error.error_len().is_none() => {
-                        std::str::from_utf8(&data[start..start + error.valid_up_to()])
-                            .map_err(|_| "文本不是 UTF-8")?
-                    }
-                    Err(_) => return Err("仅支持 UTF-8 文本；偏移量须位于字符边界".into()),
-                };
                 let after = self
                     .raw
                     .fstat(handle.handle.clone())
@@ -546,22 +577,48 @@ impl ReadAccess {
                 if after.size != opened_attrs.size || after.mtime != opened_attrs.mtime {
                     return Err("文件在读取期间变化，结果已丢弃，请重试".into());
                 }
-                let read_end = offset.saturating_add((start + text.len()) as u64);
-                let next = if name == "search_remote_text" && read_end < end && overlap > 0 {
-                    let mut advance = text.len().saturating_sub(overlap);
-                    while !text.is_char_boundary(advance) { advance -= 1; }
-                    offset + advance as u64
-                } else { read_end };
-                if count > 0 && next <= offset {
-                    return Err("服务器返回的文本不足以继续分页，请重试或增大读取限额".into());
-                }
-                let previous = (name == "tail_remote_log" && offset > 0).then(|| size - offset - start as u64);
-                let text = if query.is_some() || timestamp.is_some() {
-                    text.split_inclusive('\n').filter(|line| {
+                if filtered_tail {
+                    let (span, previous_boundary, skipped_partial_line) = filtered_log_span(&data, at_line_start, end == size);
+                    let text = std::str::from_utf8(&data[span.clone()]).map_err(|_| "仅支持 UTF-8 文本")?;
+                    let text: String = text.split_inclusive('\n').filter(|line| {
                         query.is_none_or(|query| line.contains(query)) && timestamp.is_none_or(|prefix| line.starts_with(prefix))
-                    }).collect::<String>()
-                } else { text.to_owned() };
-                json!({"path":path,"offset":offset + start as u64,"endOffset":read_end,"bytes":text.len(),"text":text,"nextOffset":next,"previousOffset":previous,"truncated":previous.is_some() || read_end<end})
+                    }).collect();
+                    let read_end = offset + span.end as u64;
+                    let previous = (offset > 0).then(|| size - offset - previous_boundary as u64);
+                    let mut result = json!({"path":path,"offset":offset + span.start as u64,"endOffset":read_end,
+                        "bytes":text.len(),"text":text,"nextOffset":read_end,"previousOffset":previous,
+                        "truncated":previous.is_some() || skipped_partial_line});
+                    if skipped_partial_line {
+                        result["skippedPartialLine"] = json!(true);
+                    }
+                    result
+                } else {
+                    let start = if name == "tail_remote_log" && offset > 0 {
+                        data.iter().take(3).take_while(|byte| **byte & 0xc0 == 0x80).count()
+                    } else { 0 };
+                    let text = match std::str::from_utf8(&data[start..]) {
+                        Ok(text) => text,
+                        Err(error) if error.error_len().is_none() => {
+                            std::str::from_utf8(&data[start..start + error.valid_up_to()])
+                                .map_err(|_| "文本不是 UTF-8")?
+                        }
+                        Err(_) => return Err("仅支持 UTF-8 文本；偏移量须位于字符边界".into()),
+                    };
+                    let read_end = offset.saturating_add((start + text.len()) as u64);
+                    let next = if name == "search_remote_text" && read_end < end && overlap > 0 {
+                        let mut advance = text.len().saturating_sub(overlap);
+                        while !text.is_char_boundary(advance) { advance -= 1; }
+                        offset + advance as u64
+                    } else { read_end };
+                    if count > 0 && next <= offset {
+                        return Err("服务器返回的文本不足以继续分页，请重试或增大读取限额".into());
+                    }
+                    let previous = (name == "tail_remote_log" && offset > 0).then(|| size - offset - start as u64);
+                    let text = if let Some(query) = query {
+                        text.split_inclusive('\n').filter(|line| line.contains(query)).collect::<String>()
+                    } else { text.to_owned() };
+                    json!({"path":path,"offset":offset + start as u64,"endOffset":read_end,"bytes":text.len(),"text":text,"nextOffset":next,"previousOffset":previous,"truncated":previous.is_some() || read_end<end})
+                }
             }
             "list_remote_directory" | "find_remote_files" => {
                 if !attrs.file_type().is_dir() {

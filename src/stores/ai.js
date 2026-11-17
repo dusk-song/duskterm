@@ -206,6 +206,11 @@ export const useAiStore = defineStore('ai', {
           return;
         }
         flush();
+        if (event.kind === 'terminal_notice') {
+          const message = this.active.snapshot?.messages.find(message => message.id === event.messageId);
+          if (message && event.text) (message.terminalNotices ||= []).push(event.text);
+          return;
+        }
         if (event.task) {
           const message = this.active.snapshot?.messages.find(message => message.id === event.messageId);
           if (message) message.task = event.task;

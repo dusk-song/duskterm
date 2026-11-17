@@ -56,6 +56,15 @@ pub enum TargetKind {
     Cmd,
 }
 
+impl TargetKind {
+    pub(super) fn as_str(self) -> &'static str {
+        match self {
+            Self::Ssh => "ssh",
+            Self::Cmd => "cmd",
+        }
+    }
+}
+
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ContinueDiagnosis {
@@ -227,7 +236,7 @@ pub(super) fn continue_task(
         return Ok(task);
     };
     let (parent, old) = continuation_source(c, intent)?;
-    if old.skill.is_some() {
+    if old.skill.is_some() && intent.verified_steps.is_empty() {
         return Err("固定脚本任务可继续分析。要再次运行请重新选择 Skill 并确认。".into());
     }
     let session_id = intent
@@ -250,7 +259,7 @@ pub(super) fn continue_task(
     task.run_number = old.run_number.max(1) + 1;
     task.directory = old.directory.clone();
     task.automatic = old.automatic;
-    task.unknown_steps = unknown_steps(c, &task.id);
+    task.unknown_steps = old.unknown_steps.clone();
     let verified: HashSet<_> = intent.verified_steps.iter().collect();
     if verified.iter().any(|step| !task.unknown_steps.iter().any(|unknown| &unknown.step == *step)) {
         return Err("待核实的步骤已变化，请重新打开任务确认".into());
@@ -286,19 +295,6 @@ pub(super) fn unknown_steps(c: &Conversation, task_id: &str) -> Vec<UnknownStep>
     steps
 }
 
-pub(super) fn has_unverified_change(c: &Conversation, kind: TargetKind, identity: &str, current: &str) -> bool {
-    let matching = c.messages.iter().filter_map(|message| {
-        let task = message.task.as_ref()?;
-        (!task.analysis_only && task.id != current && task.target_kind == kind
-            && task.target_identity.as_deref() == Some(identity)).then_some((message, task))
-    });
-    let verified: HashSet<_> = matching.clone().flat_map(|(_, task)| &task.verified_steps).collect();
-    matching.into_iter().any(|(message, task)| message.tools.iter().any(|tool| {
-        tool.status == "unknown" && !super::exec_access::verification_command(task.target_kind, &tool.arguments)
-            && !verified.contains(&StepRef { message_id: message.id.clone(), call_id: tool.call_id.clone() })
-    }))
-}
-
 pub(super) fn refresh_unknown_steps(c: &mut Conversation, task_id: &str) {
     let steps = unknown_steps(c, task_id);
     if let Some(task) = c.messages.iter_mut().rev().filter_map(|message| message.task.as_mut())
@@ -311,13 +307,25 @@ pub(super) fn refresh_unknown_steps(c: &mut Conversation, task_id: &str) {
     }
 }
 
-pub(super) fn hydrate_unknown_steps(c: &mut Conversation) {
+pub(super) fn hydrate_unknown_steps(c: &mut Conversation, pending: &HashSet<StepRef>) {
     let ids: HashSet<_> = c.messages.iter().filter_map(|message| {
         let task = message.task.as_ref()?;
         (!task.analysis_only && message.tools.iter().any(|tool| tool.status == "unknown")).then(|| task.id.clone())
     }).collect();
+    let legacy: HashSet<_> = c.messages.iter().filter(|message| {
+        message.task.as_ref().is_some_and(|task| task.target_identity.is_none())
+    }).map(|message| message.id.clone()).collect();
     for id in ids {
-        refresh_unknown_steps(c, &id);
+        let mut steps = unknown_steps(c, &id);
+        steps.retain(|unknown| pending.contains(&unknown.step) || legacy.contains(&unknown.step.message_id));
+        if let Some(task) = c.messages.iter_mut().rev().filter_map(|message| message.task.as_mut())
+            .find(|task| task.id == id && !task.analysis_only)
+        {
+            task.unknown_steps = steps;
+            if !task.unknown_steps.is_empty() {
+                task.evidence_status = "unknown_remote_state".into();
+            }
+        }
     }
 }
 
@@ -546,7 +554,10 @@ pub(super) async fn send(
         let prepared = match prepared {
             Ok(prepared) => prepared,
             Err(error) if automatic.is_none() || request.skill.is_some() => return Err(error),
-            Err(_) => return super::runtime::send(state, request, channel).await,
+            Err(error) => return super::runtime::send_with_app(
+                state, request, channel, None,
+                Some(format!("本次未启用终端工具，已使用普通对话。{error}")),
+            ).await,
         };
         if let Some(mut target) = automatic {
             target.terminal_task = true;
@@ -555,7 +566,7 @@ pub(super) async fn send(
         }
         let token = prepared.token;
         request.exec_grant = Some(token.clone());
-        let result = super::runtime::send_with_app(state.clone(), request, channel, Some(app)).await;
+        let result = super::runtime::send_with_app(state.clone(), request, channel, Some(app), None).await;
         if let Ok(mut grants) = state.exec_grants.lock() {
             grants.remove(&token);
         }

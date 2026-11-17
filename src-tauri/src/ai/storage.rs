@@ -1,6 +1,6 @@
-use super::types::*;
+use super::{diagnosis::{self, StepRef, TargetKind}, types::*};
 use rusqlite::{params, Connection, OptionalExtension};
-use std::path::Path;
+use std::{collections::HashSet, path::Path};
 
 // Independent schema version: command history owns the version of duskterm.db.
 pub struct Database {
@@ -22,7 +22,7 @@ impl Database {
         let version: i64 = connection
             .pragma_query_value(None, "user_version", |r| r.get(0))
             .map_err(db_error)?;
-        if version > 7 {
+        if version > 8 {
             return Err("AI 数据库版本高于当前程序支持的版本".into());
         }
         if version < 7 {
@@ -44,6 +44,30 @@ impl Database {
                 PRAGMA user_version=7; COMMIT;").map_err(db_error)?;
         }
         let db = Self { connection };
+        if version < 8 {
+            let transaction = db.connection.unchecked_transaction().map_err(db_error)?;
+            transaction.execute_batch(
+                "CREATE TABLE pending_target_changes (
+                    conversation_id TEXT NOT NULL REFERENCES conversations(id),
+                    message_id TEXT NOT NULL, call_id TEXT NOT NULL,
+                    target_kind TEXT NOT NULL, target_identity TEXT NOT NULL,
+                    PRIMARY KEY(conversation_id,message_id,call_id));
+                CREATE INDEX pending_changes_by_target ON pending_target_changes(target_kind,target_identity);",
+            ).map_err(db_error)?;
+            if version == 7 {
+                let ids: Vec<String> = transaction.prepare("SELECT id FROM conversations")
+                    .map_err(db_error)?.query_map([], |row| row.get(0)).map_err(db_error)?
+                    .collect::<Result<_, _>>().map_err(db_error)?;
+                for id in ids {
+                    for message in db.get(&id)?.messages {
+                        Self::record_target_changes(&transaction, &id, &message)?;
+                        Self::resolve_target_changes(&transaction, &id, &message)?;
+                    }
+                }
+            }
+            transaction.pragma_update(None, "user_version", 8).map_err(db_error)?;
+            transaction.commit().map_err(db_error)?;
+        }
         // Only unfinished generations need decoding and recovery at startup.
         let ids: Vec<String> = db
             .connection
@@ -98,7 +122,7 @@ impl Database {
                         }
                     }
                 }
-                db.save(&c)?;
+                db.save_generation(&c)?;
             }
         }
         Ok(db)
@@ -216,7 +240,11 @@ impl Database {
         Ok(c)
     }
     pub fn save(&self, c: &Conversation) -> Result<(), String> {
-        self.save_turn(c, None)
+        self.save_turn(c, None, false)
+    }
+
+    pub fn save_generation(&self, c: &Conversation) -> Result<(), String> {
+        self.save_turn(c, None, true)
     }
 
     pub fn insert_conversation(&self, c: &Conversation, workspace_id: &str) -> Result<(), String> {
@@ -224,10 +252,10 @@ impl Database {
             return Err("发送首条消息后才保存对话".into());
         }
         self.check_workspace(workspace_id)?;
-        self.save_turn(c, Some(workspace_id))
+        self.save_turn(c, Some(workspace_id), true)
     }
 
-    fn save_turn(&self, c: &Conversation, workspace_id: Option<&str>) -> Result<(), String> {
+    fn save_turn(&self, c: &Conversation, workspace_id: Option<&str>, generation: bool) -> Result<(), String> {
         let mut stored = c.clone();
         stored.draft.clear();
         let data = serde_json::to_string(&stored).map_err(|_| "无法编码 AI 对话")?;
@@ -247,7 +275,12 @@ impl Database {
                 return Err("对话不存在".into());
             }
         }
-        if let Some(message) = c.messages.last().filter(|m| m.status == "streaming") {
+        let last = c.messages.last();
+        if let Some(message) = last.filter(|_| generation) {
+            Self::record_target_changes(&transaction, &c.id, message)?;
+            Self::resolve_target_changes(&transaction, &c.id, message)?;
+        }
+        if let Some(message) = last.filter(|m| m.status == "streaming") {
             let data = serde_json::to_string(message).map_err(|_| "无法编码生成检查点")?;
             transaction.execute("INSERT INTO generation_checkpoints VALUES(?1,?2,?3)
                 ON CONFLICT(conversation_id) DO UPDATE SET message_id=excluded.message_id,data=excluded.data",
@@ -265,8 +298,86 @@ impl Database {
     }
     pub fn checkpoint(&self, id: &str, message: &Message) -> Result<(), String> {
         let data = serde_json::to_string(message).map_err(|_| "无法编码生成检查点")?;
-        self.connection.execute("UPDATE generation_checkpoints SET data=?1 WHERE conversation_id=?2 AND message_id=?3",
+        let transaction = self.connection.unchecked_transaction().map_err(db_error)?;
+        let rows = transaction.execute("UPDATE generation_checkpoints SET data=?1 WHERE conversation_id=?2 AND message_id=?3",
             params![data,id,message.id]).map_err(db_error)?;
+        if rows == 0 {
+            return Err("生成检查点已失效".into());
+        }
+        Self::record_target_changes(&transaction, id, message)?;
+        transaction.commit().map_err(db_error)?;
+        Ok(())
+    }
+
+    fn record_target_changes(connection: &Connection, id: &str, message: &Message) -> Result<(), String> {
+        let Some(task) = message.task.as_ref().filter(|task| !task.analysis_only) else {
+            return Ok(());
+        };
+        let Some(identity) = task.target_identity.as_deref() else { return Ok(()) };
+        connection.execute(
+            "DELETE FROM pending_target_changes WHERE conversation_id=?1 AND message_id=?2",
+            params![id, message.id],
+        ).map_err(db_error)?;
+        for tool in &message.tools {
+            let uncertain = tool.status == "unknown" || tool.execution.as_ref().is_some_and(|execution| {
+                matches!(execution.outcome.as_str(), "dispatching" | "running") && !execution.has_exit_status()
+            });
+            if uncertain && !super::exec_access::verification_command(task.target_kind, &tool.arguments) {
+                connection.execute("INSERT INTO pending_target_changes VALUES(?1,?2,?3,?4,?5)",
+                    params![id, message.id, tool.call_id, task.target_kind.as_str(), identity],
+                ).map_err(db_error)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn resolve_target_changes(connection: &Connection, id: &str, message: &Message) -> Result<(), String> {
+        if let Some(task) = message.task.as_ref().filter(|task| !task.analysis_only) {
+            for step in &task.verified_steps {
+                connection.execute(
+                    "DELETE FROM pending_target_changes WHERE conversation_id=?1 AND message_id=?2 AND call_id=?3",
+                    params![id, step.message_id, step.call_id],
+                ).map_err(db_error)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn pending_target_change(
+        &self, kind: TargetKind, identity: &str, conversation_id: &str, verified: &[StepRef],
+    ) -> Result<Option<String>, String> {
+        let mut statement = self.connection.prepare(
+            "SELECT p.conversation_id,p.message_id,p.call_id,c.title FROM pending_target_changes p
+             JOIN conversations c ON p.conversation_id=c.id
+             WHERE p.target_kind=?1 AND p.target_identity=?2",
+        ).map_err(db_error)?;
+        let mut rows = statement.query(params![kind.as_str(),identity]).map_err(db_error)?;
+        while let Some(row) = rows.next().map_err(db_error)? {
+            let owner: String = row.get(0).map_err(db_error)?;
+            let step = StepRef { message_id: row.get(1).map_err(db_error)?, call_id: row.get(2).map_err(db_error)? };
+            if owner != conversation_id || !verified.contains(&step) {
+                return row.get(3).map(Some).map_err(db_error);
+            }
+        }
+        Ok(None)
+    }
+
+    fn pending_steps(&self, id: &str) -> Result<HashSet<StepRef>, String> {
+        self.connection.prepare("SELECT message_id,call_id FROM pending_target_changes WHERE conversation_id=?1")
+            .map_err(db_error)?
+            .query_map([id], |row| Ok(StepRef { message_id: row.get(0)?, call_id: row.get(1)? }))
+            .map_err(db_error)?.collect::<Result<_, _>>().map_err(db_error)
+    }
+
+    pub fn hydrate_unknown_steps(&self, c: &mut Conversation) -> Result<(), String> {
+        diagnosis::hydrate_unknown_steps(c, &self.pending_steps(&c.id)?);
+        Ok(())
+    }
+
+    pub fn check_delete_messages(&self, id: &str, message_ids: &[&str]) -> Result<(), String> {
+        if self.pending_steps(id)?.iter().any(|step| message_ids.contains(&step.message_id.as_str())) {
+            return Err("该消息有待核实的变更，请先在任务卡确认已核实".into());
+        }
         Ok(())
     }
     pub fn draft_text(&self, id: &str) -> Result<String, String> {
@@ -289,6 +400,9 @@ impl Database {
         Ok(())
     }
     pub fn delete(&self, id: &str) -> Result<(), String> {
+        if !self.pending_steps(id)?.is_empty() {
+            return Err("该对话有待核实的变更，请先在任务卡确认已核实".into());
+        }
         self.connection
             .execute("DELETE FROM conversations WHERE id=?1", [id])
             .map_err(db_error)?;

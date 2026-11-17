@@ -85,7 +85,7 @@ impl AiState {
     }
     async fn save_conversation(&self, c: &Conversation) -> Result<(), String> {
         let c = c.clone();
-        self.blocking(move |state| state.with_db(|db| db.save(&c)))
+        self.blocking(move |state| state.with_db(|db| db.save_generation(&c)))
             .await
     }
     fn start_call(&self, kind: &str, service: &Service, model: Option<&ModelConfig>) -> CallRecord {
@@ -528,7 +528,7 @@ pub async fn ai_get_conversation(
     state
         .blocking(move |state| state.with_db(|db| {
             let mut conversation = db.get(&id)?;
-            diagnosis::hydrate_unknown_steps(&mut conversation);
+            db.hydrate_unknown_steps(&mut conversation)?;
             Ok(conversation)
         }))
         .await
@@ -614,9 +614,10 @@ pub async fn ai_delete_message(
                     .find(|m| m.id == message_id)
                     .ok_or("消息不存在")?;
                 let is_user = target.role == "user";
-                c.messages.retain(|m| {
-                    m.id != message_id && !(is_user && m.reply_to.as_ref() == Some(&message_id))
-                });
+                let removing = |m: &Message| m.id == message_id || (is_user && m.reply_to.as_ref() == Some(&message_id));
+                let ids: Vec<_> = c.messages.iter().filter(|m| removing(m)).map(|m| m.id.as_str()).collect();
+                db.check_delete_messages(&conversation_id, &ids)?;
+                c.messages.retain(|m| !removing(m));
                 c.summary = None;
                 if is_user {
                     c.title = c
