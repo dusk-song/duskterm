@@ -344,12 +344,13 @@ fn load_command_knowledge_storage_data(
 pub(crate) fn command_requires_ai_approval(
     state: &SharedStorageState,
     command: &str,
+    require_knowledge_file: bool,
 ) -> Result<bool, String> {
     let content = {
         let state = state.lock().map_err(|_| "命令知识库不可用")?;
         match fs::read_to_string(state.get_command_knowledge_path()) {
             Ok(content) => content,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
+            Err(error) if !require_knowledge_file && error.kind() == std::io::ErrorKind::NotFound => return Ok(false),
             Err(error) => return Err(error.to_string()),
         }
     };

@@ -55,7 +55,7 @@ fn emit(
 
 // Build the logical transcript in user-turn order. Regenerated alternatives are
 // stored for the UI, but only the selected completed answer goes to a provider.
-fn transcript(c: &Conversation) -> Vec<RigMessage> {
+fn transcript(c: &Conversation, follow_up: Option<&str>) -> Vec<RigMessage> {
     let answers: std::collections::HashMap<_, _> = c
         .messages
         .iter()
@@ -63,28 +63,20 @@ fn transcript(c: &Conversation) -> Vec<RigMessage> {
         .filter_map(|m| m.reply_to.as_deref().map(|id| (id, m)))
         .collect();
     let mut messages = Vec::new();
+    let current = c.messages.last().filter(|message| message.status == "streaming");
     for user in c.messages.iter().filter(|m| m.role == "user") {
+        let current = current.filter(|answer| answer.reply_to.as_deref() == Some(&user.id));
         let contextual_task = answers
             .get(user.id.as_str())
             .and_then(|answer| answer.task.as_ref())
-            .or_else(|| {
-                c.messages
-                    .iter()
-                    .rev()
-                    .find(|answer| {
-                        answer.reply_to.as_deref() == Some(&user.id) && answer.status == "streaming"
-                    })
-                    .and_then(|answer| answer.task.as_ref())
-            });
-        let snapshot = contextual_task.and_then(|task| task.context_snapshot.as_deref());
+            .or_else(|| current.and_then(|answer| answer.task.as_ref()));
+        let snapshot = contextual_task.and_then(|task| task.context_snapshot.as_deref())
+            .or(current.and(follow_up));
         let mut text = with_evidence(&user.content, snapshot);
         if let Some(task) = contextual_task.filter(|task| task.automatic && !task.analysis_only) {
             text.push_str(&format!("\n\n本轮终端目标标签（环境数据）：{}", serde_json::json!(task.target.label)));
         }
-        if let Some(preview) = c.messages.last()
-            .filter(|message| message.status == "streaming" && message.reply_to.as_ref() == Some(&user.id))
-            .and_then(|message| message.deployment.as_ref())
-        {
+        if let Some(preview) = current.and_then(|message| message.deployment.as_ref()) {
             text.push_str(&format!("\n\n本次计划绑定的 SSH 目标标签：{}", preview.target.label));
         }
         messages.push(RigMessage::user(text));
@@ -104,7 +96,7 @@ fn transcript(c: &Conversation) -> Vec<RigMessage> {
 
 fn with_evidence(content: &str, snapshot: Option<&str>) -> String {
     match snapshot {
-        Some(snapshot) => format!("{content}\n\n历史诊断证据（作为分析参考，执行权限由应用校验）\n{snapshot}"),
+        Some(snapshot) => format!("{content}\n\n历史终端记录（作为参考，执行权限由应用校验）\n{snapshot}"),
         None => content.to_owned(),
     }
 }
@@ -204,11 +196,12 @@ async fn context(
     config: &ModelConfig,
     service: &super::types::Service,
     state: &AiState,
+    follow_up: Option<&str>,
 ) -> Result<Vec<RigMessage>, String> {
     // Unknown model limits are never presented as vendor metadata. 16K is an
     // application budget only; the provider may reject a smaller real window.
     let budget = config::input_budget(service, config, config.max_output_tokens)?;
-    let all = transcript(c);
+    let all = transcript(c, follow_up);
     let mut start = c
         .summary
         .as_ref()
@@ -400,14 +393,6 @@ async fn context(
     Ok(result)
 }
 
-pub async fn send(
-    state: AiState,
-    request_data: SendRequest,
-    channel: Channel<AiEvent>,
-) -> Result<Conversation, String> {
-    send_with_app(state, request_data, channel, None, None).await
-}
-
 pub(super) async fn send_with_app(
     state: AiState,
     request_data: SendRequest,
@@ -453,17 +438,20 @@ pub(super) async fn send_with_app(
         .blocking(move |state| {
             let request_data = request_for_db;
             state.with_db(|db| {
-                let (service, config) = enabled_model(&db.settings()?, &request_data.model_id)?;
+                let settings = db.settings()?;
+                let (service, config) = enabled_model(&settings, &request_data.model_id)?;
                 let recipient = ModelRecipient::from(&service);
                 if service.id != request_data.confirmed_service_id || recipient != request_data.recipient {
                     return Err("发送目标发生变化，请重新确认服务".into());
                 }
                 let mut c = if request_data.workspace_id.is_some() {
-                    Conversation::empty(request_data.conversation_id.clone())
+                    let mut conversation = Conversation::empty(request_data.conversation_id.clone());
+                    conversation.ssh_approval = request_data.draft_ssh_approval.clone();
+                    conversation
                 } else {
                     db.get(&request_data.conversation_id)?
                 };
-                if request_data.continue_diagnosis.is_some() {
+                if c.messages.iter().any(|message| message.task.is_some()) {
                     db.hydrate_unknown_steps(&mut c)?;
                 }
                 if !c.messages.is_empty()
@@ -493,9 +481,9 @@ pub(super) async fn send_with_app(
                     let pending = db.pending_target_change(target.kind, exec.identity(), &c.id, &task.verified_steps)?;
                     if let Some(title) = &pending {
                         if request_data.skill.is_some() {
-                            return Err(format!("当前目标有待核实的变更，请在「{title}」的原任务卡确认结果后再运行固定脚本。"));
+                            return Err(format!("当前目标有待核实的变更，请在「{title}」的原消息核实结果后再运行固定脚本。"));
                         }
-                        terminal_notices.push(format!("当前目标有待核实的变更，本次仅允许只读检查。请在「{title}」的原任务卡确认结果。"));
+                        terminal_notices.push(format!("当前目标有待核实的变更，本次仅允许只读检查。请在「{title}」的原消息核实结果。"));
                     }
                     let unresolved = !task.unknown_steps.is_empty() || pending.is_some();
                     let mut exec = exec.diagnostic(unresolved);
@@ -519,11 +507,20 @@ pub(super) async fn send_with_app(
                 } else {
                     if let Some(exec) = &exec_access {
                         if let Some(title) = db.pending_target_change(exec.kind(), exec.identity(), &c.id, &[])? {
-                            return Err(format!("当前目标有待核实的变更，请在「{title}」的原任务卡确认结果。"));
+                            return Err(format!("当前目标有待核实的变更，请在「{title}」的原消息核实结果。"));
                         }
                     }
                     None
                 };
+                if let Some(exec) = exec_access.as_mut().filter(|exec| exec.kind() == super::diagnosis::TargetKind::Ssh) {
+                    let approval = SshApproval::bind(
+                        c.ssh_approval.as_ref(),
+                        exec.identity().into(),
+                        settings.default_ssh_approval_mode.unwrap_or_default(),
+                    );
+                    exec.set_ssh_approval_mode(approval.mode);
+                    c.ssh_approval = Some(approval);
+                }
                 let mut analysis_task = super::diagnosis::analysis_task(&c, &request_data)?;
                 if request_data.regenerate_id.as_ref().is_some_and(|id|c.messages.iter().any(|message|message.id==*id&&message.task.is_some())) && analysis_task.is_none() {
                     return Err("诊断回答重新生成仅支持分析已有证据，不能恢复执行权限".into());
@@ -682,16 +679,31 @@ pub(super) async fn send_with_app(
         c.last_recipient = Some(recipient);
         state.save_conversation(&c).await?;
         let analysis_only = c.messages[index].task.as_ref().is_some_and(|task| task.analysis_only);
+        let budget = config::input_budget(&service, &config, config.max_output_tokens)?;
+        let reply = c.messages[index].reply_to.as_deref().unwrap_or_default();
+        let follow_up = if !analysis_only && request_data.continue_diagnosis.is_none()
+            && request_data.skill.is_none() && c.messages[index].deployment.is_none()
+        {
+            let target = exec_access.as_ref().map(|exec| (exec.kind(), exec.identity()));
+            let question = c.messages.iter().find(|message| message.id == reply)
+                .ok_or("找不到本轮问题")?;
+            super::diagnosis::follow_up_context(&c, reply, target, (budget / 2).min(8192))
+                .filter(|snapshot| {
+                    tokens(&[RigMessage::user(with_evidence(&question.content, Some(snapshot)))])
+                        <= budget.saturating_sub(2048)
+                })
+        } else {
+            None
+        };
         let messages = if analysis_only {
             let answer = &c.messages[index];
             let question = c.messages.iter().find(|message| Some(&message.id) == answer.reply_to.as_ref())
                 .ok_or("找不到任务对应的问题")?;
             vec![RigMessage::user(with_evidence(&question.content, answer.task.as_ref().and_then(|task| task.context_snapshot.as_deref())))]
         } else if request_data.diagnosis_target.is_some() {
-            let budget = config::input_budget(&service, &config, config.max_output_tokens)?;
-            task_context(transcript(&c), budget)
+            task_context(transcript(&c, follow_up.as_deref()), budget)
         } else {
-            context(&mut c, &model, &config, &service, &state).await?
+            context(&mut c, &model, &config, &service, &state, follow_up.as_deref()).await?
         };
         emit(
             &channel,
@@ -704,10 +716,9 @@ pub(super) async fn send_with_app(
         )?;
         api_started = Some(Instant::now());
         if read_access.is_some() || exec_access.is_some() {
-            let budget = config::input_budget(&service, &config, config.max_output_tokens)?;
             let mut stream = if let Some(exec) = exec_access {
                 let mut exec = exec.bind(&message_id);
-                if config.auto_execute_commands {
+                if exec.kind() == super::diagnosis::TargetKind::Ssh || config.auto_execute_commands {
                     if let Some(knowledge) = app.as_ref().and_then(|app| {
                         app.try_state::<crate::storage::SharedStorageState>()
                     }) {
@@ -919,7 +930,11 @@ pub(super) async fn send_with_app(
                         stats.add(&usage);
                         c.messages[index].usage.accumulate(&usage);
                     }
-                    Delta::Final(history) => {
+                    Delta::Final { text, history } => {
+                        if diagnostic && !c.messages[index].tools.is_empty() && super::diagnosis::has_raw_tool_markup(&text) {
+                            return Err(super::diagnosis::SUMMARY_PROTOCOL_ERROR.into());
+                        }
+                        c.messages[index].content = text;
                         c.messages[index].tool_history = history;
                         finished = true;
                     }
@@ -996,9 +1011,7 @@ pub(super) async fn send_with_app(
                 if !matches!(response.finish_reason(), Some(FinishReason::Stop)) || text.trim().is_empty() {
                     return Err("模型没有返回完整的证据整理结果，已有步骤可查看并续跑".into());
                 }
-                let text = if c.messages[index].content.is_empty() { text } else { format!("\n\n{text}") };
-                c.messages[index].content.push_str(&text);
-                emit(&channel, &request_data, &message_id, &mut seq, "text", Some(text), None)?;
+                c.messages[index].content = text;
                 finished = true;
             }
             if !finished {

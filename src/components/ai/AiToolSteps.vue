@@ -11,6 +11,14 @@ const props = defineProps({ tools: { type: Array, default: () => [] }, requestId
 const ssh = useSshStore();
 const ai = useAiStore(), security = useSecurityStore(), knowledge = useCommandKnowledgeStore();
 const clock = ref(Date.now()), responding = ref(''); let timer;
+const stepChoices = ref(new Map());
+const approvalSteps = ref(new Set());
+const needsApproval = tool => !!props.requestId && tool.status === 'waiting_approval';
+const stepOpen = tool => needsApproval(tool) || (stepChoices.value.get(tool.callId)
+  ?? (approvalSteps.value.has(tool.callId) || tool.status === 'unknown'));
+watch(() => props.tools.find(needsApproval)?.callId, callId => {
+  if (callId) approvalSteps.value.add(callId);
+}, { immediate: true });
 const waiting = computed(() => props.tools.some(tool => tool.status === 'waiting_approval') && !!props.requestId);
 watch(() => props.tools.find(tool => tool.status === 'waiting_approval')?.approvalId, () => { responding.value = ''; });
 watch(waiting, value => {
@@ -64,9 +72,9 @@ function resultText(text) {
 
 <template>
   <div v-if="tools.length" class="tool-steps" aria-label="工具调用记录">
-    <details v-for="(tool, index) in tools" :key="tool.callId" class="tool-step" :open="['running', 'waiting_approval', 'approved', 'unknown'].includes(tool.status)">
-      <summary :title="tool.callId"><span :class="{ running: tool.status === 'running' }">{{ index + 1 }} · {{ stepName(tool) }}</span><span>{{ tool.approvalMode === 'automatic' ? '自动执行 · ' : '' }}{{ stepStatus(tool) }}</span></summary>
-      <div class="tool-details">
+    <details v-for="(tool, index) in tools" :key="tool.callId" class="tool-step" :open="stepOpen(tool)">
+      <summary @click.prevent="!needsApproval(tool) && stepChoices.set(tool.callId, !stepOpen(tool))"><span :class="{ running: tool.status === 'running' }">{{ index + 1 }} · {{ stepName(tool) }}</span><span>{{ tool.approvalMode === 'automatic' ? '自动执行 · ' : '' }}{{ stepStatus(tool) }}</span></summary>
+      <div v-if="stepOpen(tool)" class="tool-details">
         <p :title="tool.target">目标：{{ isCmd(tool) ? '本机 Windows CMD' : ssh.getSession(tool.target)?.name || tool.target }}</p>
         <template v-if="isExec(tool)">
           <p>{{ isCmd(tool) ? '执行目录' : '请求目录' }}：{{ tool.root }} · {{ skillFor(tool)?.interpreter || (isCmd(tool) ? 'cmd.exe' : '/bin/sh') }} · 非交互 · 最长 {{ timeoutSecs(tool) }} 秒</p>
@@ -112,11 +120,13 @@ function resultText(text) {
           <p>授权范围：{{ tool.root }}</p>
           <p>路径：{{ tool.arguments?.path || '未提供' }}<template v-if="tool.arguments?.offset"> · 偏移 {{ tool.arguments.offset }}</template><template v-if="tool.arguments?.limit"> · 限额 {{ tool.arguments.limit }}</template></p>
         </template>
-        <div v-if="!isExec(tool) && tool.status === 'waiting_approval'" class="approval-actions">
-          <p v-if="tool.arguments?.recipient">查询结果将发送到 {{ tool.arguments.recipient }}</p>
-          <Button variant="outline" size="sm" :disabled="!canDecide(tool)" @click="decide(tool, false)">拒绝</Button>
-          <Button size="sm" :disabled="!canDecide(tool)" @click="decide(tool, true)">{{ isEdit(tool) ? '确认写入' : '确认查询' }}</Button>
-        </div>
+        <template v-if="!isExec(tool) && tool.status === 'waiting_approval'">
+          <p v-if="tool.arguments?.recipient" class="approval-recipient">查询结果将发送到 {{ tool.arguments.recipient }}</p>
+          <div class="approval-actions">
+            <Button variant="outline" size="sm" :disabled="!canDecide(tool)" @click="decide(tool, false)">拒绝</Button>
+            <Button size="sm" :disabled="!canDecide(tool)" @click="decide(tool, true)">{{ isEdit(tool) ? '确认写入' : '确认查询' }}</Button>
+          </div>
+        </template>
         <p>{{ new Date(tool.startedAt).toLocaleString() }} · {{ (tool.elapsedMs / 1000).toFixed(1) }} 秒</p>
         <pre v-if="tool.result">{{ resultText(tool.result) }}</pre>
       </div>
@@ -125,6 +135,8 @@ function resultText(text) {
 </template>
 
 <style scoped>
-.approval-actions{display:flex;gap:8px;justify-content:flex-end;margin:8px 0}.warning{color:var(--app-text);margin:6px 0}.command{border:1px solid var(--app-border-light);border-radius:6px;padding:8px;max-height:320px}
+.approval-actions{display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end;margin:8px 0}
+.approval-recipient{margin-top:8px}
+.warning{color:var(--app-text);margin:6px 0}.command{border:1px solid var(--app-border-light);border-radius:6px;padding:8px;max-height:320px}
 .tool-steps{display:flex;flex-direction:column;gap:6px;margin-bottom:10px;min-width:0}.tool-step{border:1px solid var(--app-border-light);border-radius:8px;font-size:11px;color:var(--app-text-muted)}summary{cursor:pointer;padding:7px 9px;overflow-wrap:anywhere}summary>span+span{float:right;margin-left:8px}.running{color:var(--color-primary)}.tool-details{padding:0 9px 9px;line-height:1.7;overflow-wrap:anywhere}pre{white-space:pre-wrap;max-height:240px;overflow:auto;margin-top:6px;font:inherit;color:var(--app-text)}
 </style>

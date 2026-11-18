@@ -5,6 +5,7 @@ import { PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger } from 'reka
 import { Button } from '@/components/ui/button';
 import Input from '@/components/ui/input/Input.vue';
 import IconButton from '@/components/common/IconButton.vue';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useAiStore } from '@/stores/ai';
 
 const open = defineModel({ type: Boolean, required: true });
@@ -104,13 +105,11 @@ function closeFocus(event) {
 <template>
   <PopoverRoot v-model:open="open">
     <PopoverTrigger as-child>
-      <Button variant="ghost" size="icon-sm" :disabled="props.disabled" aria-label="历史对话" title="历史对话">
-        <History />
-      </Button>
+      <IconButton :icon="History" size="sm" :disabled="props.disabled" aria-label="历史对话" />
     </PopoverTrigger>
     <PopoverPortal>
       <PopoverContent
-        class="ai-history-popover"
+        class="ai-history-popover z-[var(--z-select)] w-[min(360px,calc(100vw_-_20px))] max-h-[min(440px,var(--reka-popover-content-available-height))] overflow-y-auto rounded-[10px] border border-[var(--app-border-dark)] bg-popover p-2 text-xs text-popover-foreground shadow-[var(--niri-shadow-dialog)] outline-none"
         :aria-labelledby="headingId"
         side="bottom"
         align="end"
@@ -147,16 +146,22 @@ function closeFocus(event) {
             <div v-for="conversation in groups.get(workspace.id)" :key="conversation.id" class="history-entry">
               <div class="conversation-row">
                 <button type="button" class="conversation-title" :class="{ active: conversation.id === store.current?.id }"
+                  :aria-current="conversation.id === store.current?.id ? 'true' : undefined"
                   :title="conversation.title" @click="navigate('open', conversation.id)">{{ conversation.title }}</button>
                 <Button v-if="store.workspaces.length > 1" variant="ghost" size="xs" :disabled="busy"
                   :aria-label="`移动「${conversation.title}」`"
                   @click="moving = moving === conversation.id ? null : conversation.id">移动</Button>
               </div>
-              <select v-if="moving === conversation.id" class="workspace-picker" :disabled="busy" value="" aria-label="移动到工作区"
-                @change="moveConversation(conversation, $event.target.value)">
-                <option disabled value="">移动到工作区</option>
-                <option v-for="target in store.workspaces.filter(item => item.id !== workspace.id)" :key="target.id" :value="target.id">{{ target.name }}</option>
-              </select>
+              <Select v-if="moving === conversation.id" :disabled="busy" @update:model-value="id => moveConversation(conversation, id)">
+                <SelectTrigger size="sm" class="mb-1 mt-1 w-full min-w-0" aria-label="移动到工作区">
+                  <SelectValue placeholder="移动到工作区" />
+                </SelectTrigger>
+                <SelectContent position="popper" class="max-w-[calc(100vw_-_20px)]">
+                  <template v-for="target in store.workspaces" :key="target.id">
+                    <SelectItem v-if="target.id !== workspace.id" :value="target.id">{{ target.name }}</SelectItem>
+                  </template>
+                </SelectContent>
+              </Select>
             </div>
           </div>
         </section>
@@ -166,7 +171,6 @@ function closeFocus(event) {
 </template>
 
 <style scoped>
-.ai-history-popover{z-index:var(--z-select);width:min(360px,calc(100vw - 20px));max-height:min(440px,var(--reka-popover-content-available-height));overflow-y:auto;padding:8px;border:1px solid var(--app-border-dark);border-radius:10px;background:var(--app-panel-bg,var(--app-bg));color:var(--app-text);box-shadow:var(--niri-shadow-dialog);outline:none;font-size:12px}
 .history-heading,.workspace-row,.conversation-row,.workspace-editor{display:flex;align-items:center;gap:4px;min-width:0}
 .history-heading{justify-content:space-between;padding:0 4px 4px}
 .workspace-editor{margin:4px 0 8px}
@@ -183,5 +187,4 @@ function closeFocus(event) {
 .conversation-title:hover{background:var(--app-btn-hover)}
 .history-empty,.history-error{padding:4px 6px;color:var(--app-text-muted)}
 .history-error{color:var(--color-destructive,#e16b6b)}
-.workspace-picker{width:100%;margin:4px 0 6px;padding:4px 6px;border:1px solid var(--app-border-light);border-radius:5px;background:var(--app-input-bg);color:var(--app-text)}
 </style>

@@ -10,13 +10,23 @@ import AiToolSteps from './AiToolSteps.vue';
 import AiDiagnosticTask from './AiDiagnosticTask.vue';
 import AiDeploymentPlan from './AiDeploymentPlan.vue';
 
-const props = defineProps({ message: Object, canRegenerate: Boolean, busy: Boolean, requestId: String });
-// The first body chunk ends the thinking phase; streaming continues for the answer.
-const isThinking = computed(() => props.message.status === 'streaming'
+const props = defineProps({ message: Object, canRegenerate: Boolean, canVerify: Boolean, busy: Boolean, requestId: String });
+const streaming = computed(() => props.message.status === 'streaming');
+const isThinking = computed(() => streaming.value
   && !!props.message.reasoning && (props.message.phase ? props.message.phase === 'reasoning' : !props.message.content));
-const thinkingOpen = ref(false);
+const thinkingChoice = ref(null);
+const recordsChoice = ref(null);
+const sawApproval = ref(false);
+const thinkingOpen = computed(() => thinkingChoice.value ?? streaming.value);
+const hasError = computed(() => ['stopped', 'interrupted', 'failed'].includes(props.message.status));
+const hasRecords = computed(() => !!(props.message.tools?.length || props.message.task?.contextSnapshot));
+const waitingApproval = computed(() => !!props.requestId && streaming.value
+  && props.message.tools?.some(tool => tool.status === 'waiting_approval'));
+const recordsOpen = computed(() => waitingApproval.value || (recordsChoice.value ?? (streaming.value && sawApproval.value)));
+const showAnswer = computed(() => !!props.message.content && !(hasError.value && props.message.tools?.length));
 const activity = computed(() => {
   if (props.message.deployment) return '正在起草部署计划…';
+  if (props.message.task?.status === 'summarizing') return '正在整理已取得的结果…';
   const tools=props.message.tools || [];
   if (tools.some(tool=>tool.status==='waiting_approval')) return '等待你确认命令…';
   if (tools.some(tool=>['execute_ssh_command','execute_local_cmd'].includes(tool.name) && ['approved','running'].includes(tool.status))) return '正在处理命令…';
@@ -34,13 +44,16 @@ function scrollReasoning() {
     }
   });
 }
-watch([() => props.message.id, isThinking], ([, thinking]) => {
-  thinkingOpen.value = thinking;
+watch(() => props.message.id, () => {
+  thinkingChoice.value = null;
+  recordsChoice.value = null;
+  sawApproval.value = waitingApproval.value;
   followReasoning.value = true;
-}, { immediate: true });
+});
+watch(waitingApproval, waiting => { if (waiting) sawApproval.value = true; }, { immediate: true });
 watch([() => props.message.reasoning, thinkingOpen], scrollReasoning, { flush: 'post' });
 onBeforeUnmount(() => { if (reasoningFrame !== null) cancelAnimationFrame(reasoningFrame); });
-defineEmits(['regenerate', 'select', 'analyze', 'continue', 'verified']);
+defineEmits(['regenerate', 'select', 'verified']);
 async function copy(text) {
   try { await navigator.clipboard.writeText(text); toast.success('已复制'); }
   catch { toast.error('复制失败，请手动选择文本'); }
@@ -50,24 +63,35 @@ async function copy(text) {
 <template>
   <article class="ai-message" :class="[message.role, { alternative: !message.active && message.role === 'assistant' }]">
     <div class="bubble">
-      <p v-for="notice in message.terminalNotices" :key="notice" class="terminal-notice" role="status">{{ notice }}</p>
-      <AiDiagnosticTask v-if="message.task && (!message.task.automatic || message.tools?.length || message.task.runNumber > 1)" :task="message.task" :model-label="message.actualModelId || message.modelId" :service-name="message.serviceName" :busy="busy" @analyze="$emit('analyze')" @continue="$emit('continue')" @verified="$emit('verified')" />
       <AiDeploymentPlan v-if="message.deployment" :preview="message.deployment" :status="message.status" />
       <span v-if="message.role === 'assistant' && !message.active && message.status === 'completed'" class="version">历史版本</span>
       <details v-if="message.reasoning" class="thinking" :open="thinkingOpen">
-        <summary @click.prevent="thinkingOpen = !thinkingOpen"><span v-if="isThinking" class="thinking-indicator" aria-hidden="true" />{{ isThinking ? '思考中…' : '思考过程' }}</summary>
-        <pre ref="reasoningContent" @scroll="followReasoning = $event.target.scrollHeight - $event.target.scrollTop - $event.target.clientHeight < 24">{{ message.reasoning }}</pre>
+        <summary @click.prevent="thinkingChoice = !thinkingOpen"><span v-if="isThinking" class="thinking-indicator" aria-hidden="true" />{{ isThinking ? '思考中…' : '思考过程' }}</summary>
+        <pre v-if="thinkingOpen" ref="reasoningContent" @scroll="followReasoning = $event.target.scrollHeight - $event.target.scrollTop - $event.target.clientHeight < 24">{{ message.reasoning }}</pre>
       </details>
       <div v-if="message.role === 'user'" class="user-content">{{ message.content }}</div>
       <template v-else>
-        <AiToolSteps :tools="message.tools || []" :request-id="requestId" :message-id="message.id" />
-        <AiMarkdown :content="message.content" :streaming="message.status === 'streaming'" />
+        <AiMarkdown v-if="showAnswer" :content="message.content" :streaming="message.status === 'streaming'" />
+        <p v-if="hasError" class="message-error">{{ message.error || '本轮未生成完整结论。' }}</p>
+        <p v-for="notice in message.terminalNotices" :key="notice" class="terminal-notice" role="status">{{ notice }}</p>
+        <AiDiagnosticTask v-if="message.task && message.status !== 'streaming'" :task="message.task"
+          :busy="busy" :can-verify="canVerify" :has-error="hasError" @verified="$emit('verified')" />
+        <details v-if="hasRecords" class="execution-records" :open="recordsOpen">
+          <summary @click.prevent="!waitingApproval && (recordsChoice = !recordsOpen)">执行记录<template v-if="message.tools?.length"> · {{ message.tools.length }} 步</template></summary>
+          <div v-if="recordsOpen" class="record-body">
+            <p v-if="message.task?.target">目标 {{ message.task.target.label || message.task.target.id }}</p>
+            <p v-if="message.task?.directory">任务目录 {{ message.task.directory }}</p>
+            <AiToolSteps v-if="message.tools?.length" :tools="message.tools" :request-id="requestId" :message-id="message.id" />
+            <details v-if="message.task?.contextSnapshot">
+              <summary>引用的历史记录</summary><pre>{{ message.task.contextSnapshot }}</pre>
+            </details>
+          </div>
+        </details>
       </template>
       <p v-if="message.status === 'streaming' && !isThinking" role="status" class="muted">{{ activity }}</p>
-      <p v-if="['stopped', 'interrupted', 'failed'].includes(message.status)" class="message-error">{{ message.error || '回答未完成，不参与后续上下文' }}</p>
     </div>
     <div class="actions">
-      <IconButton :icon="Copy" size="sm" aria-label="复制" tooltip-side="top" :action="() => copy(message.content)" />
+      <IconButton v-if="showAnswer" :icon="Copy" size="sm" aria-label="复制" tooltip-side="top" :action="() => copy(message.content)" />
       <IconButton v-if="canRegenerate" :icon="RotateCcw" size="sm" aria-label="重新生成" tooltip-side="top" :disabled="busy" :action="() => $emit('regenerate')" />
       <span v-if="message.role === 'assistant' && message.status !== 'streaming'" class="usage">输入 {{ formatTokens(message.usage?.inputTokens) }} · 输出 {{ formatTokens(message.usage?.outputTokens) }} · 总计 {{ formatTokens(message.usage?.totalTokens) }} Token · {{ ((message.elapsedMs || 0) / 1000).toFixed(1) }} 秒</span>
       <Button v-if="message.role === 'assistant' && !message.active && message.status === 'completed'" variant="outline" size="sm" class="message-action" :disabled="busy" @click="$emit('select')">使用此版本</Button>
@@ -82,11 +106,12 @@ async function copy(text) {
 .user .bubble{width:fit-content;background:color-mix(in srgb,var(--color-primary) 13%,var(--app-bg-dialog));border:1px solid color-mix(in srgb,var(--color-primary) 20%,transparent)}
 .user-content{white-space:pre-wrap}.alternative .bubble{border:1px dashed var(--app-border-light)}
 .version{display:block;margin-bottom:8px;font-size:10px;color:var(--app-text-muted)}
-.terminal-notice{margin:0 0 10px;padding:6px 8px;border-left:2px solid var(--app-border-light);color:var(--app-text-muted);font-size:12px}
+.terminal-notice{margin-top:8px;padding:6px 8px;border-left:2px solid var(--app-border-light);color:var(--app-text-muted);font-size:12px}
+.execution-records{margin-top:10px;border-top:1px solid var(--app-border-light);font-size:11px;color:var(--app-text-muted)}
+.execution-records summary{cursor:pointer;padding:6px 0}.record-body>p{margin-bottom:5px}
+.record-body pre{font:inherit;white-space:pre-wrap;max-height:200px;overflow:auto}
 .thinking{margin-bottom:10px;color:var(--app-text-muted);font-size:12px}.thinking summary{cursor:pointer;padding:3px 0}.thinking pre{white-space:pre-wrap;font:inherit;line-height:1.7;border-left:2px solid var(--app-border-light);padding:8px 12px;max-height:360px;overflow:auto}
-.thinking-indicator{display:inline-block;width:6px;height:6px;margin-right:6px;border-radius:50%;background:var(--color-primary);vertical-align:middle;animation:thinking-pulse 1.2s ease-in-out infinite}
-@keyframes thinking-pulse{0%,100%{opacity:.35}50%{opacity:1}}
-@media(prefers-reduced-motion:reduce){.thinking-indicator{animation:none}}
+.thinking-indicator{display:inline-block;width:6px;height:6px;margin-right:6px;border-radius:50%;background:var(--color-primary);vertical-align:middle}
 .actions{display:flex;align-items:center;flex-wrap:wrap;gap:6px;max-width:100%}.user .actions{justify-content:flex-end}
 .message-action{height:26px;padding:0 8px;font-size:11px;gap:4px}.message-action :deep(svg){width:12px;height:12px}
 .usage{border-left:1px solid var(--app-border-light);padding-left:8px;margin-left:2px;color:var(--app-text-muted);font-size:10px;line-height:1.6}

@@ -1,11 +1,12 @@
 <script setup>
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { aiInvoke, useAiStore } from '@/stores/ai';
-import { createService, createModel, serviceTemplates, adapterOptions, effectiveAdapter, capability, addDiscoveredModel, normalizeServiceDraft } from '@/utils/ai';
+import { createService, createModel, serviceTemplates, sshApprovalOptions, adapterOptions, effectiveAdapter, capability, addDiscoveredModel, normalizeServiceDraft } from '@/utils/ai';
 import { ChevronLeft, ChevronRight, Plus, RefreshCw, Star, Trash2, HelpCircle, Pencil } from '@lucide/vue';
 import Button from '@/components/ui/button/Button.vue';
 import Checkbox from '@/components/ui/checkbox/Checkbox.vue';
 import Input from '@/components/ui/input/Input.vue';
+import Textarea from '@/components/ui/textarea/Textarea.vue';
 import SettingsSelect from './SettingsSelect.vue';
 import IconButton from '@/components/common/IconButton.vue';
 import TooltipHint from '@/components/ui/tooltip/TooltipHint.vue';
@@ -115,6 +116,11 @@ async function save() {
     toast.success('服务已保存');
   });
 }
+function setDefaultSshApproval(mode) {
+  return run('approval', async () => {
+    store.settings = await aiInvoke('ai_set_default_ssh_approval', { mode });
+  });
+}
 async function probe(kind, modelId = null) {
   await run(kind, async () => {
     // Validate only the fields relevant to this operation, including the current
@@ -201,13 +207,20 @@ defineExpose({ save, isDirty: () => dirty.value, isBusy: () => !!busy.value });
       <strong>模型服务</strong><Button v-if="form" size="sm" variant="ghost" :disabled="!!busy" @click="back"><ChevronLeft :size="14" />返回</Button>
     </div>
     <div v-if="!form" class="service-list" :inert="busy || undefined">
+      <div class="setting-row ssh-approval-setting">
+        <span class="setting-label">SSH 默认审批</span>
+        <SettingsSelect :model-value="store.settings.defaultSshApprovalMode" :options="sshApprovalOptions" aria-label="SSH 默认审批" @update:model-value="setDefaultSshApproval" />
+        <TooltipHint text="首次绑定 SSH 目标时使用此设置。自动执行仍会检查命令知识库。已绑定的对话可以在输入区切换模式。">
+          <Button type="button" variant="ghost" size="icon-xs" aria-label="SSH 默认审批说明"><HelpCircle /></Button>
+        </TooltipHint>
+      </div>
       <div v-for="service in store.settings.services" :key="service.id" :data-service-id="service.id" class="service-row"><strong>{{ service.name }}</strong><Button size="sm" variant="outline" @click="editService(service)"><Pencil :size="13" />编辑</Button><Button size="sm" variant="ghost" class="danger" @click="remove(service)">删除</Button></div>
       <div class="add-service"><SettingsSelect v-model="templateIndex" :options="templateOptions" aria-label="新服务模板" /><IconButton :icon="Plus" aria-label="添加模型提供商" class="outlined-icon" :action="addService" /></div>
     </div>
     <form v-else class="service-editor" :inert="busy || undefined" @input="markDirty" @change="markDirty" @submit.prevent="save" @keydown.enter="($event.target.tagName === 'INPUT') && $event.preventDefault()">
       <div class="settings-section">
         <div class="setting-row"><label for="ai-service-name" class="setting-label">服务名称</label><Input id="ai-service-name" v-model="form.name" size="sm" maxlength="100" /></div>
-        <div class="setting-row"><span class="setting-label">API 协议</span><SettingsSelect v-model="form.protocol" :options="[{value:'openai_chat',label:'OpenAI Chat Completions'},{value:'anthropic_messages',label:'Anthropic Messages'}]" aria-label="API 协议" @update:model-value="changeProtocol" /></div>
+        <div class="setting-row service-protocol"><span class="setting-label">API 协议</span><SettingsSelect v-model="form.protocol" :options="[{value:'openai_chat',label:'OpenAI Chat Completions'},{value:'anthropic_messages',label:'Anthropic Messages'}]" aria-label="API 协议" @update:model-value="changeProtocol" /></div>
         <div class="setting-row"><label for="ai-base-url" class="setting-label">Base URL</label><Input id="ai-base-url" v-model="form.baseUrl" @update:model-value="clearReportedMetadata" size="sm" spellcheck="false" placeholder="http://host:port/v1" /></div>
         <div class="setting-row"><div class="setting-label key-label"><label for="ai-api-key">API Key</label><TooltipHint :text="keyHint" side="right"><button type="button" class="key-help" aria-label="API Key 使用说明"><HelpCircle :size="13" /></button></TooltipHint></div><Input id="ai-api-key" v-model="apiKey" type="password" size="sm" autocomplete="new-password" spellcheck="false" maxlength="8192" /></div>
       </div>
@@ -220,10 +233,12 @@ defineExpose({ save, isDirty: () => dirty.value, isBusy: () => !!busy.value });
           <div class="model-row"><Input v-model="model.modelId" size="sm" aria-label="模型 ID" @update:model-value="() => clearModelMetadata(model)" placeholder="模型 ID" maxlength="256" /><Input v-model="model.name" size="sm" aria-label="模型显示名称" placeholder="显示名称" maxlength="100" /><IconButton :icon="ChevronRight" size="sm" :aria-label="`配置模型 ${model.modelId || i + 1}`" :aria-expanded="expandedModel === model.id" :class="{ rotated: expandedModel === model.id }" :action="() => expandedModel = expandedModel === model.id ? '' : model.id" /><Checkbox v-model="model.enabled" aria-label="启用模型" @update:model-value="value => setEnabled(model, value)" /><IconButton :icon="Trash2" size="sm" tone="danger" aria-label="删除模型" :action="() => removeModel(i)" /></div>
           <div v-if="capabilityLabels(model).some(cap => cap.state === 'supported') || defaultModel === model.id" class="capabilities"><span v-for="cap in capabilityLabels(model).filter(cap => cap.state === 'supported')" :key="cap.key" class="capability">{{ cap.label }}</span><span v-if="defaultModel === model.id" class="default-badge"><Star :size="10" />默认</span></div>
           <div v-if="expandedModel === model.id" class="model-options">
-            <div class="setting-row">
-              <Checkbox v-model="model.autoExecuteCommands" aria-label="允许助手自动执行命令" @update:model-value="markDirty" />
-              <span>允许助手自动执行命令</span>
-              <TooltipHint text="开启后，此模型可直接执行未命中知识库敏感或危险规则的 SSH / Windows CMD 命令，包括可能修改本机或服务器的命令。" />
+            <div class="setting-row auto-execute-row">
+              <Checkbox :id="`ai-auto-execute-${model.id}`" v-model="model.autoExecuteCommands" @update:model-value="markDirty" />
+              <label :for="`ai-auto-execute-${model.id}`">自动执行 Windows CMD 命令</label>
+              <TooltipHint text="开启后，此模型可直接执行未命中知识库敏感或危险规则的 Windows CMD 命令。">
+                <Button type="button" variant="ghost" size="icon-xs" aria-label="自动执行 CMD 命令说明"><HelpCircle /></Button>
+              </TooltipHint>
             </div>
             <div class="setting-row"><span class="setting-label">上下文窗口</span><Input v-model="model.contextWindow" size="sm" inputmode="numeric" :placeholder="model.reportedContextWindow ? `服务返回：${model.reportedContextWindow}` : catalog[model.id]?.contextWindow ? `内置目录：${catalog[model.id].contextWindow}` : '未知'" aria-label="上下文窗口" /></div>
             <div class="setting-row"><span class="setting-label">最大输出</span><Input v-model="model.maxOutputTokens" size="sm" inputmode="numeric" aria-label="最大输出 Token" /><TooltipHint v-if="model.maxOutputLimit || catalog[model.id]?.maxOutputTokens" :text="`${model.maxOutputLimit ? '服务上限' : '内置目录参考上限'}：${model.maxOutputLimit || catalog[model.id]?.maxOutputTokens} Token`"><HelpCircle :size="13" class="field-hint" /></TooltipHint></div>
@@ -235,7 +250,10 @@ defineExpose({ save, isDirty: () => dirty.value, isBusy: () => !!busy.value });
               <div class="setting-row"><span class="setting-label">接口适配</span><SettingsSelect :model-value="model.adapterOverride || (form.protocol === 'openai_chat' && model.thinkingFormat ? effectiveAdapter(form, model) : null)" :options="modelProfiles(model)" aria-label="模型接口适配覆盖" @update:model-value="value => changeModelAdapter(model, value)" /></div>
               <div v-for="[key, label] in [['text','文本'],['image','图片'],['thinking','思考'],['tools','工具']]" :key="key" class="setting-row"><span class="setting-label">{{ label }}能力</span><SettingsSelect v-model="model.capabilities[key]" :options="capabilityOptions" :aria-label="`${label}能力`" @update:model-value="markDirty" /></div>
               <div v-if="model.thinkingMode === 'enabled' && !effortsFor(model).length && profileFor(model)?.effort?.length" class="setting-row"><span class="setting-label">思考强度</span><SettingsSelect v-model="model.reasoningEffort" :options="advancedEffortOptions(model)" aria-label="自定义模型思考强度" @update:model-value="markDirty" /></div>
-              <template v-if="effectiveAdapter(form, model) === 'custom'"><label class="json-label">开启思考参数<textarea v-model="model.thinkingOnParams" rows="3" spellcheck="false" placeholder='{"thinking":{"type":"enabled"}}' /></label><label class="json-label">关闭思考参数<textarea v-model="model.thinkingOffParams" rows="3" spellcheck="false" placeholder='{"thinking":{"type":"disabled"}}' /></label></template>
+              <template v-if="effectiveAdapter(form, model) === 'custom'">
+                <label class="json-label">开启思考参数<Textarea v-model="model.thinkingOnParams" class="font-mono text-[11px]" rows="3" spellcheck="false" placeholder='{"thinking":{"type":"enabled"}}' /></label>
+                <label class="json-label">关闭思考参数<Textarea v-model="model.thinkingOffParams" class="font-mono text-[11px]" rows="3" spellcheck="false" placeholder='{"thinking":{"type":"disabled"}}' /></label>
+              </template>
             </details>
             <div class="model-actions"><Button type="button" size="sm" variant="outline" @click="probe('model', model.id)">实际调用测试</Button><Button type="button" size="sm" variant="outline" :disabled="!model.enabled || defaultModel === model.id" @click="setDefault(model)"><Star :size="12" />设为默认</Button></div>
           </div>
@@ -250,6 +268,17 @@ defineExpose({ save, isDirty: () => dirty.value, isBusy: () => !!busy.value });
 
 <style scoped>
 @import './settingsPaneShared.css';
-.ai-settings{gap:12px;font-size:12px;color:var(--app-text)}.pane-heading,.catalog-heading,.heading-actions{display:flex;align-items:center;gap:8px}.pane-heading,.catalog-heading{justify-content:space-between;min-height:28px}.pane-heading strong,.catalog-heading strong{font-size:13px;font-weight:600}.service-list{display:flex;flex-direction:column;gap:10px}.service-row{display:flex;align-items:center;gap:8px;min-height:58px;border:1px solid var(--app-border-light);border-radius:12px;padding:12px}.service-row>strong{flex:1;min-width:0;font-size:13px;overflow-wrap:anywhere}.add-service{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px dashed var(--app-border-light);border-radius:10px}.add-service>:first-child{flex:1}.outlined-icon{border:1px solid var(--app-border-light);background:var(--app-input-bg);border-radius:6px}.service-editor{display:flex;flex-direction:column;gap:14px;min-width:0}.service-editor>.settings-section{gap:10px;margin:0}.setting-row{gap:10px;min-width:0}.setting-label{width:78px}.setting-row>:last-child:not(.field-hint){min-width:0}.key-label{display:flex;align-items:center;gap:3px;white-space:nowrap}.key-help{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;flex-shrink:0;color:var(--app-text-muted);opacity:.7;border-radius:3px}.key-help:hover{opacity:1}.key-help:focus-visible{outline:none;box-shadow:var(--app-focus-shadow)}.advanced-section{border-top:1px solid var(--app-border-light);padding-top:6px}.advanced-section>summary{display:flex;align-items:center;gap:5px;list-style:none;cursor:pointer;color:var(--app-text-muted);font-size:11px;min-height:28px}.advanced-section>summary::-webkit-details-marker{display:none}.advanced-section[open]>summary>svg{transform:rotate(90deg)}.advanced-section>.setting-row{margin-top:8px}.model-catalog{display:flex;flex-direction:column;gap:9px}.catalog-heading{margin-bottom:1px}.empty-models{padding:18px 12px;border:1px dashed var(--app-border-light);border-radius:9px;color:var(--app-text-muted);text-align:center;font-size:11px}.model-card{border:1px solid var(--app-border-light);border-radius:10px;overflow:clip;background:var(--app-panel-bg,var(--app-bg))}.model-row{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr) 24px 28px 24px;gap:6px;align-items:center;padding:9px}.model-row:deep(input){background:var(--app-input-bg)}.model-row:deep([data-slot=checkbox]){justify-self:center}.rotated:deep(svg){transform:rotate(90deg)}.model-options{display:flex;flex-direction:column;gap:9px;border-top:1px solid var(--app-border-light);padding:12px}.model-options .setting-label{width:72px;font-size:11px}.model-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:3px}.model-advanced{margin-top:3px}.field-hint{flex:none;color:var(--app-text-muted)}.capabilities{display:flex;align-items:center;gap:5px;padding:0 10px 8px}.capability,.default-badge{display:inline-flex;align-items:center;gap:3px;font-size:10px;line-height:16px;padding:0 5px;border-radius:4px;background:var(--app-btn-hover);color:var(--app-text-muted)}.default-badge{color:var(--color-primary)}.discovered{padding:9px;border:1px solid var(--app-border-light);border-radius:9px}.model-results{display:flex;flex-direction:column;gap:2px;max-height:145px;overflow:auto;margin-top:7px}.model-results button{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:5px 7px;border-radius:5px;text-align:left;color:var(--app-text-muted);font-size:11px}.model-results button span{overflow-wrap:anywhere;min-width:0}.model-results button:hover{background:var(--app-btn-hover);color:var(--app-text)}.json-label{display:flex;flex-direction:column;gap:5px;font-size:11px;color:var(--app-text-muted);margin-top:10px}textarea{width:100%;resize:vertical;border:1px solid var(--app-border-light);border-radius:7px;padding:7px 9px;background:var(--app-input-bg);color:var(--app-text);font-family:monospace;font-size:11px;outline:none}textarea:focus{border-color:var(--app-focus-border)}.editor-footer{display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:12px 0 8px;border-top:1px solid var(--app-border-light)}.muted{color:var(--app-text-muted);font-size:11px}.danger{color:var(--color-destructive,#e16b6b)}
+.ai-settings{container-type:inline-size;gap:12px;font-size:12px;color:var(--app-text)}.pane-heading,.catalog-heading,.heading-actions{display:flex;align-items:center;gap:8px}.pane-heading,.catalog-heading{justify-content:space-between;min-height:28px}.pane-heading strong,.catalog-heading strong{font-size:13px;font-weight:600}.service-list{display:flex;flex-direction:column;gap:10px}.service-row{display:flex;align-items:center;gap:8px;min-height:58px;border:1px solid var(--app-border-light);border-radius:12px;padding:12px}.service-row>strong{flex:1;min-width:0;font-size:13px;overflow-wrap:anywhere}.add-service{display:flex;align-items:center;gap:10px;padding:10px 12px;border:1px dashed var(--app-border-light);border-radius:10px}.add-service>:first-child{flex:1}.outlined-icon{border:1px solid var(--app-border-light);background:var(--app-input-bg);border-radius:6px}.service-editor{display:flex;flex-direction:column;gap:14px;min-width:0}.service-editor>.settings-section{gap:10px;margin:0}.setting-row{gap:10px;min-width:0}.setting-row>:last-child:not(.field-hint){min-width:0}.key-label{display:flex;align-items:center;gap:3px;white-space:nowrap}.key-help{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;flex-shrink:0;color:var(--app-text-muted);opacity:.7;border-radius:3px}.key-help:hover{opacity:1}.key-help:focus-visible{outline:none;box-shadow:var(--app-focus-shadow)}.advanced-section{border-top:1px solid var(--app-border-light);padding-top:6px}.advanced-section>summary{display:flex;align-items:center;gap:5px;list-style:none;cursor:pointer;color:var(--app-text-muted);font-size:11px;min-height:28px}.advanced-section>summary::-webkit-details-marker{display:none}.advanced-section[open]>summary>svg{transform:rotate(90deg)}.advanced-section>.setting-row{margin-top:8px}.model-catalog{display:flex;flex-direction:column;gap:9px}.catalog-heading{margin-bottom:1px}.empty-models{padding:18px 12px;border:1px dashed var(--app-border-light);border-radius:9px;color:var(--app-text-muted);text-align:center;font-size:11px}.model-card{border:1px solid var(--app-border-light);border-radius:10px;overflow:clip;background:var(--app-panel-bg,var(--app-bg))}.model-row{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr) 24px 28px 24px;gap:6px;align-items:center;padding:9px}.model-row:deep(input){background:var(--app-input-bg)}.model-row:deep([data-slot=checkbox]){justify-self:center}.rotated:deep(svg){transform:rotate(90deg)}.model-options{display:flex;flex-direction:column;gap:9px;border-top:1px solid var(--app-border-light);padding:12px}.model-options .setting-label{width:72px;font-size:11px}.model-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:3px}.model-advanced{margin-top:3px}.field-hint{flex:none;color:var(--app-text-muted)}.capabilities{display:flex;align-items:center;gap:5px;padding:0 10px 8px}.capability,.default-badge{display:inline-flex;align-items:center;gap:3px;font-size:10px;line-height:16px;padding:0 5px;border-radius:4px;background:var(--app-btn-hover);color:var(--app-text-muted)}.default-badge{color:var(--color-primary)}.discovered{padding:9px;border:1px solid var(--app-border-light);border-radius:9px}.model-results{display:flex;flex-direction:column;gap:2px;max-height:145px;overflow:auto;margin-top:7px}.model-results button{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:5px 7px;border-radius:5px;text-align:left;color:var(--app-text-muted);font-size:11px}.model-results button span{overflow-wrap:anywhere;min-width:0}.model-results button:hover{background:var(--app-btn-hover);color:var(--app-text)}.json-label{display:flex;flex-direction:column;gap:5px;font-size:11px;color:var(--app-text-muted);margin-top:10px}.editor-footer{display:flex;align-items:center;justify-content:flex-end;gap:10px;padding:12px 0 8px;border-top:1px solid var(--app-border-light)}.muted{color:var(--app-text-muted);font-size:11px}.danger{color:var(--color-destructive,#e16b6b)}
 @media(max-width:640px){.model-row{grid-template-columns:minmax(0,1fr) minmax(0,1fr) 22px 26px 22px;gap:4px;padding:7px}.setting-label{width:68px}.model-options{padding:9px}}
+
+.auto-execute-row { gap: 6px; }
+.auto-execute-row > label { min-width: 0; cursor: pointer; }
+.ssh-approval-setting > [role="combobox"] { width: min(160px, 100%); }
+
+@container (max-width: 360px) {
+  .service-protocol { flex-direction: column; align-items: stretch; gap: 4px; }
+  .model-row { grid-template-columns: minmax(0, 1fr) 24px 28px 24px; }
+  .model-row > :deep(input:first-child) { grid-column: 1 / -1; }
+  .capabilities { flex-wrap: wrap; }
+}
 </style>

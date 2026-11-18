@@ -545,16 +545,16 @@ async function verifyAndChange() {
 <template>
   <Dialog v-model:open="dialogOpen" modal>
     <DialogContent showCloseButton draggable
-      class="flex h-[min(500px,calc(100vh-4rem))] max-h-[calc(100vh-4rem)] w-[740px] max-w-[90vw] flex-col sm:max-w-[90vw]">
+      class="settings-dialog flex h-[min(500px,calc(100vh-4rem))] max-h-[calc(100vh-4rem)] w-[740px] max-w-[90vw] flex-col sm:max-w-[90vw]">
       <DialogHeader>
         <DialogTitle>首选项</DialogTitle>
         <DialogDescription class="sr-only">配置应用的安全、外观、终端、快捷键等设置</DialogDescription>
       </DialogHeader>
 
       <div class="flex-1 min-h-0 flex overflow-hidden" :inert="closing || undefined">
-        <div class="config-tab-sidebar flex flex-col gap-0.5 w-34 shrink-0 pr-2">
+        <div class="config-tab-sidebar flex min-h-0 w-34 shrink-0 flex-col gap-0.5 overflow-y-auto pr-2">
           <button v-for="tab in settingsTabs" :key="tab.key" type="button" :disabled="backgroundImporting"
-            :class="['flex items-center gap-2 px-2 py-1.5 rounded text-sm text-left outline-none transition-[background,color,box-shadow]', 'focus-visible:[box-shadow:var(--app-focus-shadow)] disabled:pointer-events-none disabled:opacity-45', activeKey === tab.key ? 'bg-primary/15 text-primary font-semibold' : 'text-muted-foreground hover:bg-[var(--app-btn-hover)] hover:text-foreground active:bg-[var(--app-btn-pressed)]']"
+            :class="['flex shrink-0 items-center gap-2 px-2 py-1.5 rounded text-sm text-left outline-none transition-[background,color,box-shadow]', 'focus-visible:[box-shadow:var(--app-focus-shadow)] disabled:pointer-events-none disabled:opacity-45', activeKey === tab.key ? 'bg-primary/15 text-primary font-semibold' : 'text-muted-foreground hover:bg-[var(--app-btn-hover)] hover:text-foreground active:bg-[var(--app-btn-pressed)]']"
             @click="activeKey = tab.key">
             <component :is="tab.icon" class="settings-tab-icon" aria-hidden="true" />
             {{ tab.label }}
@@ -613,5 +613,19 @@ async function verifyAndChange() {
   height: 16px;
   flex-shrink: 0;
   stroke-width: 1.8;
+}
+
+@media (max-width: 600px) {
+  :global(.settings-dialog[data-slot="dialog-content"]) { padding-inline: 16px; }
+  .tab-content { padding-inline: 8px; }
+}
+
+@media (max-height: 420px) {
+  :global(.settings-dialog[data-slot="dialog-content"]) {
+    height: min(500px, calc(100vh - 32px));
+    max-height: calc(100vh - 32px);
+    padding-block: 12px;
+    gap: 12px;
+  }
 }
 </style>

@@ -10,6 +10,11 @@ export const serviceTemplates = [
   { name: '自定义', baseUrl: '', protocol: 'openai_chat', adapter: 'generic' },
 ];
 
+export const sshApprovalOptions = [
+  { value: 'manual', label: '请求审批' },
+  { value: 'automatic', label: '自动执行' },
+];
+
 export function createService(template = serviceTemplates[0]) {
   return { id: crypto.randomUUID(), ...template, hasKey: false,
     proxyUrl: null, timeoutSecs: 120, models: [] };

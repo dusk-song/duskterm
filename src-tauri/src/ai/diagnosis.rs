@@ -195,12 +195,12 @@ impl Task {
 
 fn continuation_source<'a>(
     c: &'a Conversation,
-    intent: &ContinueDiagnosis,
+    message_id: &str,
 ) -> Result<(&'a Message, &'a Task), String> {
     let original = c
         .messages
         .iter()
-        .find(|message| message.id == intent.message_id && message.role == "assistant")
+        .find(|message| message.id == message_id && message.role == "assistant")
         .and_then(|message| message.task.as_ref())
         .filter(|task| !task.analysis_only)
         .ok_or("找不到可继续检查的诊断任务")?;
@@ -235,7 +235,7 @@ pub(super) fn continue_task(
     let Some(intent) = &request.continue_diagnosis else {
         return Ok(task);
     };
-    let (parent, old) = continuation_source(c, intent)?;
+    let (parent, old) = continuation_source(c, &intent.message_id)?;
     if old.skill.is_some() && intent.verified_steps.is_empty() {
         return Err("固定脚本任务可继续分析。要再次运行请重新选择 Skill 并确认。".into());
     }
@@ -327,6 +327,59 @@ pub(super) fn hydrate_unknown_steps(c: &mut Conversation, pending: &HashSet<Step
             }
         }
     }
+}
+
+pub(super) fn verify_task_results(
+    c: &mut Conversation,
+    message_id: &str,
+    steps: &[StepRef],
+) -> Result<(), String> {
+    let (source, task) = continuation_source(c, message_id)?;
+    let submitted: HashSet<_> = steps.iter().collect();
+    if source.id != message_id || submitted.is_empty()
+        || submitted.len() != steps.len() || submitted.len() != task.unknown_steps.len()
+        || task.unknown_steps.iter().any(|unknown| !submitted.contains(&unknown.step))
+    {
+        return Err("待核实的步骤已变化，请重新查看执行记录".into());
+    }
+    let task = c.messages.iter_mut().find(|message| message.id == message_id)
+        .and_then(|message| message.task.as_mut())
+        .ok_or("找不到待核实的任务")?;
+    task.verified_steps.extend_from_slice(steps);
+    task.unknown_steps.clear();
+    task.evidence_status = "user_verified".into();
+    Ok(())
+}
+
+pub(super) fn follow_up_context(
+    c: &Conversation,
+    question_id: &str,
+    target: Option<(TargetKind, &str)>,
+    limit: usize,
+) -> Option<String> {
+    let end = c.messages.iter().position(|message| message.id == question_id)?;
+    let task = c.messages[..end].iter().rev().find_map(|message| {
+        let task = message.task.as_ref()?;
+        (!task.analysis_only && (!message.tools.is_empty() || task.parent_message_id.is_some())
+            && message.status != "streaming" && (message.active || message.status != "completed"))
+            .then_some(task)
+    })?;
+    let target_status = match target {
+        Some((kind, identity)) if kind == task.target_kind && task.target_identity.as_deref() == Some(identity)
+            => "本轮绑定与记录匹配的终端",
+        Some(_) => "本轮终端与历史记录无法确认匹配，续做前核对目标",
+        None => "本轮没有可用的终端执行工具",
+    };
+    let title: String = task.target.label.chars().take(128).collect();
+    let goal: String = task.goal.chars().take(256).collect();
+    let directory: String = task.directory.as_deref().unwrap_or_default().chars().take(256).collect();
+    let status = serde_json::json!({
+        "target": title, "goal": goal, "directory": directory, "status": task.status,
+        "evidenceStatus": task.evidence_status, "pending": task.unknown_steps.len(),
+        "verifiedByUser": task.verified_steps.len(),
+    });
+    let steps = evidence_preview(c, &task.id, limit);
+    Some(format!("{target_status}。以下记录仅在和本轮问题相关时使用。保留原先的目标和目录约束。人工核实只表示已确认检查，具体状态依据用户提供的事实。\n{status}\n{steps}"))
 }
 
 pub(super) fn analysis_task(
@@ -513,7 +566,7 @@ pub(super) async fn send(
                 .blocking(move |state| {
                     state.with_db(|db| {
                         let conversation = db.get(&conversation_id)?;
-                        let (_, task) = continuation_source(&conversation, &intent)?;
+                        let (_, task) = continuation_source(&conversation, &intent.message_id)?;
                         Ok(RequestTarget {
                             id: intent
                                 .rebind_session_id
@@ -572,6 +625,6 @@ pub(super) async fn send(
         }
         result
     } else {
-        super::runtime::send(state, request, channel).await
+        super::runtime::send_with_app(state, request, channel, Some(app), None).await
     }
 }

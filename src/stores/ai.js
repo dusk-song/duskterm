@@ -12,8 +12,9 @@ function session(store) {
 }
 
 export const useAiStore = defineStore('ai', {
-  state: () => ({ settings: { services: [], defaultModelId: null }, workspaces: [], workspaceId: null, conversations: [], current: null,
-    active: null, error: '', initialized: false, selectedModelId: null, emptyDraft: '', importingText: false, composerRevision: 0 }),
+  state: () => ({ settings: { services: [], defaultModelId: null, defaultSshApprovalMode: 'manual' }, workspaces: [], workspaceId: null, conversations: [], current: null,
+    active: null, error: '', initialized: false, selectedModelId: null, emptyDraft: '', importingText: false, composerRevision: 0,
+    emptyConversationRevision: 0, draftSshApproval: null }),
   getters: {
     selectedModel(state) {
       for (const service of state.settings.services) {
@@ -69,6 +70,23 @@ export const useAiStore = defineStore('ai', {
       this.settings = await aiInvoke('ai_get_settings');
       if (!this.selectedModel) this.selectedModelId = this.settings.defaultModelId;
     },
+    bindSshApproval(target, mode = null) {
+      const local = session(this), view = local.view;
+      const conversationId = this.current?.id ?? null;
+      const current = () => local.view === view && (this.current?.id ?? null) === conversationId;
+      const operation = (local.sshApprovalChange || Promise.resolve()).catch(() => {}).then(async () => {
+        if (!current()) return;
+        const draft = conversationId ? null : this.draftSshApproval;
+        const approval = await aiInvoke('ai_bind_ssh_approval', { conversationId, target, mode, draft });
+        if (current()) {
+          if (this.current) this.current.sshApproval = approval;
+          else this.draftSshApproval = approval;
+        }
+        return approval;
+      });
+      local.sshApprovalChange = operation;
+      return operation;
+    },
     async loadList() {
       const local = session(this), revision = ++local.list;
       const history = await aiInvoke('ai_list_conversations');
@@ -101,6 +119,8 @@ export const useAiStore = defineStore('ai', {
       this.workspaceId = workspaceId;
       this.current = null;
       this.emptyDraft = '';
+      this.draftSshApproval = null;
+      this.emptyConversationRevision++;
       this.selectedModelId = this.settings.defaultModelId;
       this.error = '';
       return true;
@@ -153,6 +173,15 @@ export const useAiStore = defineStore('ai', {
       if (!conversationId) return;
       const conversation = await aiInvoke('ai_select_answer', { conversationId, messageId: id });
       if (session(this).view === revision && this.current?.id === conversationId) this.current = conversation;
+    },
+    async verifyTaskResults(messageId, steps) {
+      const conversationId = this.current?.id, view = session(this).view;
+      if (!conversationId || this.active) return;
+      this.error = '';
+      const conversation = await aiInvoke('ai_verify_task_results', { conversationId, messageId, steps });
+      if (session(this).view === view && this.current?.id === conversationId) {
+        this.current = { ...conversation, draft: this.current.draft };
+      }
     },
     async waitForIdle() { await session(this).run; },
     async send(content, regenerateId = null, readGrant = null, execGrant = null, taskIntent = {}) {
@@ -243,19 +272,18 @@ export const useAiStore = defineStore('ai', {
             confirmHistoryRecipient: !!taskIntent.confirmHistoryRecipient, readGrant, execGrant,
             diagnosisTarget: taskIntent.diagnosisTarget || null, analyzeMessageId: taskIntent.analyzeMessageId || null,
             terminalTarget: taskIntent.terminalTarget || null,
+            draftSshApproval: creating ? this.draftSshApproval : null,
             continueDiagnosis: taskIntent.continueDiagnosis || null, cmdDirectory: taskIntent.cmdDirectory || null,
             deploymentTarget: taskIntent.deploymentTarget || null, skill: taskIntent.skill || null }, channel });
           flush();
           accepted = true;
           updateCurrent(conversation);
-          if (this.current?.id === conversationId) {
-            this.error = conversation.messages.at(-1)?.error || '';
-          }
         } catch (error) {
           flush();
           const message = String(error);
-          if (local.view === view || this.current?.id === conversationId) this.error = message;
           const partial = this.active?.snapshot?.messages.at(-1);
+          const inline = partial?.status === 'streaming' && this.current?.id === conversationId;
+          if (!inline && (local.view === view || this.current?.id === conversationId)) this.error = message;
           if (partial?.status === 'streaming') {
             partial.status = 'failed'; partial.error = message;
             if (partial.task) partial.task.status = 'failed';

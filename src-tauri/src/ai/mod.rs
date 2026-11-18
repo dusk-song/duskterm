@@ -365,6 +365,52 @@ pub async fn ai_set_default_model(
         .await
 }
 
+#[tauri::command]
+pub async fn ai_set_default_ssh_approval(
+    state: State<'_, AiState>,
+    mode: ApprovalMode,
+) -> Result<Settings, String> {
+    state.inner().blocking(move |state| state.with_db(|db| {
+        let mut settings = db.settings()?;
+        settings.default_ssh_approval_mode = Some(mode);
+        db.save_settings(&settings)?;
+        Ok(settings)
+    })).await
+}
+
+#[tauri::command]
+pub async fn ai_bind_ssh_approval(
+    state: State<'_, AiState>,
+    app: tauri::AppHandle,
+    conversation_id: Option<String>,
+    target: String,
+    mode: Option<ApprovalMode>,
+    draft: Option<SshApproval>,
+) -> Result<SshApproval, String> {
+    state.inner().blocking(move |state| {
+        let _idle = conversation_id.as_deref().map(|id| state.idle_for(id)).transpose()?;
+        let (_, identity) = app.state::<crate::session::supervisor::SessionSupervisor>().ai_ssh_session(&target)?;
+        state.with_db(|db| {
+            let mut conversation = conversation_id.as_deref().map(|id| db.get(id)).transpose()?;
+            let previous = match &conversation {
+                Some(c) => c.ssh_approval.as_ref(),
+                None => draft.as_ref(),
+            };
+            let mut approval = SshApproval::bind(previous, identity, db.settings()?.default_ssh_approval_mode.unwrap_or_default());
+            if let Some(mode) = mode {
+                approval.mode = mode;
+            }
+            if let Some(c) = &mut conversation {
+                if c.ssh_approval.as_ref() != Some(&approval) {
+                    c.ssh_approval = Some(approval.clone());
+                    db.save(c)?;
+                }
+            }
+            Ok(approval)
+        })
+    }).await
+}
+
 fn probe_service(
     settings: &Settings,
     service_id: Option<&str>,
@@ -574,6 +620,19 @@ pub async fn ai_move_conversation(state: State<'_, AiState>, id: String, workspa
         .blocking(move |state| state.with_db(|db| db.move_conversation(&id, &workspace_id)))
         .await
 }
+#[tauri::command]
+pub async fn ai_verify_task_results(
+    state: State<'_, AiState>,
+    conversation_id: String,
+    message_id: String,
+    steps: Vec<diagnosis::StepRef>,
+) -> Result<Conversation, String> {
+    state.inner().blocking(move |state| {
+        let _idle = state.idle_for(&conversation_id)?;
+        state.with_db(|db| db.verify_task_results(&conversation_id, &message_id, &steps))
+    }).await
+}
+
 #[tauri::command]
 pub async fn ai_save_draft(
     state: State<'_, AiState>,

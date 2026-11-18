@@ -134,8 +134,14 @@ impl Database {
             .query_row("SELECT data FROM settings WHERE id=1", [], |r| r.get(0))
             .optional()
             .map_err(db_error)?;
-        data.map(|s| serde_json::from_str(&s).map_err(|_| "AI 配置数据损坏".into()))
-            .unwrap_or(Ok(Settings::default()))
+        let Some(data) = data else {
+            return Ok(Settings { default_ssh_approval_mode: Some(ApprovalMode::Manual), ..Settings::default() });
+        };
+        let mut settings: Settings = serde_json::from_str(&data).map_err(|_| "AI 配置数据损坏")?;
+        if settings.migrate_ssh_approval() {
+            self.save_settings(&settings)?;
+        }
+        Ok(settings)
     }
     pub fn save_settings(&self, settings: &Settings) -> Result<(), String> {
         let data = serde_json::to_string(settings).map_err(|_| "无法编码 AI 配置")?;
@@ -240,11 +246,11 @@ impl Database {
         Ok(c)
     }
     pub fn save(&self, c: &Conversation) -> Result<(), String> {
-        self.save_turn(c, None, false)
+        self.save_turn(c, None, false, &[])
     }
 
     pub fn save_generation(&self, c: &Conversation) -> Result<(), String> {
-        self.save_turn(c, None, true)
+        self.save_turn(c, None, true, &[])
     }
 
     pub fn insert_conversation(&self, c: &Conversation, workspace_id: &str) -> Result<(), String> {
@@ -252,10 +258,20 @@ impl Database {
             return Err("发送首条消息后才保存对话".into());
         }
         self.check_workspace(workspace_id)?;
-        self.save_turn(c, Some(workspace_id), true)
+        self.save_turn(c, Some(workspace_id), true, &[])
     }
 
-    fn save_turn(&self, c: &Conversation, workspace_id: Option<&str>, generation: bool) -> Result<(), String> {
+    pub fn verify_task_results(&self, id: &str, message_id: &str, steps: &[StepRef]) -> Result<Conversation, String> {
+        let mut c = self.get(id)?;
+        self.hydrate_unknown_steps(&mut c)?;
+        diagnosis::verify_task_results(&mut c, message_id, steps)?;
+        c.summary = None;
+        c.revision += 1;
+        self.save_turn(&c, None, false, steps)?;
+        Ok(c)
+    }
+
+    fn save_turn(&self, c: &Conversation, workspace_id: Option<&str>, generation: bool, verified: &[StepRef]) -> Result<(), String> {
         let mut stored = c.clone();
         stored.draft.clear();
         let data = serde_json::to_string(&stored).map_err(|_| "无法编码 AI 对话")?;
@@ -280,6 +296,7 @@ impl Database {
             Self::record_target_changes(&transaction, &c.id, message)?;
             Self::resolve_target_changes(&transaction, &c.id, message)?;
         }
+        Self::delete_verified_steps(&transaction, &c.id, verified)?;
         if let Some(message) = last.filter(|m| m.status == "streaming") {
             let data = serde_json::to_string(message).map_err(|_| "无法编码生成检查点")?;
             transaction.execute("INSERT INTO generation_checkpoints VALUES(?1,?2,?3)
@@ -333,12 +350,17 @@ impl Database {
 
     fn resolve_target_changes(connection: &Connection, id: &str, message: &Message) -> Result<(), String> {
         if let Some(task) = message.task.as_ref().filter(|task| !task.analysis_only) {
-            for step in &task.verified_steps {
-                connection.execute(
-                    "DELETE FROM pending_target_changes WHERE conversation_id=?1 AND message_id=?2 AND call_id=?3",
-                    params![id, step.message_id, step.call_id],
-                ).map_err(db_error)?;
-            }
+            Self::delete_verified_steps(connection, id, &task.verified_steps)?;
+        }
+        Ok(())
+    }
+
+    fn delete_verified_steps(connection: &Connection, id: &str, steps: &[StepRef]) -> Result<(), String> {
+        for step in steps {
+            connection.execute(
+                "DELETE FROM pending_target_changes WHERE conversation_id=?1 AND message_id=?2 AND call_id=?3",
+                params![id, step.message_id, step.call_id],
+            ).map_err(db_error)?;
         }
         Ok(())
     }
@@ -376,7 +398,7 @@ impl Database {
 
     pub fn check_delete_messages(&self, id: &str, message_ids: &[&str]) -> Result<(), String> {
         if self.pending_steps(id)?.iter().any(|step| message_ids.contains(&step.message_id.as_str())) {
-            return Err("该消息有待核实的变更，请先在任务卡确认已核实".into());
+            return Err("该消息有待核实的变更，请先在原消息核实结果".into());
         }
         Ok(())
     }
@@ -401,7 +423,7 @@ impl Database {
     }
     pub fn delete(&self, id: &str) -> Result<(), String> {
         if !self.pending_steps(id)?.is_empty() {
-            return Err("该对话有待核实的变更，请先在任务卡确认已核实".into());
+            return Err("该对话有待核实的变更，请先在原消息核实结果".into());
         }
         self.connection
             .execute("DELETE FROM conversations WHERE id=?1", [id])
@@ -412,4 +434,142 @@ impl Database {
 
 fn db_error(_: rusqlite::Error) -> String {
     "AI 数据存储失败，请检查磁盘空间及文件权限".into()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn interrupted_terminal_chat() -> (Conversation, StepRef) {
+        let mut chat = Conversation::empty("chat".into());
+        let question = new_message("user", "更新 Compose 项目".into());
+        let mut answer = new_message("assistant", String::new());
+        answer.reply_to = Some(question.id.clone());
+        answer.status = "failed".into();
+        answer.active = false;
+        let mut task = diagnosis::Task::new(
+            "task",
+            &question.content,
+            diagnosis::Target { id: "ssh".into(), label: "测试目标".into() },
+            TargetKind::Ssh,
+        );
+        task.status = "interrupted".into();
+        task.directory = Some("/srv/project".into());
+        task.target_identity = Some("host-a".into());
+        answer.task = Some(task);
+        answer.tools.push(ToolRecord {
+            call_id: "step".into(), name: "execute_ssh_command".into(),
+            arguments: json!({"command":"docker compose up -d"}), target: "ssh".into(),
+            root: "/srv/project".into(), status: "unknown".into(), started_at: now(), elapsed_ms: 30,
+            result: Some("SSH 已断开".into()), approval_id: None, approval_expires_at: None,
+            approval_mode: Some(ApprovalMode::Manual),
+            execution: Some(Execution { outcome: "unknown".into(), ..Default::default() }),
+        });
+        let step = StepRef { message_id: answer.id.clone(), call_id: "step".into() };
+        chat.messages.extend([question, answer]);
+        (chat, step)
+    }
+
+    #[test]
+    fn terminal_result_verification_releases_only_confirmed_steps() {
+        let db = Database::open(Path::new(":memory:")).unwrap();
+        let (mut chat, step) = interrupted_terminal_chat();
+        chat.draft = "未发送的问题".into();
+        db.insert_conversation(&chat, "default").unwrap();
+        let mut other = chat.clone();
+        other.id = "other".into();
+        other.title = "另一个任务".into();
+        db.insert_conversation(&other, "default").unwrap();
+
+        let mut wrong_step = step.clone();
+        wrong_step.call_id = "another-step".into();
+        assert!(db.verify_task_results(&chat.id, &step.message_id, &[wrong_step]).is_err());
+        assert!(db.check_delete_messages(&chat.id, &[step.message_id.as_str()]).is_err());
+        let result = db.verify_task_results(&chat.id, &step.message_id, std::slice::from_ref(&step)).unwrap();
+        assert_eq!(result.draft, chat.draft);
+        assert_eq!(result.messages.len(), chat.messages.len());
+        let message = result.messages.last().unwrap();
+        assert_eq!(message.tools[0].status, "unknown");
+        assert_eq!(message.task.as_ref().unwrap().evidence_status, "user_verified");
+        assert!(message.task.as_ref().unwrap().unknown_steps.is_empty());
+        assert!(db.check_delete_messages(&chat.id, &[step.message_id.as_str()]).is_ok());
+        assert_eq!(db.pending_target_change(TargetKind::Ssh, "host-a", &chat.id, &[]).unwrap().as_deref(), Some("另一个任务"));
+        assert!(db.verify_task_results(&chat.id, &step.message_id, std::slice::from_ref(&step)).is_err());
+        assert!(db.check_delete_messages(&other.id, &[step.message_id.as_str()]).is_err());
+    }
+
+    #[test]
+    fn terminal_follow_up_keeps_interrupted_evidence_and_reports_target_match() {
+        let db = Database::open(Path::new(":memory:")).unwrap();
+        let (chat, _) = interrupted_terminal_chat();
+        db.insert_conversation(&chat, "default").unwrap();
+        let mut chat = db.get(&chat.id).unwrap();
+        db.hydrate_unknown_steps(&mut chat).unwrap();
+        let next = new_message("user", "当时发生了什么".into());
+        let id = next.id.clone();
+        chat.messages.push(next);
+        let same = diagnosis::follow_up_context(&chat, &id, Some((TargetKind::Ssh, "host-a")), 8192).unwrap();
+        assert!(same.contains("本轮绑定与记录匹配的终端"));
+        assert!(same.contains("/srv/project") && same.contains("SSH 已断开") && same.contains(r#""pending":1"#));
+        let different = diagnosis::follow_up_context(&chat, &id, Some((TargetKind::Ssh, "host-b")), 8192).unwrap();
+        assert!(different.contains("无法确认匹配"));
+        let offline = diagnosis::follow_up_context(&chat, &id, None, 8192).unwrap();
+        assert!(offline.contains("SSH 已断开"));
+        assert!(diagnosis::follow_up_context(&chat, &chat.messages[0].id, None, 8192).is_none());
+    }
+
+    #[test]
+    fn ssh_approval_migration_persists_one_conservative_default() {
+        let db = Database::open(Path::new(":memory:")).unwrap();
+        assert_eq!(db.settings().unwrap().default_ssh_approval_mode, Some(ApprovalMode::Manual));
+        let legacy_model = |id, enabled, automatic: Option<bool>| {
+            let mut model = json!({"id":id,"modelId":id,"name":id,"enabled":enabled,"maxOutputTokens":1024});
+            if let Some(automatic) = automatic {
+                model["autoExecuteCommands"] = json!(automatic);
+            }
+            model
+        };
+        for (models, expected) in [
+            (vec![legacy_model("a", true, None), legacy_model("b", false, Some(false))], ApprovalMode::Automatic),
+            (vec![legacy_model("a", true, Some(true)), legacy_model("b", true, Some(false))], ApprovalMode::Manual),
+            (vec![legacy_model("a", false, Some(true))], ApprovalMode::Manual),
+        ] {
+            let data = json!({"defaultModelId":"a","services":[{
+                "id":"service","name":"service","baseUrl":"https://example.invalid",
+                "protocol":"openai_chat","timeoutSecs":60,"models":models
+            }]});
+            db.connection.execute("INSERT OR REPLACE INTO settings VALUES (1,?1)", [data.to_string()]).unwrap();
+            let migrated = db.settings().unwrap();
+            assert_eq!(migrated.default_ssh_approval_mode, Some(expected));
+            let saved: String = db.connection.query_row("SELECT data FROM settings", [], |row| row.get(0)).unwrap();
+            assert_eq!(serde_json::from_str::<Settings>(&saved).unwrap().default_ssh_approval_mode, Some(expected));
+        }
+        let mut settings = db.settings().unwrap();
+        settings.services[0].models[0].enabled = true;
+        db.save_settings(&settings).unwrap();
+        assert_eq!(db.settings().unwrap().default_ssh_approval_mode, Some(ApprovalMode::Manual));
+    }
+
+    #[test]
+    fn ssh_approval_stays_with_conversation_and_resets_when_switching_targets() {
+        let db = Database::open(Path::new(":memory:")).unwrap();
+        let mut chat = Conversation::empty("chat".into());
+        chat.messages.push(new_message("user", "检查 Vim".into()));
+        db.insert_conversation(&chat, "default").unwrap();
+        let automatic = ApprovalMode::Automatic;
+        let manual = ApprovalMode::Manual;
+        let first = SshApproval::bind(chat.ssh_approval.as_ref(), "host-a".into(), automatic);
+        assert_eq!(first.mode, automatic);
+        chat.ssh_approval = Some(first);
+        db.save(&chat).unwrap();
+        let mut chat = db.get(&chat.id).unwrap();
+        chat.model_id = Some("other-model".into());
+        let reconnected = SshApproval::bind(chat.ssh_approval.as_ref(), "host-a".into(), manual);
+        assert_eq!(reconnected.mode, automatic);
+        let switched = SshApproval::bind(Some(&reconnected), "host-b".into(), automatic);
+        assert_eq!(switched.mode, manual);
+        let switched_back = SshApproval::bind(Some(&switched), "host-a".into(), automatic);
+        assert_eq!(switched_back.mode, manual);
+    }
 }

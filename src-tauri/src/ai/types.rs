@@ -112,6 +112,27 @@ pub struct Service {
 pub struct Settings {
     pub services: Vec<Service>,
     pub default_model_id: Option<String>,
+    #[serde(default)]
+    pub default_ssh_approval_mode: Option<ApprovalMode>,
+}
+
+impl Settings {
+    pub fn migrate_ssh_approval(&mut self) -> bool {
+        if self.default_ssh_approval_mode.is_some() {
+            return false;
+        }
+        let mut enabled = self.services.iter()
+            .flat_map(|service| &service.models)
+            .filter(|model| model.enabled)
+            .peekable();
+        let automatic = enabled.peek().is_some() && enabled.all(|model| model.auto_execute_commands);
+        self.default_ssh_approval_mode = Some(if automatic {
+            ApprovalMode::Automatic
+        } else {
+            ApprovalMode::Manual
+        });
+        true
+    }
 }
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -232,11 +253,30 @@ pub struct ToolRecord {
     pub execution: Option<Execution>,
 }
 
-#[derive(Clone, Copy, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ApprovalMode {
     Automatic,
+    #[default]
     Manual,
+}
+
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SshApproval {
+    pub target_identity: String,
+    pub mode: ApprovalMode,
+}
+
+impl SshApproval {
+    pub fn bind(previous: Option<&Self>, target_identity: String, default: ApprovalMode) -> Self {
+        let mode = match previous {
+            Some(binding) if binding.target_identity == target_identity => binding.mode,
+            Some(_) => ApprovalMode::Manual,
+            None => default,
+        };
+        Self { target_identity, mode }
+    }
 }
 
 pub(crate) use crate::ssh::exec::Execution;
@@ -314,6 +354,8 @@ pub struct Conversation {
     pub model_id: Option<String>,
     pub last_service_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ssh_approval: Option<SshApproval>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_recipient: Option<ModelRecipient>,
     pub messages: Vec<Message>,
     pub summary: Option<Summary>,
@@ -331,6 +373,7 @@ impl Conversation {
             revision: 0,
             model_id: None,
             last_service_id: None,
+            ssh_approval: None,
             last_recipient: None,
             messages: vec![],
             summary: None,
@@ -407,6 +450,8 @@ pub struct SendRequest {
     pub diagnosis_target: Option<super::diagnosis::RequestTarget>,
     #[serde(default)]
     pub terminal_target: Option<super::diagnosis::RequestTarget>,
+    #[serde(default)]
+    pub draft_ssh_approval: Option<SshApproval>,
     #[serde(default)]
     pub continue_diagnosis: Option<super::diagnosis::ContinueDiagnosis>,
     #[serde(default)]
