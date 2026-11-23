@@ -1,6 +1,7 @@
 <script setup>
 import { computed } from 'vue';
 import { useSshStore } from '@/stores/ssh';
+import { useTerminalPanels } from '@/composables/useTerminalPanels';
 import {
   buildSessionDisplayNameMap,
   getSessionBaseDisplayName,
@@ -9,8 +10,8 @@ import {
 import DuskDock from './DuskDock.vue';
 
 const sshStore = useSshStore();
-const sessions = computed(() => (sshStore.sessions || []).filter((session) => !session.isSplitChild));
-const active = computed(() => sessions.value.find((session) => session.id === sshStore.activeSessionId) || null);
+const { visibleSessions: sessions, activeKey } = useTerminalPanels(sshStore);
+const active = computed(() => sessions.value.find(session => session.id === activeKey.value) || null);
 const sessionDisplayName = computed(() => {
   if (!active.value) return '暂无活动会话';
   const session = active.value;

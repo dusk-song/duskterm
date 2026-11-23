@@ -215,7 +215,7 @@ export function usePanelLayout({ sshStore, activeKey, ensureSplitSession, visibl
   };
 
   const splitActive = async (direction) => {
-    if (!activeKey.value) return;
+    if (!sshStore.getSession(activeKey.value)) return;
     const panelId = activeKey.value;
     const tree = ensureTree(panelId);
     const targetId = focusedLeaf.value[panelId] || findFirstLeaf(tree) || panelId;
@@ -257,7 +257,7 @@ export function usePanelLayout({ sshStore, activeKey, ensureSplitSession, visibl
   };
 
   const closeCurrentPanel = () => {
-    if (!activeKey.value) return;
+    if (!sshStore.getSession(activeKey.value)) return;
     const panelId = activeKey.value;
     const tree = ensureTree(panelId);
     const targetId = focusedLeaf.value[panelId] || findFirstLeaf(tree);

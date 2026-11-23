@@ -1,0 +1,14 @@
+.form-item {
+  @apply flex items-start min-h-8 mb-2;
+}
+
+.form-item > label {
+  @apply w-[100px] shrink-0 min-h-8 pt-1.5 text-right pr-3 whitespace-nowrap text-[13px] font-normal text-[var(--app-text-muted)];
+}
+
+.form-item > input,
+.form-item > select,
+.form-item > textarea,
+.form-item > .form-item-control {
+  @apply flex-1 min-h-8;
+}

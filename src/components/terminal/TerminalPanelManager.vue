@@ -1,6 +1,6 @@
 <script setup>
 import { X } from '@lucide/vue';
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
+import { computed, defineAsyncComponent, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { computeSplitLayout, getSplitLeafStyle } from '@/utils/splitTree';
 import { TooltipHint } from '@/components/ui/tooltip';
 import {
@@ -11,6 +11,7 @@ import {
 import TunnelQuickActions from '@/components/tunnel/TunnelQuickActions.vue';
 import Terminal from './Terminal.vue';
 import TerminalTabBar from './TerminalTabBar.vue';
+const RedisPanel = defineAsyncComponent(() => import('@/components/redis/RedisPanel.vue'));
 
 const props = defineProps({
   panels: { type: Array, required: true },
@@ -46,7 +47,7 @@ const scrollIndex = ref(0);
 const isTransitioning = ref(false);
 
 const focusPanelTerminal = (panelId) => {
-  if (!panelId) return;
+  if (!panelId || activePanel.value?.kind === 'redis') return;
   nextTick(() => {
     requestAnimationFrame(() => {
       if (props.activePanelId !== panelId) return;
@@ -100,6 +101,7 @@ const isWithinRoot = (target) => rootRef.value?.contains(target);
 const handleKeyDown = (event) => {
   if (event.isComposing) return;
   if (!isWithinRoot(event.target)) return;
+  if (activePanel.value?.kind === 'redis' && event.target.matches?.('input, textarea, [contenteditable]')) return;
 
   if (event.ctrlKey && !event.shiftKey && !event.altKey) {
     if (event.key === 'ArrowLeft') {
@@ -172,6 +174,7 @@ onUnmounted(() => {
 });
 
 const panelLayouts = computed(() => props.panels.map((panel) => {
+  if (panel.kind === 'redis') return { panel };
   const tree = props.splitTrees[panel.id] || props.resolveTree(panel.id);
   const layout = computeSplitLayout(tree);
   return {
@@ -210,6 +213,9 @@ const panelStripStyle = computed(() => isClassicTabs.value
         @transitionend="onTransitionEnd">
         <div v-for="entry in panelLayouts" :key="entry.panel.id" class="scroll-pane" :data-panel-id="entry.panel.id"
           :class="{ 'is-active': entry.panel.id === activePanelId }">
+          <RedisPanel v-if="entry.panel.kind === 'redis'" :session="entry.panel" :active="entry.panel.id === activePanelId"
+            :inert="entry.panel.id !== activePanelId" />
+          <template v-else>
           <div v-for="leaf in entry.leaves" :key="leaf.sessionId" class="split-leaf" :data-session-id="leaf.sessionId"
             :class="{ 'split-focused': entry.leaves.length > 1 && focusedLeaf[entry.panel.id] === leaf.sessionId }"
             :style="leafStyle(leaf)"
@@ -219,6 +225,7 @@ const panelStripStyle = computed(() => isClassicTabs.value
           <div v-for="(divider, index) in entry.dividers" :key="index" class="split-divider"
             :class="divider.direction === 'vertical' ? 'divider-vertical' : 'divider-horizontal'"
             :style="dividerStyle(divider)" @mousedown="onSplitDrag($event, divider.node, divider.bounds)" />
+          </template>
         </div>
       </div>
     </div>

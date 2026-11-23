@@ -11,7 +11,7 @@ import {
 } from '@/components/ui/alert-dialog';
 import { confirm } from '@/composables/useConfirm';
 import { toast } from '@/composables/useToast';
-import { Code2, Server, Trash2, Usb } from '@lucide/vue';
+import { Code2, Database, Server, Trash2, Usb } from '@lucide/vue';
 import { computed, defineAsyncComponent, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 
 // ── Lazy-loaded heavy components for faster initial paint ──
@@ -49,6 +49,7 @@ import { useAiStore } from './stores/ai';
 import { useSecurityStore } from './stores/security';
 import { useTransfersStore } from './stores/transfers';
 import { useSshStore } from './stores/ssh';
+import { isRedisProfile, useRedisStore } from './stores/redis';
 import { invokeCommand, listenEvent } from './utils/ipc';
 import { normalizeMouseBindingEvent } from './utils/keybindings';
 import { loadMainUiSettings, normalizeMainUiSettings, saveMainUiSettings } from './utils/mainUi';
@@ -64,6 +65,7 @@ const createOpenedMountState = (visible) => {
 };
 
 const sshStore = useSshStore();
+const redisStore = useRedisStore();
 const transferStore = useTransfersStore();
 const aiStore = useAiStore();
 const securityStore = useSecurityStore();
@@ -97,14 +99,11 @@ onApp('app:open-session-list', () => {
   sshStore.loadSavedSessions();
 });
 onApp('app:disconnect-current', () => {
-  if (activeKey.value) {
-    sshStore.removeSession(activeKey.value);
-  }
+  if (activeKey.value) void closeWorkspacePanel(activeKey.value);
 });
 onApp('app:disconnect-all', () => {
   window.dispatchEvent(new CustomEvent('app:sync-input-stop'));
-  const ids = [...(sshStore.sessions || [])].map((session) => session.id);
-  ids.forEach((id) => sshStore.removeSession(id));
+  void closeWorkspacePanels();
 });
 onApp('app:open-settings', () => { isSettingsVisible.value = true; });
 onApp('menu:file_prefs', () => { isSettingsVisible.value = true; });
@@ -112,7 +111,7 @@ onApp('app:theme-change', (e) => {
   setTheme(e.detail);
 });
 onApp('app:open-tunnel', () => {
-  preferredTunnelSessionId.value = activeKey.value || '';
+  preferredTunnelSessionId.value = activeSftpWorkspaceId.value;
   isTunnelModalVisible.value = true;
 });
 onApp('app:open-tool-panels', () => {
@@ -171,12 +170,13 @@ onApp('app:edit-active-session', () => {
   openActiveSessionEditor();
 });
 onApp('app:terminal-find', () => {
-  if (!activeKey.value) {
-    toast.info('当前没有激活会话');
+  const sessionId = focusedTerminalRuntimeId.value;
+  if (!sessionId) {
+    toast.info('当前没有可用的终端会话');
     return;
   }
   window.dispatchEvent(new CustomEvent('term:find', {
-    detail: { sessionId: activeKey.value }
+    detail: { sessionId }
   }));
 });
 onApp('app:close-current-panel', () => {
@@ -212,6 +212,10 @@ const showSessionModal = (sessionData = null) => {
 };
 
 async function openSavedSessionEditor(sessionData) {
+  if (isRedisProfile(sessionData)) {
+    showSessionModal(sessionData);
+    return;
+  }
   if (!sessionData?.id) {
     showSessionModal(sessionData);
     return;
@@ -226,6 +230,10 @@ async function openSavedSessionEditor(sessionData) {
   }
 }
 const isSessionModalVisible = ref(false);
+async function finishRedisProfileEditor(profile) {
+  await sshStore.loadSavedSessions({ force: true });
+  if (profile) redisStore.open(profile);
+}
 const isTunnelModalVisible = ref(false);
 const isSessionModalMounted = createOpenedMountState(isSessionModalVisible);
 const isTunnelModalMounted = createOpenedMountState(isTunnelModalVisible);
@@ -717,14 +725,20 @@ async function reconnectCurrentSessionFromMenu() {
     toast.info('当前没有激活会话');
     return;
   }
-  await sshStore.reconnectSession(activeKey.value);
+  await reconnectSessionPanel(activeKey.value);
 }
 
 async function reconnectAllSessionsFromMenu() {
   await sshStore.reconnectAllSessions();
+  for (const id of Object.keys(redisStore.sessions)) await redisStore.connect(id);
 }
 
 function openActiveSessionEditor() {
+  const redis = redisStore.sessions[activeKey.value];
+  if (redis) {
+    showSessionModal(sshStore.savedSessions.find(profile => profile.id === redis.config.id) || redis.config);
+    return;
+  }
   const draft = buildActiveSessionDraft();
   if (!draft) {
     toast.info('当前没有可编辑的会话');
@@ -800,11 +814,17 @@ watch(() => visibleSessions.value.length === 0, refreshDailyWelcome, { immediate
 onApp('focus', refreshDailyWelcome);
 
 const duplicateSessionPanel = (panelId = activeKey.value) => {
+  const redis = redisStore.sessions[panelId];
+  if (redis) {
+    redisStore.open(sshStore.savedSessions.find(profile => profile.id === redis.config.id) || redis.config);
+    return;
+  }
   const session = sshStore.getSession(panelId);
   if (session?.config) void sshStore.connectLogicWithMeta(session.config);
 };
 const reconnectSessionPanel = (panelId = activeKey.value) => {
-  if (panelId) void sshStore.reconnectSession(panelId);
+  if (!panelId) return;
+  return redisStore.sessions[panelId] ? redisStore.connect(panelId) : sshStore.reconnectSession(panelId);
 };
 const recentSessionSettings = computed(() => mainUiSettings.value.recentSessions);
 const recentSessions = computed(() => {
@@ -816,7 +836,8 @@ const recentSessions = computed(() => {
 
 const openRecentSession = (session) => {
   if (session?.id) {
-    sshStore.connectStoredSession(session.id);
+    if (isRedisProfile(session)) redisStore.open(session);
+    else sshStore.connectStoredSession(session.id);
   }
 };
 
@@ -825,6 +846,7 @@ const getRecentSessionIcon = (session) => {
   const protocol = String(session?.protocol || 'ssh').toLowerCase();
   if (protocol === 'telnet') return Server;
   if (protocol === 'serial') return Usb;
+  if (protocol === 'redis') return Database;
   return Code2;
 };
 const clearRecentSessionHistory = async () => {
@@ -857,11 +879,30 @@ const {
   visibleSessions
 });
 
-const focusedTerminalRuntimeId = computed(() => resolveFocusedSessionId(activeKey.value, focusedLeaf.value));
-const activeSftpWorkspaceId = computed(() => activeKey.value || '');
+async function closeWorkspacePanel(id) {
+  if (!redisStore.sessions[id]) {
+    removePanelRoot(id);
+    return true;
+  }
+  try {
+    return await redisStore.close(id);
+  } catch (error) {
+    toast.error(String(error));
+    return false;
+  }
+}
+
+async function closeWorkspacePanels() {
+  for (const { id } of [...visibleSessions.value]) {
+    if (!await closeWorkspacePanel(id)) break;
+  }
+}
+
+const activeSftpWorkspaceId = computed(() => sshStore.getSession(activeKey.value)?.id || '');
+const focusedTerminalRuntimeId = computed(() => resolveFocusedSessionId(activeSftpWorkspaceId.value, focusedLeaf.value));
 const activeSessionSupportsSftp = computed(() => {
   const session = sshStore.getSession(activeKey.value);
-  return String(session?.config?.protocol || 'ssh').toLowerCase() === 'ssh';
+  return !!session && String(session.config?.protocol || 'ssh').toLowerCase() === 'ssh';
 });
 const showActiveSftpPanel = computed(
   () => showSftpPanel.value && visibleSessions.value.length > 0 && activeSessionSupportsSftp.value
@@ -885,7 +926,7 @@ watch(activeSftpWorkspaceId, async (sessionId) => {
 }, { immediate: true });
 
 function dispatchCommandKnowledgeToActiveTerminal(mode, detail = {}) {
-  const targetSessionId = focusedLeaf.value?.[activeKey.value] || activeKey.value;
+  const targetSessionId = focusedTerminalRuntimeId.value;
   if (!targetSessionId) {
     toast.info('当前没有可用的终端会话');
     return;
@@ -961,8 +1002,7 @@ const closeAllSessionsFromOverview = async () => {
   }
 
   window.dispatchEvent(new CustomEvent('app:sync-input-stop'));
-  const rootSessionIds = visibleSessions.value.map((session) => session.id);
-  rootSessionIds.forEach((sessionId) => removePanelRoot(sessionId));
+  await closeWorkspacePanels();
 };
 
 const persistMainUiSettings = (nextSettings, dispatchEvent = true) => {
@@ -1045,7 +1085,7 @@ const loadKeybindings = () => {
 const keybindingActions = {
   splitHorizontal: () => splitActive('horizontal'),
   splitVertical: () => splitActive('vertical'),
-  closeSession: () => { if (activeKey.value) removePanelRoot(activeKey.value); },
+  closeSession: () => { if (activeKey.value) void closeWorkspacePanel(activeKey.value); },
   closeSplitTerminal: () => closeCurrentPanel(),
   nextSession: () => {
     const list = visibleSessions.value;
@@ -1338,9 +1378,11 @@ useWindowInteraction({ onResize: measureWorkspace });
         :keybindings="keybindings"
         @toggle-sftp="toggleSftpPanel"
         @toggle-transfer="toggleTransferPanelVisibility" />
-      <div class="global-toast-layer" aria-live="polite" aria-atomic="false">
-        <ToastContainer />
-      </div>
+      <Teleport to="body">
+        <div class="global-toast-layer" aria-live="polite" aria-atomic="false">
+          <ToastContainer />
+        </div>
+      </Teleport>
       <div ref="workspaceRef" class="workspace-grid main-only"
         :class="{ 'has-left-panels': hasWorkspaceLeftPanels, 'has-right-panel': hasWorkspaceRightPanel, 'ai-maximized': aiMaximized }"
         :style="workspaceGridStyle">
@@ -1397,7 +1439,7 @@ useWindowInteraction({ onResize: measureWorkspace });
             <TerminalPanelManager v-else :panels="visibleSessions" :active-panel-id="activeKey"
               :split-trees="splitTrees" :focused-leaf="focusedLeaf" :resolve-tree="ensureTree"
               :on-split-drag="startSplitDrag" :on-set-focused="setFocused" @activate="setActivePanel"
-              @close-panel="removePanelRoot" @duplicate-panel="duplicateSessionPanel"
+              @close-panel="closeWorkspacePanel" @duplicate-panel="duplicateSessionPanel"
               @reconnect-panel="reconnectSessionPanel" @move-panel="movePanel" />
 
             <DesktopPet :settings="desktopPetSettings" :suspend="isAnyModalOpen"
@@ -1428,7 +1470,7 @@ useWindowInteraction({ onResize: measureWorkspace });
 
       <!-- Session Modal -->
       <SessionModal v-if="isSessionModalMounted" v-model:visible="isSessionModalVisible"
-        :sessionData="currentEditSession" />
+        :sessionData="currentEditSession" @redis-saved="finishRedisProfileEditor" />
 
       <TunnelModal v-if="isTunnelModalMounted" v-model:visible="isTunnelModalVisible"
         :preferred-session-id="preferredTunnelSessionId" />
@@ -1437,7 +1479,7 @@ useWindowInteraction({ onResize: measureWorkspace });
       <SettingsModal v-if="isSettingsMounted" v-model:visible="isSettingsVisible" />
 
       <SyncInputModal v-if="isSyncInputMounted" v-model:visible="isSyncInputVisible"
-        :active-key="activeKey" :sync-channels="syncChannels"
+        :active-key="activeSftpWorkspaceId" :sync-channels="syncChannels"
         :selected-channel-id="selectedSyncChannelId"
         :replace-sync-channels="replaceSyncChannels" :clear-sync-channels="clearSyncChannels"
         :set-selected-sync-channel-id="setSelectedSyncChannelId" />
@@ -1510,7 +1552,7 @@ useWindowInteraction({ onResize: measureWorkspace });
 
 .global-toast-layer {
   position: fixed;
-  z-index: calc(var(--z-chrome) - 1);
+  z-index: var(--z-toast);
   top: 52px;
   left: 50%;
   display: flex;
@@ -1523,7 +1565,7 @@ useWindowInteraction({ onResize: measureWorkspace });
   transform: translateX(-50%);
 }
 
-.app-shell > :not(.global-background):not(.global-toast-layer) { position: relative; z-index: 1; }
+.app-shell > :not(.global-background) { position: relative; z-index: 1; }
 .app-shell > .dusk-titlebar { z-index: var(--z-chrome); }
 .app-shell.has-floating-surfaces {
   --workspace-surface-bg: var(--app-panel-bg);

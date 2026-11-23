@@ -191,6 +191,7 @@
     --z-select: 2100;
     --z-tooltip: 2150;
     --z-alert: 2200;
+    --z-toast: 2300;
     --z-critical-overlay: 3000;
   }
 

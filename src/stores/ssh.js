@@ -1,17 +1,21 @@
 import { toast } from '@/composables/useToast';
 import { defineStore } from 'pinia';
-import { ref } from 'vue';
+import { computed, ref } from 'vue';
 import { invokeCommand } from '../utils/ipc';
 import { loadMainUiSettings } from '../utils/mainUi';
-import { moveSessionInList } from '../utils/tabReorder';
 import { ensureSessionDisplayMetadata } from '../utils/sessionOverview';
+import { useWorkspaceStore } from './workspace';
 
 export const useSshStore = defineStore('ssh', () => {
   const TERMINAL_READY_EVENT = 'terminal-ready';
   const TERMINAL_READY_TIMEOUT_MS = 1200;
 
   const sessions = ref([]); // Active tabs
-  const activeSessionId = ref(null);
+  const workspace = useWorkspaceStore();
+  const activeSessionId = computed({
+    get: () => workspace.activeId,
+    set: id => { workspace.activeId = id; }
+  });
   const sftpConnectedSessionIds = ref([]);
 
   const savedSessions = ref([]); // Loaded from storage
@@ -116,9 +120,7 @@ export const useSshStore = defineStore('ssh', () => {
     if (!session.cwd) session.cwd = '';
     ensureSessionDisplayMetadata([...sessions.value, session]);
     sessions.value.push(session);
-    if (!session.noActivate) {
-      activeSessionId.value = session.id;
-    }
+    if (!session.isSplitChild) workspace.add(session.id, 'terminal', !session.noActivate);
   }
   function setSessionStatus(id, status) {
     const session = sessions.value.find((item) => item.id === id);
@@ -149,21 +151,9 @@ export const useSshStore = defineStore('ssh', () => {
       } else {
         invokeCommand('disconnect_ssh', { sessionId: id }).catch(() => { });
       }
-      if (activeSessionId.value === id) {
-        // Workspace navigation must skip split child runtimes.
-        let next = null;
-        for (let i = idx + 1; i < sessions.value.length; i += 1) {
-          if (!sessions.value[i].isSplitChild) { next = sessions.value[i]; break; }
-        }
-        if (!next) {
-          for (let i = idx - 1; i >= 0; i -= 1) {
-            if (!sessions.value[i].isSplitChild) { next = sessions.value[i]; break; }
-          }
-        }
-        activeSessionId.value = next ? next.id : null;
-      }
       markSftpDisconnected(id);
       sessions.value.splice(idx, 1);
+      if (!session.isSplitChild) workspace.remove(id);
     }
   }
 
@@ -183,9 +173,6 @@ export const useSshStore = defineStore('ssh', () => {
     sftpConnectedSessionIds.value = (sftpConnectedSessionIds.value || []).filter(id => id !== sessionId);
   }
 
-  function moveSession(dragId, dropId, placement = 'before') {
-    moveSessionInList(sessions.value, dragId, dropId, placement);
-  }
 
   function getSession(id) {
     return sessions.value.find(s => s.id === id);
@@ -608,6 +595,5 @@ export const useSshStore = defineStore('ssh', () => {
 
     commandBlacklist,
     defaultBlacklist,
-    moveSession // Export moveSession
   };
 });

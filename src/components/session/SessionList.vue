@@ -9,6 +9,7 @@ import { confirm } from '@/composables/useConfirm';
 import { toast } from '@/composables/useToast';
 import {
   Code2,
+  Database,
   Download,
   Folder,
   Lock,
@@ -25,6 +26,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { computed, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue';
 import { useVirtualList } from '@/composables/useVirtualList';
 import { useSshStore } from '@/stores/ssh';
+import { isRedisProfile, useRedisStore } from '@/stores/redis';
 import { invokeCommand } from '@/utils/ipc';
 import { sortSessionsByHost } from '@/utils/sessionSort';
 import IconButton from '@/components/common/IconButton.vue';
@@ -39,6 +41,13 @@ const props = defineProps({
 const emit = defineEmits(['open-create', 'open-edit', 'close']);
 
 const sshStore = useSshStore();
+const redisStore = useRedisStore();
+
+const connectSavedSession = (id) => {
+  const profile = sshStore.savedSessions.find(session => session.id === id);
+  if (isRedisProfile(profile)) redisStore.open(profile);
+  else void sshStore.connectStoredSession(id);
+};
 const expandedKeys = ref([]);
 const searchKeyword = ref('');
 const panelContentRef = ref(null);
@@ -95,6 +104,8 @@ const getProtocol = (session) => String(session?.protocol || 'ssh').toLowerCase(
 
 const getSessionIcon = (session) => {
   switch (getProtocol(session)) {
+    case 'redis':
+      return Database;
     case 'telnet':
       return Server;
     case 'serial':
@@ -106,6 +117,8 @@ const getSessionIcon = (session) => {
 
 const getSessionMeta = (session) => {
   switch (getProtocol(session)) {
+    case 'redis':
+      return session?.host ? `${session.host}:${session.port || 6379}` : 'Redis';
     case 'serial':
       return session?.serial_path || '串口';
     case 'telnet':
@@ -315,7 +328,7 @@ function handleTreeKeydown(event) {
   else if (event.key === 'Home') index = 0;
   else if (event.key === 'End') index = items.length - 1;
   else if (event.key === 'Enter') {
-    if (current.isLeaf) sshStore.connectStoredSession(current.key);
+    if (current.isLeaf) connectSavedSession(current.key);
     else toggleGroup(current.key);
   } else if (event.key === 'ArrowRight' && current._isGroup) {
     if (!activeExpandedKeys.value.includes(current.key)) toggleGroup(current.key);
@@ -431,7 +444,7 @@ const onGroupDrop = (targetGroupName) => {
 
 const onCtxMenuClick = (action, node) => {
   if (!node) return;
-  if (action === 'connect') sshStore.connectStoredSession(node.key);
+  if (action === 'connect') connectSavedSession(node.key);
   else if (action === 'edit') emit('open-edit', node.data);
   else if (action === 'duplicate') duplicateSession(node.data);
   else if (action === 'delete') handleDelete(node.key);
@@ -456,6 +469,14 @@ const handleDelete = (id) => {
 const duplicateSession = async (session) => {
   if (!session?.id) return;
   try {
+    if (isRedisProfile(session)) {
+      const host = session.host || 'unknown';
+      const count = (sshStore.savedSessions || []).filter(item => item.host === host).length;
+      await invokeCommand('redis_duplicate_profile', { sourceId: session.id, name: `${host} (${count + 1})` });
+      await sshStore.loadSavedSessions({ force: true });
+      toast.success('会话已复制');
+      return;
+    }
     const decrypted = await invokeCommand('get_decrypted_session', { id: session.id });
     const host = decrypted.host || 'unknown';
     // Count existing sessions with the same IP to generate suffix (1), (2)...
@@ -664,7 +685,7 @@ const handleImportSessions = async () => {
                   :data-group-name="item._isGroup ? (item.data?.groupName || item.title) : null"
                   :style="{ paddingLeft: (item._depth * 16 + 4) + 'px', height: '34px' }"
                   @click="selectedNodeKey = item.key; onTreeRowClick(item)"
-                  @dblclick="item.isLeaf ? sshStore.connectStoredSession(item.key) : null">
+                  @dblclick="item.isLeaf ? connectSavedSession(item.key) : null">
 
                   <span v-if="item._isGroup" class="tree-arrow"
                     :class="{ expanded: activeExpandedKeys.includes(item.key) }">▶</span>

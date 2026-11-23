@@ -3422,6 +3422,9 @@ pub async fn connect_ssh(
     id: String,
     config: SshConfig,
 ) -> Result<String, String> {
+    if config.protocol.as_deref().is_some_and(|protocol| protocol.eq_ignore_ascii_case("redis")) {
+        return Err("Redis 会话需要使用 Redis 连接入口".to_string());
+    }
     supervisor
         .connect(app_handle, sftp_state.inner().clone(), id, config)
         .await

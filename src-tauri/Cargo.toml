@@ -55,6 +55,10 @@ zeroize = "1.7.0"
 serialport = "4.7.0"
 encoding_rs = "0.8"
 rusqlite = { version = "0.40", features = ["bundled"] }
+redis = { version = "1.8.2", default-features = false, features = ["cluster-async", "script", "tokio-rustls-comp", "tls-rustls-webpki-roots"] }
+# redis-rs leaves the Rustls crypto provider and TLS 1.2 opt-in to the application.
+rustls = { version = "0.23.46", default-features = false, features = ["ring", "tls12"] }
+rmp-serde = "1"
 portable-pty = "0.9.0"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "webp"] }
 webp = "0.3"

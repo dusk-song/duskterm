@@ -11,6 +11,7 @@ mod connection_log;
 mod fileio;
 mod local_terminal;
 mod native_drag;
+mod redis;
 mod session;
 mod sftp;
 mod ssh;
@@ -27,6 +28,7 @@ async fn shutdown_app(app_handle: tauri::AppHandle) -> Result<(), String> {
         return Ok(());
     }
     app_handle.state::<ai::AiState>().cancel_all();
+    app_handle.state::<redis::RedisState>().shutdown().await;
     let supervisor = app_handle.state::<session::supervisor::SessionSupervisor>();
     let sftp_state = app_handle.state::<sftp::SftpAppState>();
     let tunnel_state = app_handle.state::<tunnel::TunnelState>();
@@ -59,6 +61,7 @@ pub fn run() {
         .manage(terminal_output::TerminalOutputState::default())
         .manage(sftp::SftpAppState::new())
         .manage(tunnel::TunnelState::new())
+        .manage(redis::RedisState::default())
         .setup(|app| {
             let storage_state = storage::StorageState::new();
             let command_history_state = storage::command_history::CommandHistoryState::new(
@@ -94,6 +97,23 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             exit_app,
+            redis::redis_save_profile,
+            redis::redis_duplicate_profile,
+            storage::record_session_connection,
+            redis::redis_test_profile,
+            redis::redis_connect,
+            redis::redis_disconnect,
+            redis::redis_ping,
+            redis::data::redis_scan,
+            redis::data::redis_detail,
+            redis::data::redis_ttl,
+            redis::data::redis_mutate,
+            redis::data::redis_info,
+            redis::data::redis_databases,
+            redis::data::redis_cluster_nodes,
+            redis::data::redis_sentinel_nodes,
+            redis::console::redis_console,
+            redis::data::redis_preview_msgpack,
             ai::ai_get_settings,
             ai::ai_model_catalog,
             ai::ai_save_service,

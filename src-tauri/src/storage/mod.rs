@@ -38,6 +38,8 @@ pub struct SessionConfig {
     pub id: String,
     pub name: String,
     pub protocol: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub redis: Option<crate::redis::ProfileOptions>,
     pub host: String,
     pub port: u16,
     pub username: String,
@@ -571,6 +573,32 @@ pub fn clear_recent_sessions(state: tauri::State<'_, SharedStorageState>) -> Res
 }
 
 #[tauri::command]
+pub fn record_session_connection(
+    state: tauri::State<'_, SharedStorageState>,
+    id: String,
+    limit: usize,
+) -> Result<(), String> {
+    let state = state.lock().map_err(|_| "无法访问会话存储")?;
+    let mut data = load_storage_data(&state)?;
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(|_| "无法读取当前时间")?
+        .as_millis() as u64;
+    let session = data.sessions.iter_mut()
+        .find(|session| session.id == id)
+        .ok_or("会话不存在")?;
+    session.last_connected = Some(timestamp);
+    let mut recent: Vec<_> = data.sessions.iter().enumerate()
+        .filter_map(|(index, session)| session.last_connected.map(|time| (index, time)))
+        .collect();
+    recent.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+    for (index, _) in recent.into_iter().skip(limit.clamp(1, 100)) {
+        data.sessions[index].last_connected = None;
+    }
+    save_storage_data(&state, &data)
+}
+
+#[tauri::command]
 pub fn trim_recent_sessions(
     state: tauri::State<'_, SharedStorageState>,
     limit: usize,
@@ -594,20 +622,27 @@ pub fn trim_recent_sessions(
 #[tauri::command]
 pub fn save_session(
     state: tauri::State<'_, SharedStorageState>,
+    session: SessionConfig,
+) -> Result<(), String> {
+    let state = state.lock().unwrap();
+    save_session_record(&state, session)
+}
+
+fn clear_redis_terminal_secrets(session: &mut SessionConfig) {
+    if crate::redis::is_redis_profile(session) {
+        session.password = None;
+        session.passphrase = None;
+        session.proxy_pass = None;
+        session.jump_password = None;
+        session.jump_passphrase = None;
+    }
+}
+
+pub(crate) fn save_session_record(
+    state: &StorageState,
     mut session: SessionConfig,
 ) -> Result<(), String> {
-    // Logic:
-    // 1. Load existing
-    // 2. Encrypt sensitive fields of the incoming session
-    // 3. Update or Add to list
-    // 4. Save to disk
-
-    // NOTE: In a real app, we should probably receive plain text from frontend (over https/ipc is safeish locally)
-    // and encrypt here. Ideally frontend sends plain text fields separate from the struct if they are transient.
-    // However, assuming the frontend sends the SessionConfig struct with plain text in the fields for 'save':
-
-    let state = state.lock().unwrap();
-
+    clear_redis_terminal_secrets(&mut session);
     // Encrypt fields
     if let Some(pwd) = &session.password {
         if !pwd.is_empty() {
@@ -636,7 +671,7 @@ pub fn save_session(
     }
     // (Repeat for passphrase if needed)
 
-    let mut data = load_storage_data(&state)?;
+    let mut data = load_storage_data(state)?;
 
     if let Some(idx) = data.sessions.iter().position(|s| s.id == session.id) {
         data.sessions[idx] = session;
@@ -644,7 +679,7 @@ pub fn save_session(
         data.sessions.push(session);
     }
 
-    save_storage_data(&state, &data)
+    save_storage_data(state, &data)
 }
 
 #[tauri::command]
@@ -660,14 +695,21 @@ pub async fn delete_session(
             .await?;
     }
 
-    let state = state.lock().unwrap();
-    delete_tunnel_configs_by_session_locked(&state, &id)?;
-
-    let mut data = load_storage_data(&state)?;
-
-    data.sessions.retain(|s| s.id != id);
-
-    save_storage_data(&state, &data)
+    let storage = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = storage.lock().map_err(|_| "无法访问会话存储")?;
+        delete_tunnel_configs_by_session_locked(&state, &id)?;
+        let mut data = load_storage_data(&state)?;
+        let removed = data.sessions.iter().find(|session| session.id == id).cloned();
+        data.sessions.retain(|session| session.id != id);
+        if let Some(profile) = removed {
+            crate::redis::remove_profile_password(&profile, || save_storage_data(&state, &data))
+        } else {
+            save_storage_data(&state, &data)
+        }
+    })
+    .await
+    .map_err(|_| "删除会话失败")?
 }
 
 #[tauri::command]
@@ -941,6 +983,11 @@ pub fn export_sessions_to(
     // Decrypt sensitive fields so the export file is self-contained and transportable.
     // Fail closed: exporting blank credentials after a decrypt error is worse than a clear error.
     for session in &mut data.sessions {
+        clear_redis_terminal_secrets(session);
+        if let Some(redis) = session.redis.as_mut() {
+            redis.password_saved = false;
+            redis.sentinel_password_saved = false;
+        }
         *session = decrypt_session_config(&state, session.clone()).map_err(|error| {
             format!(
                 "Export failed: could not decrypt credentials for session '{}': {}",
@@ -1038,6 +1085,13 @@ pub fn import_sessions_from(
         if existing_ids.contains(&sid) {
             skipped += 1;
             continue;
+        }
+        if crate::redis::is_redis_profile(&session) {
+            clear_redis_terminal_secrets(&mut session);
+            if let Some(redis) = session.redis.as_mut() {
+                redis.password_saved = false;
+                redis.sentinel_password_saved = false;
+            }
         }
         // Re-encrypt sensitive fields with the local machine's key
         if let Some(ref pwd) = session.password {

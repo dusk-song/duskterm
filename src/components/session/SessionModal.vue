@@ -31,13 +31,14 @@ import { v4 as uuidv4 } from 'uuid';
 import { computed, nextTick, onUnmounted, reactive, ref, watch } from 'vue';
 import { useSshStore } from '@/stores/ssh';
 import { invokeCommand } from '@/utils/ipc';
+import RedisProfilePanel from '@/components/redis/RedisProfilePanel.vue';
 
 const props = defineProps({
   visible: Boolean,
   sessionData: Object
 });
 
-const emit = defineEmits(['update:visible', 'saved']);
+const emit = defineEmits(['update:visible', 'saved', 'redis-saved']);
 
 const dialogOpen = computed({
   get: () => props.visible,
@@ -72,6 +73,8 @@ const reportFieldError = (field, message) => {
 };
 const isTestingConnection = ref(false);
 const activeProtocol = ref('ssh');
+const redisFormRef = ref(null);
+const redisFormMounted = ref(false);
 const activeConfigTab = ref('basic');
 const serialPortOptions = ref([]);
 const serialPathMode = ref('auto');
@@ -83,7 +86,8 @@ let hydratingSession = false;
 const protocolOptions = [
   { key: 'ssh', label: 'SSH', desc: '标准终端连接' },
   { key: 'telnet', label: 'Telnet', desc: '兼容老设备与网络设备', disabled: false },
-  { key: 'serial', label: '串口', desc: '连接 COM / ttyUSB / ttyS 设备', disabled: false }
+  { key: 'serial', label: '串口', desc: '连接 COM / ttyUSB / ttyS 设备', disabled: false },
+  { key: 'redis', label: 'Redis', createOnly: true },
 ];
 
 const sectionTips = {
@@ -192,6 +196,8 @@ const rules = {
 const isSshProtocol = computed(() => activeProtocol.value === 'ssh');
 const isTelnetProtocol = computed(() => activeProtocol.value === 'telnet');
 const isSerialProtocol = computed(() => activeProtocol.value === 'serial');
+const isRedisProtocol = computed(() => activeProtocol.value === 'redis');
+const redisPending = computed(() => redisFormRef.value?.pending);
 const supportsHostPort = computed(() => !isSerialProtocol.value);
 
 const configTabs = [
@@ -203,6 +209,9 @@ const configTabs = [
 
 // Dynamic validation for auth fields
 const isEditMode = computed(() => !!props.sessionData?.id);
+const visibleProtocolOptions = computed(() => props.sessionData?.protocol === 'redis'
+  ? protocolOptions.filter(option => option.key === 'redis')
+  : protocolOptions.filter(option => !option.createOnly || !isEditMode.value));
 const computedRules = computed(() => {
   const r = { ...rules };
   if (isSshProtocol.value && formState.auth_type === 'password') {
@@ -267,6 +276,7 @@ const serialPortSelectOptions = computed(() => {
 // --- Lifecycle ---
 watch([() => props.visible, () => props.sessionData], ([val]) => {
   clearValidationError();
+  redisFormMounted.value = false;
   if (!val) {
     serialPortRequestId += 1;
     serialPortsLoading.value = false;
@@ -301,6 +311,7 @@ watch([() => props.visible, () => props.sessionData], ([val]) => {
     }
 
     hydratingSession = false;
+    redisFormMounted.value = activeProtocol.value === 'redis';
     if (activeProtocol.value === 'serial') {
       loadSerialPortOptions();
     }
@@ -308,7 +319,17 @@ watch([() => props.visible, () => props.sessionData], ([val]) => {
 }, { immediate: true });
 
 watch(activeProtocol, (value, previous) => {
-  if (formState.protocol === value) return;
+  if (value === 'redis') {
+    redisFormMounted.value = true;
+    serialPortRequestId += 1;
+    serialPortsLoading.value = false;
+    return;
+  }
+  if (formState.protocol === value) {
+    if (value === 'serial' && previous === 'redis') loadSerialPortOptions();
+    return;
+  }
+  const previousTerminalProtocol = formState.protocol;
   formState.protocol = value;
   if (value === 'serial') {
     loadSerialPortOptions();
@@ -318,7 +339,8 @@ watch(activeProtocol, (value, previous) => {
   } else {
     serialPortRequestId += 1;
     serialPortsLoading.value = false;
-    if (!formState.port || (previous === 'ssh' && formState.port === 22) || (previous === 'telnet' && formState.port === 23)) {
+    if (!formState.port || (previousTerminalProtocol === 'ssh' && formState.port === 22)
+      || (previousTerminalProtocol === 'telnet' && formState.port === 23)) {
       formState.port = value === 'telnet' ? 23 : 22;
     }
   }
@@ -658,6 +680,10 @@ const handleSelectJumpKeyFile = async () => {
 };
 
 const handleOk = async () => {
+  if (isRedisProtocol.value) {
+    redisFormRef.value?.save();
+    return;
+  }
   if (confirmLoading.value) return;
   clearValidationError();
   // Code validation for the local form controls
@@ -692,10 +718,19 @@ const handleOk = async () => {
 };
 
 const handleCancel = () => {
+  if (isRedisProtocol.value && redisPending.value) return;
   emit('update:visible', false);
 };
 
+function handleRedisSaved(profile) {
+  emit('update:visible', false);
+  emit('redis-saved', profile);
+}
+
 const handleTestConnection = async () => {
+  if (isRedisProtocol.value) {
+    return redisFormRef.value?.testConnection();
+  }
   if (isTestingConnection.value) return;
   if (supportsHostPort.value && !formState.host?.trim()) { toast.error('请输入主机地址'); return; }
   if (!validateSerialFields()) return;
@@ -735,18 +770,18 @@ const groupOptions = computed(() => {
       @pointer-down-outside.prevent @interact-outside.prevent>
       <DialogHeader>
         <DialogTitle>{{ isEditMode ? '编辑会话' : '新建会话' }}</DialogTitle>
+        <div class="protocol-tabs flex flex-wrap gap-1 px-4">
+          <button v-for="item in visibleProtocolOptions" :key="item.key"
+            :class="['px-3 py-1 rounded text-sm font-medium outline-none transition-[background,color,box-shadow]', 'focus-visible:[box-shadow:var(--app-focus-shadow)] disabled:pointer-events-none disabled:opacity-45', activeProtocol === item.key ? 'bg-primary text-primary-foreground active:bg-primary/80' : 'bg-secondary text-secondary-foreground hover:bg-accent active:bg-[var(--app-btn-pressed)]']"
+            :aria-pressed="activeProtocol === item.key" :disabled="item.disabled || confirmLoading || !!redisPending"
+            type="button" @click="activeProtocol = item.key">{{ item.label }}</button>
+        </div>
       </DialogHeader>
       <div ref="formContentRef" class="session-form-content flex-1 min-h-0 overflow-y-auto px-4 py-2" @input="clearValidationError">
-        <p v-if="validationError" id="session-validation-error" role="alert" class="session-validation-error">{{ validationError.message }}</p>
-        <div class="protocol-tabs mb-3">
-          <div class="flex gap-1 mb-1">
-            <button v-for="item in protocolOptions" :key="item.key"
-              :class="['px-3 py-1 rounded text-sm font-medium outline-none transition-[background,color,box-shadow]', 'focus-visible:[box-shadow:var(--app-focus-shadow)] disabled:pointer-events-none disabled:opacity-45', activeProtocol === item.key ? 'bg-primary text-primary-foreground active:bg-primary/80' : 'bg-secondary text-secondary-foreground hover:bg-accent active:bg-[var(--app-btn-pressed)]']"
-              :disabled="item.disabled" type="button" @click="activeProtocol = item.key">{{ item.label }}</button>
-          </div>
-        </div>
-
-        <div layout="horizontal" class="session-compact-form" autocomplete="off" :model="formState" name="sessionForm">
+        <RedisProfilePanel v-if="redisFormMounted" v-show="isRedisProtocol" :key="sessionData?.id || 'new-redis'"
+          ref="redisFormRef" :profile="sessionData?.protocol === 'redis' ? sessionData : null" embedded @saved="handleRedisSaved" />
+        <p v-if="!isRedisProtocol && validationError" id="session-validation-error" role="alert" class="session-validation-error">{{ validationError.message }}</p>
+        <div v-show="!isRedisProtocol" layout="horizontal" class="session-compact-form" autocomplete="off" :model="formState" name="sessionForm">
           <div class="config-tabs flex">
             <div class="config-tab-sidebar flex w-[100px] shrink-0 flex-col gap-0.5 pr-1">
               <button v-for="tab in configTabs" :key="tab.key" type="button"
@@ -1183,14 +1218,14 @@ const groupOptions = computed(() => {
       </div>
 
       <DialogFooter class="shrink-0 flex-row flex-wrap items-center">
-        <Button variant="outline" @click="handleTestConnection" :disabled="isTestingConnection" size="sm">
+        <Button variant="outline" @click="handleTestConnection" :disabled="isRedisProtocol ? !!redisPending : isTestingConnection" size="sm">
           <Zap :size="14" />
-          {{ isSerialProtocol ? '试开串口' : '测试连接' }}
+          {{ isSerialProtocol ? '试开串口' : redisPending === 'test' ? '测试中…' : '测试连接' }}
         </Button>
         <div class="ml-auto flex items-center gap-2">
-          <Button variant="outline" @click="handleCancel" size="sm">取消</Button>
-          <Button :disabled="confirmLoading" @click="handleOk" size="sm">
-            {{ sessionData ? '保存修改' : '创建会话' }}
+          <Button variant="outline" @click="handleCancel" :disabled="!!redisPending" size="sm">取消</Button>
+          <Button :disabled="isRedisProtocol ? !!redisPending : confirmLoading" @click="handleOk" size="sm">
+            {{ isRedisProtocol ? (redisPending === 'save' ? '保存中…' : sessionData ? '保存修改' : '保存并连接') : sessionData ? '保存修改' : '创建会话' }}
           </Button>
         </div>
       </DialogFooter>
@@ -1198,9 +1233,12 @@ const groupOptions = computed(() => {
   </Dialog>
 </template>
 
+<style scoped src="./sessionFormRows.css"></style>
+
 <style scoped>
 .session-validation-error { position: sticky; top: 0; z-index: 2; margin: 0 0 8px; padding: 8px 10px; border: 1px solid var(--app-risk-danger-border); border-radius: 6px; background: var(--app-bg-dialog); color: var(--app-risk-danger); font-size: 12px; }
 @media (max-width: 700px) {
+  .protocol-tabs { padding-left: 0; padding-right: 0; }
   .session-form-content { padding-left: 0; padding-right: 0; }
   .config-tabs { flex-direction: column; max-height: none !important; }
   .config-tab-sidebar { width: 100% !important; flex-direction: row !important; flex-wrap: wrap; border-right: 0; margin-bottom: 10px; }
@@ -1213,22 +1251,6 @@ const groupOptions = computed(() => {
 /* ── 协议切换 ── */
 .protocol-tabs {
   @apply mb-1;
-}
-
-/* ── 表单布局 ── */
-.form-item {
-  @apply flex items-start min-h-8 mb-2;
-}
-
-.form-item>label {
-  @apply w-[100px] shrink-0 min-h-8 pt-1.5 text-right pr-3 whitespace-nowrap text-[13px] font-normal text-[var(--app-text-muted)];
-}
-
-.form-item>input,
-.form-item>select,
-.form-item>textarea,
-.form-item>.form-item-control {
-  @apply flex-1 min-h-8;
 }
 
 /* ── 文本域 ── */
